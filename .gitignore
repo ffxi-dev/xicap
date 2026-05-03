@@ -1,3 +1,12 @@
+# Build directories
+build*/
+cmake-build-*/
+
+# IDE / tooling
+.idea/
+.claude/
+.vscode/
+
 # Prerequisites
 *.d
 

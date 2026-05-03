@@ -1,0 +1,33 @@
+[build-system]
+requires = ["scikit-build-core>=0.10", "pybind11>=2.13"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "xicap"
+version = "2.0.0"
+description = "Python bindings for the xicap FFXI packet capture format."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: C++",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[tool.scikit-build]
+minimum-version = "0.10"
+cmake.version = ">=3.16"
+build-dir = "build/{wheel_tag}"
+wheel.packages = ["xicap"]
+
+[tool.scikit-build.cmake.define]
+XICAP_BUILD_TOOLS = "OFF"
+XICAP_BUILD_TESTS = "OFF"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

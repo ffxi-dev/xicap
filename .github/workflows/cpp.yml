@@ -1,0 +1,37 @@
+name: C++
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Ninja (Linux/macOS)
+        if: runner.os != 'Windows'
+        uses: seanmiddleditch/gha-setup-ninja@v5
+
+      - name: Configure MSVC (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DXICAP_BUILD_TOOLS=OFF -DXICAP_BUILD_TESTS=ON
+
+      - name: Build
+        run: cmake --build build --target xicap_tests
+
+      - name: Run tests
+        working-directory: build
+        run: ctest --output-on-failure --build-config Release

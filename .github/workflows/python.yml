@@ -1,0 +1,50 @@
+name: Python
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.11", "3.12", "3.13"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install Ninja (Linux/macOS)
+        if: runner.os != 'Windows'
+        uses: seanmiddleditch/gha-setup-ninja@v5
+
+      - name: Configure MSVC (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Build fixture
+        run: |
+          cmake -S . -B build-fixture -G Ninja -DCMAKE_BUILD_TYPE=Release -DXICAP_BUILD_TOOLS=OFF -DXICAP_BUILD_FIXTURE_TOOL=ON
+          cmake --build build-fixture --target xicap_make_fixture
+        shell: bash
+
+      - name: Generate fixture
+        run: |
+          mkdir -p js/test/fixtures
+          ./build-fixture/xicap_make_fixture js/test/fixtures/sample.xicap
+        shell: bash
+
+      - name: Install package + tests
+        run: pip install ./python[test]
+
+      - name: Run pytest
+        run: pytest python/tests -v

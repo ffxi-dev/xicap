@@ -1,0 +1,43 @@
+name: JavaScript / Wasm
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - uses: seanmiddleditch/gha-setup-ninja@v5
+
+      - name: Setup Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: "latest"
+
+      - name: Build fixture (C++)
+        run: |
+          cmake -S . -B build-fixture -G Ninja -DCMAKE_BUILD_TYPE=Release -DXICAP_BUILD_TOOLS=OFF -DXICAP_BUILD_FIXTURE_TOOL=ON
+          cmake --build build-fixture --target xicap_make_fixture
+          mkdir -p js/test/fixtures
+          ./build-fixture/xicap_make_fixture js/test/fixtures/sample.xicap
+
+      - name: Build wasm
+        working-directory: js
+        run: node ./scripts/build-wasm.mjs
+
+      - name: Compile TypeScript
+        working-directory: js
+        run: npx -y -p typescript@5.5 tsc -p tsconfig.json
+
+      - name: Run JS tests
+        working-directory: js
+        run: node --test test/reader.test.mjs
