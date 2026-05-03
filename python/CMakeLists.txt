@@ -4,7 +4,10 @@ project(xicap_python LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Pull xicap (lib only) in as a subproject.
+# Pull xicap (lib only) in as a subproject. The xicap static lib gets linked
+# into a Python shared module, so on Linux we need position-independent code
+# everywhere (including zstd, which is also a static lib via FetchContent).
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(XICAP_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
 set(XICAP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/.. xicap_lib)
