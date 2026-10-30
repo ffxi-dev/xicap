@@ -598,6 +598,7 @@ keep reading every released version.
 
 ## Dependencies
 
-The C++ library vendors Monocypher 4.0.3 (`monocypher.c` and
-`optional/monocypher-ed25519.c`) for Ed25519 and SHA-512. Renovate cannot update
-a vendored file; check Monocypher's releases when releasing xicap.
+The C++ library vendors Monocypher 4.0.3 in `third_party/monocypher`
+(`monocypher.c` and `optional/monocypher-ed25519.c`) for Ed25519 and SHA-512.
+Renovate cannot update a vendored file; check Monocypher's releases when
+releasing xicap.

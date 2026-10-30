@@ -3,8 +3,8 @@
 package xicap
 
 /*
-#cgo CFLAGS: -I${SRCDIR}/../vendor/monocypher
-#cgo CXXFLAGS: -std=c++20 -I${SRCDIR}/../include -I${SRCDIR}/../src -I${SRCDIR}/../vendor/monocypher
+#cgo CFLAGS: -I${SRCDIR}/../third_party/monocypher
+#cgo CXXFLAGS: -std=c++20 -I${SRCDIR}/../include -I${SRCDIR}/../src -I${SRCDIR}/../third_party/monocypher
 #cgo LDFLAGS: -lzstd
 #include <stdlib.h>
 #include "capi.h"

@@ -47,8 +47,8 @@ set(XICAP_SOURCES
     src/writer.cpp
     src/reader.cpp
     src/dictionary.cpp
-    vendor/monocypher/monocypher.c
-    vendor/monocypher/optional/monocypher-ed25519.c
+    third_party/monocypher/monocypher.c
+    third_party/monocypher/optional/monocypher-ed25519.c
 )
 
 set(XICAP_HEADERS
@@ -68,7 +68,7 @@ target_include_directories(xicap
         $<INSTALL_INTERFACE:include>
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
-        ${CMAKE_CURRENT_SOURCE_DIR}/vendor/monocypher
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/monocypher
 )
 
 if(zstd_FOUND)
@@ -114,7 +114,7 @@ option(XICAP_BUILD_VECTOR_TOOL "Build the xicap_make_vectors generator" OFF)
 if(XICAP_BUILD_VECTOR_TOOL)
     add_executable(xicap_make_vectors tools/xicap_make_vectors.cpp)
     target_link_libraries(xicap_make_vectors PRIVATE xicap)
-    target_include_directories(xicap_make_vectors PRIVATE src tools vendor/monocypher)
+    target_include_directories(xicap_make_vectors PRIVATE src tools third_party/monocypher)
 endif()
 
 # Tests
@@ -132,7 +132,7 @@ if(XICAP_BUILD_TESTS)
     add_executable(xicap_tests tests/xicap_tests.cpp)
     target_link_libraries(xicap_tests PRIVATE xicap Catch2::Catch2WithMain)
     # Tests reach into src/internal to rebuild CRCs and chains when crafting bad files.
-    target_include_directories(xicap_tests PRIVATE src tools vendor/monocypher)
+    target_include_directories(xicap_tests PRIVATE src tools third_party/monocypher)
     target_compile_definitions(xicap_tests PRIVATE XICAP_VECTORS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors")
 
     list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)

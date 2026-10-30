@@ -137,4 +137,5 @@ None for data: nothing is archived. Mogsafe's change in `ffxi-dev/vault` lands a
 - **Python and JavaScript stay reader-only**, as in 2.x; writing is in C++ and Go, which Mogsafe and Logbook use.
 - **`xicap_dump` no longer needs the Ashita SDK**: it needed it only to decode the client memory snapshots format 3 dropped. CI builds it.
 - **The conformance readings are the C++ reader's**, saved by the generator after it checks each file shows what it was built to show. Their independence comes from `tests/spec_reader.py`, which reads all of them from FORMAT.md alone and must agree.
+- **Monocypher lives in `third_party/`, not `vendor/`**: Go leaves every `vendor` directory out of module zips, so the `v3.0.0` tag built in this repository but not when fetched as a module. `v3.0.1` moves it; a clean module fetch of the tag now builds.
 - **CI** gained a 32-bit Windows job (`cmake.yml` `ci/v1.5` gained an `arch` input) and a job running the spec reader on the conformance set and the worked example.
