@@ -91,7 +91,7 @@ func TestWriteThenRead(t *testing.T) {
 	if !s.Closed || s.Packets != 6 || s.Frames != 2 || s.VersionMajor != 3 || s.CaptureAgent != "test" ||
 		s.Character.Name != "Nouurs" || s.Character.ContentID != 0x01020304 || s.Network != NetworkRetail ||
 		s.StartContext != StartLogin || s.StartTimestamp != t0 || s.EndTimestamp != t0+1002 ||
-		s.PolicyName != "xicap-default" || !s.SignedToEnd || s.VerifiedPackets != 6 || s.Source != nil {
+		s.Policy.Name != "xicap-default" || s.RuleCount != 5 || len(s.Policy.Rules) != 5 || !s.SignedToEnd || s.VerifiedPackets != 6 || s.Source != nil {
 		t.Fatalf("unexpected summary %+v", s)
 	}
 }
@@ -255,5 +255,19 @@ func TestConformanceSet(t *testing.T) {
 				t.Fatalf("summary %+v, recorded %s", s, b)
 			}
 		})
+	}
+}
+
+func TestCustomPolicy(t *testing.T) {
+	wi := info()
+	wi.Policy = &Policy{Name: "mine", Version: 7, Rules: []Rule{
+		{Channel: ChannelGame, Direction: DirBoth, Action: ActionZeroRange, Opcode: 0x015, Ranges: [][2]uint32{{8, 4}}},
+	}}
+	s, err := Read(capture(t, 1, wi))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Policy.Name != "mine" || s.Policy.Version != 7 || s.RuleCount != 1 || s.Policy.Rules[0].Opcode != 0x015 || s.Policy.Rules[0].Action != ActionZeroRange {
+		t.Fatalf("policy %+v", s.Policy)
 	}
 }

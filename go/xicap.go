@@ -62,6 +62,32 @@ const (
 	FlagFirstInChunk uint16 = 0x0010
 )
 
+// Exclusion rule directions and actions. See FORMAT.md, Exclusion.
+const (
+	DirServerToClient uint8 = 0
+	DirClientToServer uint8 = 1
+	DirBoth           uint8 = 2
+
+	ActionStub      uint8 = 1
+	ActionZeroRange uint8 = 2
+)
+
+// Rule is one exclusion rule. A summary's rules carry no Ranges.
+type Rule struct {
+	Channel   uint8
+	Direction uint8
+	Action    uint8
+	Opcode    uint16
+	Ranges    [][2]uint32 // offset, length
+}
+
+// Policy is an exclusion policy.
+type Policy struct {
+	Name    string
+	Version uint32
+	Rules   []Rule
+}
+
 // Character is the capture's character, from its header.
 type Character struct {
 	ContentID   uint32
@@ -102,8 +128,8 @@ type Summary struct {
 	FooterDamaged     bool
 	UnreadBytes       uint64 // after the last intact frame of a cut-off capture
 	CharacterMismatch bool   // a zone-in names a character other than the header's
-	PolicyName        string
-	PolicyVersion     uint32
+	Policy            Policy // its first 256 rules; RuleCount says how many there are
+	RuleCount         uint32
 	Source            *SourceSummary // set on converted captures
 	SigningKey        [32]byte
 	SignedToEnd       bool   // the footer's signature verifies
@@ -163,11 +189,15 @@ func Read(path string) (Summary, error) {
 		FooterDamaged:     s.footer_damaged != 0,
 		UnreadBytes:       uint64(s.unread_bytes),
 		CharacterMismatch: s.character_mismatch != 0,
-		PolicyName:        C.GoString(&s.policy_name[0]),
-		PolicyVersion:     uint32(s.policy_version),
+		Policy:            Policy{Name: C.GoString(&s.policy_name[0]), Version: uint32(s.policy_version)},
+		RuleCount:         uint32(s.rule_count),
 		SigningKey:        *(*[32]byte)(unsafe.Pointer(&s.signing_key[0])),
 		SignedToEnd:       s.signed_to_end != 0,
 		VerifiedPackets:   uint64(s.verified_packets),
+	}
+	for i := 0; i < int(min(s.rule_count, C.XICAP_SUMMARY_RULES)); i++ {
+		r := s.rules[i]
+		out.Policy.Rules = append(out.Policy.Rules, Rule{Channel: uint8(r.channel), Direction: uint8(r.direction), Action: uint8(r.action), Opcode: uint16(r.opcode)})
 	}
 	if s.has_source != 0 {
 		out.Source = &SourceSummary{
@@ -201,6 +231,7 @@ type WriterInfo struct {
 	PreviousCaptureID [16]byte
 	SigningSeed       [32]byte // the recorder's Ed25519 seed
 	Source            *Source  // required with OriginConverted
+	Policy            *Policy  // nil: the default, which stubs chat
 	NoDictionary      bool
 }
 
@@ -250,6 +281,31 @@ func Create(path string, info WriterInfo) (*Writer, error) {
 			allocs = append(allocs, m)
 			ci.metadata = (*C.uint8_t)(m)
 			ci.metadata_size = C.size_t(len(src.Metadata))
+		}
+	}
+	if pol := info.Policy; pol != nil {
+		ci.has_policy = 1
+		ci.policy_name = cstr(pol.Name)
+		ci.policy_version = C.uint32_t(pol.Version)
+		var ranges [][2]uint32
+		for _, r := range pol.Rules {
+			ranges = append(ranges, r.Ranges...)
+		}
+		if len(pol.Rules) > 0 {
+			rules := unsafe.Slice((*C.xicap_rule)(C.malloc(C.size_t(len(pol.Rules))*C.size_t(unsafe.Sizeof(C.xicap_rule{})))), len(pol.Rules))
+			allocs = append(allocs, unsafe.Pointer(&rules[0]))
+			for i, r := range pol.Rules {
+				rules[i] = C.xicap_rule{channel: C.uint8_t(r.Channel), direction: C.uint8_t(r.Direction), action: C.uint8_t(r.Action), opcode: C.uint16_t(r.Opcode), range_count: C.uint16_t(len(r.Ranges))}
+			}
+			ci.rules, ci.rule_count = &rules[0], C.size_t(len(pol.Rules))
+		}
+		if len(ranges) > 0 {
+			cr := unsafe.Slice((*C.xicap_range)(C.malloc(C.size_t(len(ranges))*C.size_t(unsafe.Sizeof(C.xicap_range{})))), len(ranges))
+			allocs = append(allocs, unsafe.Pointer(&cr[0]))
+			for i, r := range ranges {
+				cr[i] = C.xicap_range{offset: C.uint32_t(r[0]), length: C.uint32_t(r[1])}
+			}
+			ci.ranges, ci.range_count = &cr[0], C.size_t(len(ranges))
 		}
 	}
 	p := cstr(path)

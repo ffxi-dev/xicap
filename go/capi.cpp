@@ -125,6 +125,18 @@ extern "C" int xicap_read(const char* path, xicap_summary* out, char* err, size_
                        out->end_timestamp   = out->start_timestamp;
                        copyString(out->policy_name, reader.policy().name);
                        out->policy_version = reader.policy().version;
+                       out->rule_count     = static_cast<uint32_t>(reader.policy().rules.size());
+                       for (size_t i = 0; i < std::min<size_t>(out->rule_count, XICAP_SUMMARY_RULES); ++i)
+                       {
+                           const auto& rule = reader.policy().rules[i];
+                           out->rules[i]    = {
+                               .channel     = rule.channel,
+                               .direction   = static_cast<uint8_t>(rule.direction),
+                               .action      = static_cast<uint8_t>(rule.action),
+                               .opcode      = rule.opcode,
+                               .range_count = static_cast<uint16_t>(rule.ranges.size()),
+                           };
+                       }
                        if (const auto& source = reader.source())
                        {
                            out->has_source = 1;
@@ -194,6 +206,27 @@ extern "C" xicap_writer* xicap_writer_open(const char* path, const xicap_writer_
                                        source.metadata.assign(info->metadata, info->metadata + info->metadata_size);
                                    }
                                    config.source = std::move(source);
+                               }
+                               if (info->has_policy)
+                               {
+                                   xicap::ExclusionPolicy p{ .name = info->policy_name ? info->policy_name : "", .version = info->policy_version, .rules = {} };
+                                   size_t                 next = 0;
+                                   for (size_t i = 0; i < info->rule_count; ++i)
+                                   {
+                                       const auto&          r = info->rules[i];
+                                       xicap::ExclusionRule rule{ .channel = r.channel, .direction = static_cast<xicap::ExclusionDirection>(r.direction), .action = static_cast<xicap::ExclusionAction>(r.action), .opcode = r.opcode, .ranges = {} };
+                                       for (uint16_t j = 0; j < r.range_count; ++j)
+                                       {
+                                           if (next >= info->range_count)
+                                           {
+                                               throw xicap::Error(xicap::ErrorCode::InvalidPolicy, "xicap: rules ask for more ranges than given");
+                                           }
+                                           rule.ranges.push_back({ info->ranges[next].offset, info->ranges[next].length });
+                                           next++;
+                                       }
+                                       p.rules.push_back(std::move(rule));
+                                   }
+                                   config.policy = std::move(p);
                                }
                                xicap::FramePolicy policy{};
                                if (!info->dictionary)

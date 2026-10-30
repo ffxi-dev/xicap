@@ -10,40 +10,59 @@ extern "C"
 
     typedef struct
     {
-        uint8_t  version_major;
-        uint8_t  version_minor;
-        char     capture_agent[32];
-        char     client_version[32];
-        uint8_t  capture_id[16];
-        uint8_t  previous_capture_id[16];
-        uint32_t content_id;
-        uint32_t character_id;
-        uint16_t world_id;
-        char     character_name[16];
-        char     world_name[16];
-        uint8_t  clock_source;
-        uint8_t  origin;
-        uint8_t  network;
-        uint8_t  start_context;
-        uint16_t start_zone_id; // first packet frame's zone
-        uint16_t end_zone_id;   // last packet frame's zone
-        uint64_t start_timestamp;
-        uint64_t end_timestamp; // last packet read
-        uint64_t packets;
-        uint64_t frames; // packet frames
-        int      complete;
-        int      footer_damaged;
-        int      character_mismatch;
-        uint64_t unread_bytes;
-        char     policy_name[32];
-        uint32_t policy_version;
-        int      has_source;
-        char     source_format[16];
-        char     source_format_version[16];
-        uint32_t skipped_records;
-        uint8_t  signing_key[32];
-        int      signed_to_end;
-        uint64_t verified_packets;
+        uint8_t  channel;
+        uint8_t  direction; // 0 to the client, 1 from the client, 2 both
+        uint8_t  action;    // 1 stub, 2 zero byte ranges
+        uint16_t opcode;
+        uint16_t range_count;
+    } xicap_rule;
+
+    typedef struct
+    {
+        uint32_t offset;
+        uint32_t length; // 0xFFFFFFFF runs to the packet's end
+    } xicap_range;
+
+#define XICAP_SUMMARY_RULES 256
+
+    typedef struct
+    {
+        uint8_t    version_major;
+        uint8_t    version_minor;
+        char       capture_agent[32];
+        char       client_version[32];
+        uint8_t    capture_id[16];
+        uint8_t    previous_capture_id[16];
+        uint32_t   content_id;
+        uint32_t   character_id;
+        uint16_t   world_id;
+        char       character_name[16];
+        char       world_name[16];
+        uint8_t    clock_source;
+        uint8_t    origin;
+        uint8_t    network;
+        uint8_t    start_context;
+        uint16_t   start_zone_id; // first packet frame's zone
+        uint16_t   end_zone_id;   // last packet frame's zone
+        uint64_t   start_timestamp;
+        uint64_t   end_timestamp; // last packet read
+        uint64_t   packets;
+        uint64_t   frames; // packet frames
+        int        complete;
+        int        footer_damaged;
+        int        character_mismatch;
+        uint64_t   unread_bytes;
+        char       policy_name[32];
+        uint32_t   policy_version;
+        uint32_t   rule_count; // may exceed XICAP_SUMMARY_RULES; only that many are filled
+        xicap_rule rules[XICAP_SUMMARY_RULES];
+        int        has_source;
+        char       source_format[16];
+        char       source_format_version[16];
+        uint32_t   skipped_records;
+        uint8_t    signing_key[32];
+        int        signed_to_end;
+        uint64_t   verified_packets;
     } xicap_summary;
 
     // Checks that data starts with a whole header this library can read.
@@ -71,6 +90,15 @@ extern "C"
         uint8_t     previous_capture_id[16];
         uint8_t     signing_seed[32];
         int         dictionary; // compress with the built-in dictionary
+        // Exclusion policy; without one the writer uses the default. Each rule
+        // takes its range_count ranges from ranges, in order.
+        int                has_policy;
+        const char*        policy_name;
+        uint32_t           policy_version;
+        const xicap_rule*  rules;
+        size_t             rule_count;
+        const xicap_range* ranges;
+        size_t             range_count;
         // Source of a converted capture (origin 2).
         int            has_source;
         const char*    source_format;
