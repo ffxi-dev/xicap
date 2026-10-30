@@ -4,7 +4,8 @@ cmake-build-*/
 
 # IDE / tooling
 .idea/
-.claude/
+.claude/settings.local.json
+.claude/worktrees/
 .vscode/
 
 # Prerequisites
