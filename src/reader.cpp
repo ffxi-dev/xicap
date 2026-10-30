@@ -322,8 +322,10 @@ auto Reader::readFooter() -> void
     {
         return;
     }
+    // Compare by subtraction: a crafted offset must not wrap the sum.
     const uint64_t indexBytes = uint64_t{ trailer_.entryCount } * sizeof(FooterIndexEntry);
-    if (trailer_.indexOffset < dataStart_ || trailer_.indexOffset + indexBytes + sizeof(FooterTrailer) != fileSize_ ||
+    const uint64_t indexEnd   = fileSize_ - sizeof(FooterTrailer);
+    if (trailer_.indexOffset < dataStart_ || trailer_.indexOffset > indexEnd || indexEnd - trailer_.indexOffset != indexBytes ||
         indexBytes > SIZE_MAX)
     {
         return;
@@ -529,7 +531,7 @@ auto Reader::decodeFrame(const RawFrame& frame) -> void
     for (uint32_t i = 0; i < header.packetCount; ++i)
     {
         PacketEntry entry{};
-        if (!pop(content, pos, entry) || pos + entry.length > size)
+        if (!pop(content, pos, entry) || entry.length > size - pos)
         {
             throw Error(ErrorCode::CorruptFrame, "xicap: packet runs past its frame");
         }
@@ -560,7 +562,7 @@ auto Reader::decodeFrame(const RawFrame& frame) -> void
     for (uint16_t i = 0; i < header.markerCount; ++i)
     {
         FrameMarker marker{};
-        if (!pop(content, pos, marker) || pos + marker.textLength > size || marker.packetIndex >= header.packetCount)
+        if (!pop(content, pos, marker) || marker.textLength > size - pos || marker.packetIndex >= header.packetCount)
         {
             throw Error(ErrorCode::CorruptFrame, "xicap: corrupt marker");
         }

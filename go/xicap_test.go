@@ -271,3 +271,13 @@ func TestCustomPolicy(t *testing.T) {
 		t.Fatalf("policy %+v", s.Policy)
 	}
 }
+
+func TestHeaderLength(t *testing.T) {
+	b := load(t, capture(t, 1, info()))
+	if n, err := HeaderLength(b[:HeaderPrefix]); err != nil || n != HeaderSize {
+		t.Fatalf("header length %d, %v", n, err)
+	}
+	if _, err := HeaderLength([]byte("\x89PNG\r\n\x1a\n\x00\x00\x00\x00")); err == nil {
+		t.Fatal("PNG accepted")
+	}
+}

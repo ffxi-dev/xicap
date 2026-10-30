@@ -58,6 +58,18 @@ int guarded(char* err, size_t errlen, F&& f)
 
 } // namespace
 
+extern "C" int xicap_header_size(const uint8_t* data, size_t size)
+{
+    if (size < offsetof(xicap::Header, extensionCount) || !std::equal(xicap::MAGIC.begin(), xicap::MAGIC.end(), data) ||
+        data[offsetof(xicap::Header, versionMajor)] != xicap::VERSION_MAJOR)
+    {
+        return -1;
+    }
+    uint16_t headerSize = 0;
+    std::memcpy(&headerSize, data + offsetof(xicap::Header, headerSize), sizeof(headerSize));
+    return headerSize >= xicap::HEADER_SIZE && headerSize <= xicap::HEADER_SIZE_MAX ? headerSize : -1;
+}
+
 extern "C" int xicap_check_header(const uint8_t* data, size_t size, char* err, size_t errlen)
 {
     xicap::Header header{};

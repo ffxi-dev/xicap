@@ -309,7 +309,13 @@ auto Writer::mark(MarkerKind kind, std::string_view text) -> void
             checkpoint();
         }
     }
-    pendingMarkers_.push_back({ kind, std::string(cutUtf8(text, MARKER_TEXT_MAX)) });
+    if (pendingMarkers_.size() >= UINT16_MAX)
+    {
+        throw Error(ErrorCode::AddMarkerWithoutPacket, "xicap: too many markers before the next packet");
+    }
+    const auto cut = cutUtf8(text, MARKER_TEXT_MAX);
+    pendingMarkers_.push_back({ kind, std::string(cut) });
+    pendingMarkerBytes_ += sizeof(FrameMarker) + cut.size();
 }
 
 auto Writer::write(const OutPacket& packet) -> void
@@ -375,6 +381,12 @@ auto Writer::write(const OutPacket& packet) -> void
         }
     }
 
+    // Even alone in a frame, the packet must fit with the markers placed before it.
+    if (sizeof(PacketEntry) + data.size() + pendingMarkerBytes_ > FrameLimits::MAX_CONTENT_SIZE)
+    {
+        throw Error(ErrorCode::PacketTooLarge, "xicap: packet and the markers before it are over the frame limit");
+    }
+
     const bool zoneIn = isGame && packet.direction == PacketDirection::ServerToClient && opcode == FFXIPacket::LOGIN_ZONE;
     if (zoneIn || shouldEndFrame(timestamp, sizeof(PacketEntry) + data.size()))
     {
@@ -403,6 +415,8 @@ auto Writer::write(const OutPacket& packet) -> void
         frameMarkers_.push_back({ static_cast<uint16_t>(framePacketCount_), std::move(marker) });
     }
     pendingMarkers_.clear();
+    frameMarkerBytes_ += pendingMarkerBytes_;
+    pendingMarkerBytes_ = 0;
 
     appendPod(frameBuffer_, PacketEntry{
                                 .deltaMs  = deltaMs,
@@ -589,6 +603,7 @@ auto Writer::endFrame() -> void
     totalFrames_++;
     frameBuffer_.clear();
     frameMarkers_.clear();
+    frameMarkerBytes_ = 0;
     framePacketCount_ = 0;
 
     if (lastTimestamp_ - firstUnsignedTimestamp_ >= policy_.checkpointIntervalMs)
@@ -665,11 +680,11 @@ auto Writer::shouldEndFrame(uint64_t timestamp, size_t added) const noexcept -> 
     {
         return false;
     }
-    // Markers are appended when the frame ends; count them at their largest.
-    const size_t markerBytes = (frameMarkers_.size() + pendingMarkers_.size()) * (sizeof(FrameMarker) + MARKER_TEXT_MAX);
+    // Markers are appended when the frame ends.
     return framePacketCount_ >= policy_.maxPacketsPerFrame ||
            frameBuffer_.size() >= policy_.maxFrameSize ||
-           frameBuffer_.size() + added + markerBytes > FrameLimits::MAX_CONTENT_SIZE ||
+           frameBuffer_.size() + added + frameMarkerBytes_ + pendingMarkerBytes_ > FrameLimits::MAX_CONTENT_SIZE ||
+           frameMarkers_.size() + pendingMarkers_.size() > UINT16_MAX ||
            timestamp - frameBaseTimestamp_ >= policy_.maxFrameTimeMs ||
            timestamp - lastTimestamp_ > UINT16_MAX;
 }

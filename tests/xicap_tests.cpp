@@ -1008,3 +1008,47 @@ TEST_CASE("the writer keeps frames within the reader's limits")
     CHECK(readAll(r).size() == 70'060);
     CHECK(r.totalFrames() >= 3);
 }
+
+TEST_CASE("a footer whose offset wraps the size check is not trusted")
+{
+    TempCapture tmp;
+    writeFrames(tmp.path, 2);
+    auto bytes   = bytesOf(tmp.path);
+    auto trailer = podAt<FooterTrailer>(bytes, bytes.size() - sizeof(FooterTrailer));
+    // offset + count * 24 + 112 wraps around to the file size.
+    trailer.entryCount  = 0xFFFFFFFF;
+    trailer.indexOffset = uint64_t{ bytes.size() } - sizeof(FooterTrailer) - uint64_t{ 0xFFFFFFFF } * sizeof(FooterIndexEntry);
+    trailer.trailerCrc  = crcOf({ reinterpret_cast<const uint8_t*>(&trailer), offsetof(FooterTrailer, trailerCrc) });
+    std::memcpy(bytes.data() + bytes.size() - sizeof(FooterTrailer), &trailer, sizeof(trailer));
+    save(tmp.path, bytes);
+    Reader r(tmp.path);
+    CHECK_FALSE(r.complete());
+    CHECK(r.footerDamaged());
+    CHECK(readAll(r).size() == 6);
+}
+
+TEST_CASE("markers never push a frame past what a reader takes")
+{
+    TempCapture tmp;
+    SECTION("a packet that only fits without the markers before it is refused")
+    {
+        Writer w(tmp.path, config());
+        w.mark(MarkerKind::Note, "x");
+        const std::vector<std::byte> big(FrameLimits::MAX_CONTENT_SIZE - sizeof(PacketEntry), std::byte{ 1 });
+        CHECK_THROWS_AS(w.write({ .timestamp = T0, .direction = PacketDirection::ServerToClient, .data = big, .channel = 2, .opcode = 1 }), Error);
+    }
+    SECTION("at most 65535 markers wait for a packet")
+    {
+        {
+            Writer w(tmp.path, config());
+            for (int i = 0; i < 65535; ++i)
+            {
+                w.mark(MarkerKind::Note);
+            }
+            CHECK_THROWS_AS(w.mark(MarkerKind::Note), Error);
+            w.write(T0, PacketDirection::ServerToClient, gamePacket(0x010, 8));
+            w.close();
+        }
+        CHECK(readAll(tmp.path).at(0).markers.size() == 65535);
+    }
+}

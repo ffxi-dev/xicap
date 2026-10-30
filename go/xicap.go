@@ -138,6 +138,22 @@ type Summary struct {
 
 func cerr(msg *[256]C.char) error { return errors.New(C.GoString(&msg[0])) }
 
+// HeaderPrefix is how many bytes HeaderLength needs.
+const HeaderPrefix = 12
+
+// HeaderLength returns the length of the header b starts with, from its first
+// HeaderPrefix bytes. A later minor version may have a longer header.
+func HeaderLength(b []byte) (int, error) {
+	if len(b) < HeaderPrefix {
+		return 0, errors.New("xicap: short header")
+	}
+	n := C.xicap_header_size((*C.uint8_t)(unsafe.Pointer(&b[0])), C.size_t(len(b)))
+	if n < 0 {
+		return 0, errors.New("xicap: not a format 3 header")
+	}
+	return int(n), nil
+}
+
 // CheckHeader checks that b starts with a whole header this library can read.
 func CheckHeader(b []byte) error {
 	if len(b) < HeaderSize {

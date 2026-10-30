@@ -169,6 +169,8 @@ private:
     uint16_t                      currentZoneId_{ 0 };
     std::vector<PendingMarker>    pendingMarkers_;
     std::vector<FrameMarkerEntry> frameMarkers_;
+    size_t                        pendingMarkerBytes_{ 0 }; // FrameMarker and text of each
+    size_t                        frameMarkerBytes_{ 0 };
     std::vector<FooterIndexEntry> frameIndex_;
 
     // Frames written since the last checkpoint, and the first one's time.

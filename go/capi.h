@@ -65,6 +65,9 @@ extern "C"
         uint64_t   verified_packets;
     } xicap_summary;
 
+    // The length of the header data starts with, from its first 12 bytes, or -1.
+    int xicap_header_size(const uint8_t* data, size_t size);
+
     // Checks that data starts with a whole header this library can read.
     int xicap_check_header(const uint8_t* data, size_t size, char* err, size_t errlen);
 
