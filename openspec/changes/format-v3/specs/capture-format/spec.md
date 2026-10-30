@@ -57,7 +57,7 @@ Each frame SHALL start with a frame magic and a kind, and its checksum SHALL cov
 - **THEN** a reader in recovery mode skips to the next frame magic whose frame passes its checksum, reads every later intact frame, and reports one damaged frame
 
 ### Requirement: The footer closes a capture
-A cleanly closed capture SHALL end with a footer holding the frame index, the end timestamp, the packet count, the end zone, and a trailer at a fixed distance from the end of the file. A file without a valid footer SHALL read as a cut-off capture, and an empty capture SHALL still get a footer.
+A cleanly closed capture SHALL end with a footer holding the frame index, the end timestamp, the packet count, and a trailer at a fixed distance from the end of the file. A file without a valid footer SHALL read as a cut-off capture, and an empty capture SHALL still get a footer.
 
 #### Scenario: Closed with no packets
 - **WHEN** a writer is closed before any packet is written

@@ -67,8 +67,7 @@ there is none, with every field final.
 | 24 | 16 | `captureId` | 16 random bytes, never all zero |
 | 40 | 16 | `previousCaptureId` | the capture this one continues, or all zero |
 | 56 | 8 | `startTimestamp` | the first packet's timestamp; `0` if the capture holds no packet |
-| 64 | 2 | `startZoneId` | zone at the first packet; `0` if unknown |
-| 66 | 1 | `startWeather` | weather id at the first packet |
+| 64 | 3 | `reserved` | |
 | 67 | 1 | `clockSource` | `0` unknown, `1` live, `2` converted with an inferred offset |
 | 68 | 1 | `origin` | `0` unknown, `1` recorded live, `2` converted from another format |
 | 69 | 1 | `network` | `0` unknown, `1` retail, `2` private server |
@@ -200,7 +199,7 @@ Every frame starts with the same 28-byte header and ends with a CRC.
 | 8 | 4 | `payloadSize` | bytes between this header and the CRC |
 | 12 | 4 | `packetCount` | packets in the payload, at most 65535; `0` for other kinds |
 | 16 | 8 | `baseTimestamp` | first packet's timestamp; for other kinds, the last packet's timestamp before the frame |
-| 24 | 2 | `zoneId` | zone at the frame's first packet; for other kinds, the zone in effect |
+| 24 | 2 | `zoneId` | zone at the frame's first packet, from the last zone-in before it; `0` before the first zone-in. For other kinds, the zone in effect |
 | 26 | 2 | `reserved` | |
 | 28 | `payloadSize` | payload | |
 | 28 + `payloadSize` | 4 | `crc` | CRC-32 of bytes `0` to `28 + payloadSize` of the frame |
@@ -332,8 +331,7 @@ One per packet frame, in file order. Checkpoint frames have no entry.
 |----:|-----:|-------|-------|
 | 0 | 8 | `endTimestamp` | the last packet's timestamp; `0` if none |
 | 8 | 8 | `totalPacketCount` | |
-| 16 | 2 | `endZoneId` | |
-| 18 | 2 | `reserved` | |
+| 16 | 4 | `reserved` | |
 | 20 | 4 | `entryCount` | footer index entries |
 | 24 | 8 | `indexOffset` | file offset of the first index entry |
 | 32 | 4 | `indexCrc` | CRC-32 of the whole index |

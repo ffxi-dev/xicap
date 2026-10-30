@@ -33,7 +33,7 @@ Format 2.1 was built for replay. Mogsafe now makes it an archive format: every u
 ## Decisions
 
 ### Header written once, end fields in the footer
-The writer writes the header when the first frame is flushed, so `startTimestamp` is known by then; nothing needs rewriting. `endTimestamp`, `totalPacketCount`, and `endZoneId` move to the footer trailer.
+The writer writes the header when the first frame is flushed, so `startTimestamp` is known by then; nothing needs rewriting. `endTimestamp` and `totalPacketCount` move to the footer trailer. `startZoneId`, `startWeather`, and `endZoneId` go: a capture that starts at a login has them in its zone-in packets, and frames carry their zone as an index.
 - Mogsafe's close drops `xicap_same_except_patched` and the header rewrite: the uploader sends only the file's hash.
 - The header can carry its own CRC.
 - Rejected: keep the rewrites. They are the only thing standing between the format and an append-only file, and they make Mogsafe compare two headers on every close.
