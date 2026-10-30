@@ -79,7 +79,7 @@ there is none, with every field final.
 | 112 | 32 | `captureAgent` | text: the program that recorded the capture, with its version |
 | 144 | 32 | `clientVersion` | text: the game client's build |
 | 176 | 32 | `serverName` | text: the server, such as `retail` or a private server's name |
-| 208 | 44 | `lobby` | `LobbyIdentity`: the capture's character |
+| 208 | 44 | `character` | `CharacterIdentity`: the capture's character |
 | 252 | 128 | `reserved` | |
 | 380 | 4 | `headerCrc` | CRC-32 of bytes `0` to `headerSize - 4` |
 
@@ -102,24 +102,20 @@ and raises `headerSize`.
 A reader refuses the file if the magic differs, `versionMajor` is not 3,
 `headerSize` is out of range, or `headerCrc` fails.
 
-### `LobbyIdentity` (44 bytes)
+### `CharacterIdentity` (44 bytes)
 
 | Off | Size | Field | Notes |
 |----:|-----:|-------|-------|
-| 0 | 4 | `contentId` | POL character id (`ffxi_id`) |
-| 4 | 2 | `worldContentId` | |
-| 6 | 2 | `worldId` | |
-| 8 | 2 | `status` | character status at character select |
-| 10 | 1 | `flags` | bit 0 pending rename, bit 1 pending race change, others reserved |
-| 11 | 1 | `worldTableIndex` | |
+| 0 | 4 | `contentId` | POL character id (`ffxi_id`), unique to the character |
+| 4 | 4 | `worldContentId` | the character's id on its world (`ffxi_id_world`) |
+| 8 | 2 | `worldId` | |
+| 10 | 2 | `reserved` | |
 | 12 | 16 | `characterName` | text |
 | 28 | 16 | `worldName` | text |
 
-Bit 0 is the lowest bit of the byte.
-
-A capture holds one character's session. The character in `lobby` must be the
-one the capture's zone-in packets name; a reader reports a capture where they
-differ.
+A capture holds one character's session. The character in `character` must be
+the one the capture's zone-in packets name; a reader reports a capture where
+they differ.
 
 ### Required features
 
