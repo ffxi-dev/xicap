@@ -1,4 +1,4 @@
-# vault-xicap
+# xicap
 
 xicap is Vault's capture binary format and its C++20 library, built for replay and long-term archival: zstd-compressed frames, an index, and the dictionary embedded in each capture. `FORMAT.md` is the normative specification; `README.md` shows the library API. Every Vault brick that writes, stores, plays, or queries captures depends on it, so treat it as a contract.
 
@@ -26,11 +26,11 @@ cd js && node ./scripts/build-wasm.mjs                 # JavaScript and Wasm; ne
 
 ## Part of Vault
 
-This repository is one brick of Vault, the owner's platform for capturing retail FFXI and keeping the captures for the long term. The core repository is `sruon/vault`; the bricks are `vault-lens`, `vault-res`, `vault-xicap`, `vault-pilot`, and `vault-patch`. On the owner's PC they sit side by side in `C:/Users/sruon/Documents/GitHub/Vault/`.
+This repository is one brick of Vault, the owner's platform for capturing retail FFXI and keeping the captures for the long term. The core repository is `ffxi-dev/vault`; the bricks are `lens`, `res`, `xicap`, `pilot`, and `patch`. On the owner's PC they sit side by side in `C:/Users/sruon/Documents/GitHub/Vault/`.
 
-- **CI** calls shared workflows from `sruon/vault` (`uses: sruon/vault/.github/workflows/<name>.yml@ci/v1`). Change CI logic there, not here.
-- **Contracts** come from `sruon/vault` at a tagged release. Pin a tag; never copy a schema in.
-- **Specs.** A behavior change to this brick gets an OpenSpec change in this repository's `openspec/` (run `openspec init` the first time). A change that spans bricks goes in `sruon/vault`'s `openspec/`.
+- **CI** calls shared workflows from `ffxi-dev/vault` (`uses: ffxi-dev/vault/.github/workflows/<name>.yml@ci/v1`). Change CI logic there, not here.
+- **Contracts** come from `ffxi-dev/vault` at a tagged release. Pin a tag; never copy a schema in.
+- **Specs.** A behavior change to this brick gets an OpenSpec change in this repository's `openspec/` (run `openspec init` the first time). A change that spans bricks goes in `ffxi-dev/vault`'s `openspec/`.
 - **Private.** Every Vault repository is private. Never commit credentials, and never make a repository public without the owner.
 - **Commits** are small and say why. Every bug fix adds a test that fails without it. Match the surrounding code.
-- **Writing** (docs, commit messages, UI text) follows the rules in `sruon/vault`'s AGENTS.md: short plain words, active voice, no filler.
+- **Writing** (docs, commit messages, UI text) follows the rules in `ffxi-dev/vault`'s AGENTS.md: short plain words, active voice, no filler.

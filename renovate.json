@@ -1,4 +1,4 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["github>sruon/vault//renovate/preset"]
+  "extends": ["github>ffxi-dev/vault//renovate/preset"]
 }

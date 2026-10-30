@@ -8,7 +8,7 @@ on:
 
 jobs:
   build-and-test:
-    uses: sruon/vault/.github/workflows/cmake.yml@ci/v1
+    uses: ffxi-dev/vault/.github/workflows/cmake.yml@ci/v1
     with:
       configure-args: -DXICAP_BUILD_TOOLS=OFF -DXICAP_BUILD_TESTS=ON
       targets: xicap_tests
