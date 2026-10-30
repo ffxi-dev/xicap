@@ -4,20 +4,21 @@ Version 3.0. This document is normative: a reader built from it alone, with the
 references below, must read every capture the library writes.
 
 **Status: draft.** Format 3 is not in production. Until the owner declares it
-is, a later draft may change any part of it without keeping compatibility.
+is, a later draft may change any part of it and break compatibility.
 
 ## Conventions
 
 - Every integer is little-endian. Structures are byte-packed, with no padding.
 - Offsets and sizes are in bytes. `u8`, `u16`, `u32`, `u64` are unsigned; `i32`
   is two's complement.
-- `reserved` fields and bytes are written as zero, and readers ignore their
+- Writers write `reserved` fields and bytes as zero, and readers ignore their
   value. A later minor version may give them a meaning only where an old reader
   can safely ignore it.
 - A text field of N bytes holds UTF-8, padded with zero bytes. It holds at most
   N - 1 bytes of text, cut only between characters, so it always ends with at
   least one zero byte.
 - Timestamps are milliseconds since the Unix epoch, in UTC.
+- A byte range `a..b` includes byte `a` and stops before byte `b`.
 
 ### References
 
@@ -44,8 +45,8 @@ is, a later draft may change any part of it without keeping compatibility.
 +--------------------+
 ```
 
-A writer writes each byte once and only ever appends. Nothing already written is
-changed, so every copy of a file being recorded is a prefix of the finished
+A writer only appends, and writes each byte once. It never changes what it has
+written, so every copy of a file being recorded is a prefix of the finished
 file.
 
 A file with a valid footer is **complete**. A file without one is **cut off**:
@@ -53,8 +54,8 @@ the recorder crashed, or is still recording.
 
 ## Header
 
-The writer writes the header when the first frame is written, or at close if
-there is none, with every field final.
+The writer writes the header, with every field final, when it writes the first
+frame, or at close if there is none.
 
 | Off | Size | Field | Notes |
 |----:|-----:|-------|-------|
@@ -80,7 +81,7 @@ there is none, with every field final.
 | 144 | 32 | `clientVersion` | text: the game client's build |
 | 176 | 44 | `character` | `CharacterIdentity`: the capture's character |
 | 220 | 160 | `reserved` | |
-| 380 | 4 | `headerCrc` | CRC-32 of bytes `0` to `headerSize - 4` |
+| 380 | 4 | `headerCrc` | CRC-32 of header bytes `0..headerSize-4` |
 
 The magic follows PNG's pattern:
 
@@ -95,8 +96,8 @@ stops DOS `type`. 2.x files start with `XCAP`, so a 3.x reader refuses them as a
 bad magic.
 
 `headerCrc` is always the last 4 bytes of the header. A later minor version may
-grow the header: it adds fields in the reserved bytes or after them, moves the CRC to the new end,
-and raises `headerSize`.
+grow the header: it adds fields in the reserved bytes or after them, moves the
+CRC to the new end, and raises `headerSize`.
 
 A reader refuses the file if the magic differs, `versionMajor` is not 3,
 `headerSize` is out of range, or `headerCrc` fails.
@@ -113,8 +114,8 @@ A reader refuses the file if the magic differs, `versionMajor` is not 3,
 | 28 | 16 | `worldName` | text |
 
 A capture holds one character's session. The character in `character` must be
-the one the capture's zone-in packets name; a reader reports a capture where
-they differ.
+the one the capture's zone-in packets name. A reader that finds they differ
+reports it and goes on reading; refusing such a capture is up to the archive.
 
 ## Extension blocks
 
@@ -148,7 +149,7 @@ unchanged.
 
 ### Source
 
-Carried by converted captures (`origin` 2).
+Converted captures (`origin` 2) carry this block.
 
 | Off | Size | Field | Notes |
 |----:|-----:|-------|-------|
@@ -162,11 +163,11 @@ Carried by converted captures (`origin` 2).
 
 ## Dictionary
 
-Packet frames may be compressed with a zstd dictionary. When `dictionaryId` is
-not 0, the first extension block must be `ZSTD_DICT`, holding the dictionary in
-RFC 8878 section 5 format, whose `Dictionary_ID` equals `dictionaryId`. A reader
-refuses the file otherwise. A reader decodes only with the dictionary in the
-file, never with one of its own.
+A writer may compress packet frames with a zstd dictionary. When
+`dictionaryId` is not 0, the first extension block must be `ZSTD_DICT`, holding
+the dictionary in RFC 8878 section 5 format, whose `Dictionary_ID` equals
+`dictionaryId`. A reader refuses the file otherwise. A reader decodes only with
+the dictionary in the file, never with one of its own.
 
 Writers train dictionaries with zstd's trainer:
 
@@ -187,30 +188,29 @@ Every frame starts with the same 28-byte header and ends with a CRC.
 | 8 | 4 | `payloadSize` | bytes between this header and the CRC |
 | 12 | 4 | `packetCount` | packets in the payload, at most 65535; `0` for other kinds |
 | 16 | 8 | `baseTimestamp` | first packet's timestamp; for other kinds, the last packet's timestamp before the frame |
-| 24 | 2 | `zoneId` | zone at the frame's first packet, from the last zone-in before it; `0` before the first zone-in. For other kinds, the zone in effect |
+| 24 | 2 | `zoneId` | zone named by the last zone-in at or before the frame's first packet; `0` if none. For other kinds, the zone in effect |
 | 26 | 2 | `reserved` | |
 | 28 | `payloadSize` | payload | |
-| 28 + `payloadSize` | 4 | `crc` | CRC-32 of bytes `0` to `28 + payloadSize` of the frame |
+| 28 + `payloadSize` | 4 | `crc` | CRC-32 of frame bytes `0..28+payloadSize` |
 
 | Kind | Name | Readers that do not know it |
 |-----:|------|-----------------------------|
 | `0x01` | checkpoint | skip it |
 | `0x80` | packets | refuse the file |
 
-Kinds below `0x80` may be skipped, after checking the CRC, by a reader that does
-not know them. Kinds from `0x80` must be understood: a reader refuses a file
-holding one it does not know.
+A reader that does not know a kind below `0x80` may skip it after checking its
+CRC. Kinds from `0x80` must be understood: a reader refuses a file holding one
+it does not know.
 
 ### Packet frames
 
 The payload is exactly one zstd frame (RFC 8878) with `Frame_Content_Size`
 present and `Content_Checksum_flag` set, compressed with the capture's
-dictionary if it has one. No skippable zstd frames.
+dictionary if it has one. The payload never holds skippable zstd frames.
 
-The content size must not exceed 16 MiB, nor
-`packetCount * (12 + 65535) + markerCount * (6 + 65535)` when every packet is
-on the game channel. A reader checks the content size against 16 MiB before
-allocating.
+The content size must not exceed 16 MiB; a reader checks it before allocating.
+So no packet is longer than 16 MiB minus its 12-byte entry, and a writer refuses
+a longer one.
 
 Decompressed, the payload is:
 
@@ -245,9 +245,12 @@ entry up to and including its own.
 | 9 | redacted: byte ranges zeroed | must understand |
 | 10 to 15 | reserved | must understand |
 
-A reader refuses a file holding a set bit from 10 to 15. Packet bytes are the
-packet as the client's hook delivered it, decrypted and decompressed, before any
-addon changed it.
+Bits 1 to 7 are the **provenance flags**. A reader refuses a file holding a set
+bit from 10 to 15.
+
+Packet bytes are the packet as the client's hook delivered it, decrypted and
+decompressed, before any addon changed it. For an injected packet, they are the
+bytes the addon injected.
 
 #### `FrameMarker` (6 bytes)
 
@@ -279,7 +282,7 @@ See [Signatures](#signatures).
 | 2 to 255 | reserved: lobby, IRC, and profile traffic come later | | | |
 
 A reader passes on packets of a channel it does not know, with the channel's
-number, and does not refuse the file. A new channel is a minor version.
+number, and does not refuse the file. Adding a channel is a minor version.
 
 ### Game channel
 
@@ -295,8 +298,8 @@ byte 0     byte 1             byte 2     byte 3
 - `sync` = `u16(bytes 2..4)`, a sequence counter per direction
 
 A writer refuses a game packet shorter than 4 bytes and sets `opcode` to its
-`id`. A reader treats a game packet whose `opcode` differs from its `id` as a
-corrupt frame.
+`id`. A frame holding a game packet whose `opcode` differs from its `id` is a
+bad frame (see [Reading](#reading)).
 
 ## Footer
 
@@ -325,7 +328,7 @@ One per packet frame, in file order. Checkpoint frames have no entry.
 | 32 | 4 | `indexCrc` | CRC-32 of the whole index |
 | 36 | 4 | `frameCount` | frames of every kind |
 | 40 | 64 | `signature` | see [Signatures](#signatures) |
-| 104 | 4 | `trailerCrc` | CRC-32 of trailer bytes `0` to `104` |
+| 104 | 4 | `trailerCrc` | CRC-32 of trailer bytes `0..104` |
 | 108 | 4 | `magic` | ASCII `XCPF` |
 
 The footer is valid when all of these hold:
@@ -337,13 +340,13 @@ The footer is valid when all of these hold:
   the file size;
 - `indexCrc` is correct.
 
-A file whose footer is not valid is read as cut off. If its last 4 bytes are
-`XCPF` anyway, the reader also reports a damaged footer.
+A reader reads a file whose footer is not valid as cut off. If its last 4 bytes
+are `XCPF` anyway, the reader also reports a damaged footer.
 
 ## Signatures
 
-Every capture is signed with the key in `signingKey`. Signatures sign a SHA-512
-hash chain over the file:
+A writer signs every capture with the key in `signingKey`. The signatures cover
+a SHA-512 hash chain over the file:
 
 1. `h = SHA-512(header)`, over all `headerSize` bytes.
 2. For each extension block, in order: `h = SHA-512(h || block)`, over the
@@ -361,7 +364,7 @@ prefixes are ASCII, with no terminator.
 A reader recomputes the chain and reports:
 
 - the signing key;
-- **complete** if the footer's signature verifies;
+- **signed to the end** if the footer's signature verifies;
 - otherwise the last checkpoint whose stored chain value matches and whose
   signature verifies, and how many packets come before it;
 - the file offset of the first frame where a stored chain value or signature
@@ -372,8 +375,8 @@ A failed signature never stops a reader from reading packets.
 ## Exclusion
 
 Every capture carries the exclusion policy its writer applied, in an
-`EXCLUSION_POLICY` block. The writer applies it to each packet before the packet
-is compressed, so excluded bytes never reach the file.
+`EXCLUSION_POLICY` block. The writer applies it to each packet before
+compressing the packet, so excluded bytes never reach the file.
 
 | Off | Size | Field |
 |----:|-----:|-------|
@@ -396,37 +399,43 @@ Each rule:
 | 8 | | `rangeCount` ranges of `u32 offset, u32 length` | a length of `0xFFFFFFFF` runs to the packet's end |
 
 The first rule that matches a packet's channel, direction, and opcode applies.
+A writer refuses a policy that stubs packets on a channel whose row in
+[Channels](#channels) does not say what a stub keeps.
 
 - **Stub:** the entry keeps its timestamp, channel, direction, provenance flags,
   and opcode, sets the excluded flag, and keeps only what its channel's row in
   [Channels](#channels) says a stub keeps. On the game channel that is the
   4-byte header, whose `size` still gives the original length.
-- **Zero byte ranges:** the entry keeps its length, sets the redacted flag, and
-  has each range zeroed. Ranges past the packet's end are cut at the end.
+- **Zero byte ranges:** the entry keeps its length and sets the redacted flag,
+  and the writer zeroes each range. A range that runs past the packet's end
+  stops at the end.
 
 The library's default policy, `xicap-default`, stubs every chat packet on the
-game channel in both directions. Its opcodes are checked against the client's
-resources and listed here by task 5.2.
+game channel in both directions. Task 5.2 checks its opcodes against the
+client's resources and lists them here.
 
 ## Reading
 
 A reader:
 
-1. checks the header and its CRC, and every extension block's
-   CRC and length, and the dictionary and policy rules above, and refuses the
-   file if any fails;
+1. checks the header and its CRC, each extension block's CRC and length, and
+   the dictionary and policy rules above, and refuses the file if any check
+   fails;
 2. checks the footer;
-3. reads frames from the end of the extension blocks.
+3. reads frames, starting at the end of the extension blocks.
 
-In a complete file, frames run up to `indexOffset`. A frame that is cut short,
-lacks the `XCFR` magic, or fails its CRC there is an error.
+A **bad frame** is one that is cut short, lacks the `XCFR` magic, fails its CRC,
+or breaks a rule of this document once read, such as a zstd error or a game
+packet whose `opcode` differs from its `id`.
 
-In a cut-off file, frames run up to the first frame that is cut short, lacks the
-magic, or fails its CRC. The capture ends there, and the reader reports how many
-bytes it did not read.
+In a complete file, frames run up to `indexOffset`, and a bad frame makes the
+reader refuse the file.
+
+In a cut-off file, frames run up to the first bad frame. The capture ends there,
+and the reader reports how many bytes it did not read.
 
 In **recovery mode**, a reader that meets a bad frame searches forward, byte by
-byte, for the next `XCFR` whose frame passes its CRC, and carries on from there.
+byte, for the next `XCFR` whose frame passes its CRC, and goes on from there.
 It reports each skipped region. Recovery mode is for salvage; Mogsafe and other
 archive checks read in the normal mode.
 
@@ -447,15 +456,17 @@ it parses.
   when the host asks for a flush.
 - **Checkpoints.** A writer writes a checkpoint, covering every frame so far, at
   the first frame boundary after 60 seconds of frames without one, when a flush
-  finds the capture idle with frames since the last checkpoint, and before a
-  login or logout marker. It never writes one when no frame was written since
-  the last.
-- **Captures start at a login.** A recorder starts a new capture when a
+  finds the capture idle with frames since the last checkpoint, and when the
+  host marks a login or logout: it ends the frame being built and writes the
+  checkpoint before the packet that carries the marker. It never writes one
+  when it has written no frame since the last, so a capture's opening login
+  has none.
+- **When captures start.** A recorder starts a new capture when a
   character logs in and the current capture holds another character or none.
   When the same character logs out and back in, the capture continues, with a
   logout and a login marker. A recorder that starts after a login, or after a
   crash, sets `startContext` to mid-session and `previousCaptureId` to the
-  capture it continues. No timer ends a capture.
+  capture it continues, or all zero if it knows none. No timer ends a capture.
 - **Durability.** A writer hands each frame to the operating system as soon as
   it is written, and reports any write error.
 - **Empty captures** still get a header, extension blocks, and a footer with no
@@ -469,13 +480,13 @@ reader written from this document alone, reads them too.
 
 ## Worked example
 
-Replaced in task 1.2 by an annotated dump of a conformance file.
+Task 1.2 replaces this section with an annotated dump of a conformance file.
 
 ## Versioning
 
 | Change | Version |
 |--------|---------|
-| Layout of an existing structure changes | major |
+| Layout of an existing structure changes, except the header growing as [Header](#header) allows | major |
 | A new frame kind, packet flag, channel, extension type, marker kind, or a field in reserved bytes that old readers can ignore | minor |
 | Anything an old reader would misread without a must-understand frame kind or flag to stop it | major |
 | A new check readers make | none |
@@ -491,4 +502,4 @@ keep reading every released version.
 
 The C++ library vendors Monocypher 4.0.3 (`monocypher.c` and
 `optional/monocypher-ed25519.c`) for Ed25519 and SHA-512. Renovate cannot update
-a vendored file; check Monocypher's releases when making a release of xicap.
+a vendored file; check Monocypher's releases when releasing xicap.
