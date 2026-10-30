@@ -2,6 +2,7 @@ package xicap
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -206,5 +207,53 @@ func TestChannelsAndMarkers(t *testing.T) {
 	}
 	if s.Packets != 2 {
 		t.Fatalf("packets %d", s.Packets)
+	}
+}
+
+// TestConformanceSet reads the conformance set and compares what a Summary
+// holds with each recorded reading.
+func TestConformanceSet(t *testing.T) {
+	files, err := filepath.Glob("../tests/vectors/*.xicap")
+	if err != nil || len(files) < 17 {
+		t.Fatalf("conformance set: %d files, %v", len(files), err)
+	}
+	for _, f := range files {
+		t.Run(filepath.Base(f), func(t *testing.T) {
+			var want struct {
+				Refusal           string
+				Packets           []json.RawMessage
+				Complete          bool
+				FooterDamaged     bool
+				UnreadBytes       uint64
+				CharacterMismatch bool
+				Verify            []json.RawMessage
+			}
+			b, err := os.ReadFile(strings.TrimSuffix(f, ".xicap") + ".json")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(b, &want); err != nil {
+				t.Fatal(err)
+			}
+			s, err := Read(f)
+			if want.Refusal != "" {
+				if err == nil {
+					t.Fatalf("read a file that must be refused (%s)", want.Refusal)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			var signed bool
+			var verified uint64
+			json.Unmarshal(want.Verify[0], &signed)
+			json.Unmarshal(want.Verify[1], &verified)
+			if s.Packets != uint64(len(want.Packets)) || s.Closed != want.Complete || s.FooterDamaged != want.FooterDamaged ||
+				s.UnreadBytes != want.UnreadBytes || s.CharacterMismatch != want.CharacterMismatch ||
+				s.SignedToEnd != signed || s.VerifiedPackets != verified {
+				t.Fatalf("summary %+v, recorded %s", s, b)
+			}
+		})
 	}
 }

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
@@ -77,4 +77,43 @@ test("a damaged header raises HeaderChecksumMismatch", async () => {
     const bytes = new Uint8Array(await readFile(fixturePath));
     bytes[200] ^= 1;
     await assert.rejects(Reader.open(bytes), (e) => e instanceof XicapError && e.code === ErrorCode.HeaderChecksumMismatch);
+});
+
+test("reads the conformance set as recorded", async () => {
+    const dir = path.resolve(here, "../../tests/vectors");
+    const names = (await readdir(dir)).filter((n) => n.endsWith(".xicap"));
+    assert.ok(names.length >= 17);
+    for (const name of names) {
+        const expected = JSON.parse(await readFile(path.join(dir, name.replace(".xicap", ".json")), "utf8"));
+        const bytes = await readFile(path.join(dir, name));
+        if (expected.refusal) {
+            await assert.rejects(
+                (async () => {
+                    const r = await Reader.open(bytes);
+                    try {
+                        [...r];
+                    } finally {
+                        r.close();
+                    }
+                })(),
+                (e) => e instanceof XicapError,
+                name,
+            );
+            continue;
+        }
+        const r = await Reader.open(bytes);
+        try {
+            const hex = (u8) => Buffer.from(u8).toString("hex");
+            const packets = [...r].map((p) => [p.timestampMs, p.channel, p.opcode, p.flags, hex(p.data), p.markers.map((m) => [m.kind, m.text])]);
+            assert.deepEqual(packets, expected.packets, name);
+            assert.equal(r.complete, expected.complete, name);
+            assert.equal(r.footerDamaged, expected.footerDamaged, name);
+            assert.equal(r.unreadBytes, expected.unreadBytes, name);
+            assert.equal(r.characterMismatch, expected.characterMismatch, name);
+            const v = r.verify();
+            assert.deepEqual([v.signedToEnd, v.verifiedPackets, v.goodCheckpoints, v.firstFailureOffset !== null], expected.verify, name);
+        } finally {
+            r.close();
+        }
+    }
 });

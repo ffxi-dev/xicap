@@ -983,3 +983,28 @@ TEST_CASE("the conformance set reads as recorded")
     }
     CHECK(checked >= 16);
 }
+
+TEST_CASE("the writer keeps frames within the reader's limits")
+{
+    TempCapture tmp;
+    FramePolicy policy        = plain();
+    policy.maxPacketsPerFrame = 1'000'000;        // over the 65535 a frame can hold
+    policy.maxFrameSize       = 64 * 1024 * 1024; // over the 16 MiB a frame can hold
+    policy.maxFrameTimeMs     = 1'000'000;
+    {
+        Writer w(tmp.path, config(), policy);
+        for (int i = 0; i < 70'000; ++i)
+        {
+            w.write(T0, PacketDirection::ServerToClient, gamePacket(0x010, 8));
+        }
+        const std::vector<std::byte> big(300'000, std::byte{ 1 });
+        for (int i = 0; i < 60; ++i) // 18 MB on one channel
+        {
+            w.write({ .timestamp = T0, .direction = PacketDirection::ServerToClient, .data = big, .channel = 2, .opcode = 1 });
+        }
+        w.close();
+    }
+    Reader r(tmp.path);
+    CHECK(readAll(r).size() == 70'060);
+    CHECK(r.totalFrames() >= 3);
+}

@@ -430,5 +430,35 @@ def main(directory: str) -> int:
     return 1 if failures or not files else 0
 
 
+def example(format_md: str) -> int:
+    """Checks FORMAT.md's worked example: its dump is the conformance file it
+    names, this reader reads it, and the second dump is its frame decompressed."""
+    import re
+
+    md = Path(format_md).read_text(encoding="utf-8")
+    section = md[md.index("## Worked example") : md.index("## Versioning")]
+    blocks = re.findall(r"```\n(.*?)```", section, re.S)
+    dumps = [bytes.fromhex("".join(line[10:57] for line in b.splitlines())) for b in blocks]
+    name = re.search(r"`(tests/vectors/[\w-]+\.xicap)`", section).group(1)
+    path = Path(format_md).parent / name
+    capture, content = dumps
+    if capture != path.read_bytes():
+        print(f"the worked example is not {name}")
+        return 1
+    c = Capture(capture)
+    packets = list(c.packets())
+    if not c.complete or not c.verify()[0]:
+        print("the worked example does not read as complete and signed")
+        return 1
+    frame = c.raw_frame(c.data_start, c.end)
+    if zstandard.ZstdDecompressor().decompress(frame[FRAME_HEADER:-4]) != content:
+        print("the decompressed dump is not the frame's content")
+        return 1
+    print(f"worked example ok: {len(capture)} bytes, {len(packets)} packets")
+    return 0
+
+
 if __name__ == "__main__":
+    if len(sys.argv) > 2 and sys.argv[1] == "--example":
+        sys.exit(example(sys.argv[2]))
     sys.exit(main(sys.argv[1] if len(sys.argv) > 1 else str(Path(__file__).parent / "vectors")))

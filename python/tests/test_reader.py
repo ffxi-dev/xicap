@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -96,3 +97,28 @@ def test_typed_error_on_damaged_header(tmp_path):
     with pytest.raises(xicap.Error) as exc_info:
         xicap.Reader(bad)
     assert exc_info.value.code == xicap.ErrorCode.HeaderChecksumMismatch
+
+
+VECTORS = Path(__file__).parent.parent.parent / "tests" / "vectors"
+
+
+@pytest.mark.parametrize("path", sorted(VECTORS.glob("*.xicap")), ids=lambda p: p.stem)
+def test_conformance_set(path):
+    expected = json.loads(path.with_suffix(".json").read_text())
+    if "refusal" in expected:
+        with pytest.raises(xicap.Error) as exc_info:
+            list(xicap.Reader(path))
+        assert exc_info.value.code.name == expected["result"]
+        return
+    r = xicap.Reader(path)
+    packets = [
+        [p.timestampMs, p.channel, p.opcode, p.flags, p.data.hex(), [[int(k), t] for k, t in p.markers]]
+        for p in r
+    ]
+    assert packets == expected["packets"]
+    assert r.complete == expected["complete"]
+    assert r.footer_damaged == expected["footerDamaged"]
+    assert r.unread_bytes == expected["unreadBytes"]
+    assert r.character_mismatch == expected["characterMismatch"]
+    v = r.verify()
+    assert [v["signedToEnd"], v["verifiedPackets"], v["goodCheckpoints"], v["firstFailureOffset"] is not None] == expected["verify"]
