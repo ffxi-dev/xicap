@@ -83,3 +83,63 @@ func SameExceptPatched(a, b []byte) bool {
 	}
 	return C.xicap_same_except_patched((*C.uint8_t)(unsafe.Pointer(&a[0])), (*C.uint8_t)(unsafe.Pointer(&b[0]))) == 1
 }
+
+// WriterInfo is what a new capture's header records.
+type WriterInfo struct {
+	CaptureAgent  string
+	ClientVersion string
+	CharacterName string
+	StartZoneID   uint16
+}
+
+// Writer creates a capture. It is not safe for concurrent use.
+type Writer struct{ w *C.xicap_writer }
+
+// Create starts a capture at path.
+func Create(path string, info WriterInfo) (*Writer, error) {
+	cs := []*C.char{C.CString(path), C.CString(info.CaptureAgent), C.CString(info.ClientVersion), C.CString(info.CharacterName)}
+	defer func() {
+		for _, s := range cs {
+			C.free(unsafe.Pointer(s))
+		}
+	}()
+	ci := C.xicap_writer_info{
+		capture_agent:  cs[1],
+		client_version: cs[2],
+		character_name: cs[3],
+		start_zone_id:  C.uint16_t(info.StartZoneID),
+	}
+	var msg [256]C.char
+	w := C.xicap_writer_open(cs[0], &ci, &msg[0], C.size_t(len(msg)))
+	if w == nil {
+		return nil, errors.New(C.GoString(&msg[0]))
+	}
+	return &Writer{w}, nil
+}
+
+// Write adds one packet; timestamp is Unix ms.
+func (w *Writer) Write(timestamp uint64, clientToServer bool, data []byte) error {
+	if len(data) == 0 {
+		return errors.New("xicap: empty packet")
+	}
+	dir := C.int(0)
+	if clientToServer {
+		dir = 1
+	}
+	var msg [256]C.char
+	if C.xicap_writer_write(w.w, C.uint64_t(timestamp), dir, (*C.uint8_t)(unsafe.Pointer(&data[0])), C.size_t(len(data)), &msg[0], C.size_t(len(msg))) != 0 {
+		return errors.New(C.GoString(&msg[0]))
+	}
+	return nil
+}
+
+// Close writes the footer. The Writer cannot be used afterwards.
+func (w *Writer) Close() error {
+	var msg [256]C.char
+	rc := C.xicap_writer_close(w.w, &msg[0], C.size_t(len(msg)))
+	w.w = nil
+	if rc != 0 {
+		return errors.New(C.GoString(&msg[0]))
+	}
+	return nil
+}

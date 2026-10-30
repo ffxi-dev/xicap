@@ -99,3 +99,29 @@ func TestSameExceptPatched(t *testing.T) {
 		t.Fatal("startZoneId change accepted")
 	}
 }
+
+func TestWriteThenRead(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "w.xicap")
+	w, err := Create(p, WriterInfo{CaptureAgent: "test", ClientVersion: "v1", CharacterName: "Mehdi", StartZoneID: 230})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 0x015, 4 words: id low byte, then size<<1 | id bit 8.
+	pkt := []byte{0x15, 0x08, 0x01, 0x00, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}
+	for i := range 3 {
+		if err := w.Write(1700000000000+uint64(i)*250, i%2 == 0, pkt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Read(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !s.Closed || s.Packets != 3 || s.CaptureAgent != "test" || s.CharacterName != "Mehdi" || s.StartZoneID != 230 ||
+		s.StartTimestamp != 1700000000000 || s.EndTimestamp != 1700000000500 {
+		t.Fatalf("unexpected summary %+v", s)
+	}
+}

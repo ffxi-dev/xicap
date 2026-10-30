@@ -1,16 +1,13 @@
 #include "capi.h"
 
 #include "xicap/reader.h"
+#include "xicap/writer.h"
 
 #include <algorithm>
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
 #include <exception>
-
-// cgo compiles only the files in this directory, so the library is built here.
-#include "../src/dictionary.cpp"
-#include "../src/reader.cpp"
 
 namespace
 {
@@ -102,4 +99,58 @@ extern "C" int xicap_same_except_patched(const uint8_t* a, const uint8_t* b)
         h->endZoneId        = 0;
     }
     return std::memcmp(&x, &y, sizeof(x)) == 0 ? 1 : 0;
+}
+
+struct xicap_writer
+{
+    xicap::Writer writer;
+};
+
+extern "C" xicap_writer* xicap_writer_open(const char* path, const xicap_writer_info* info, char* err, size_t errlen)
+{
+    try
+    {
+        xicap::WriterConfig config{};
+        config.captureAgent  = info->capture_agent;
+        config.clientVersion = info->client_version;
+        config.startZoneId   = info->start_zone_id;
+        std::snprintf(config.lobby.characterName.data(), config.lobby.characterName.size(), "%s", info->character_name);
+        return new xicap_writer{ xicap::Writer{ path, config } };
+    }
+    catch (const std::exception& e)
+    {
+        setError(err, errlen, e.what());
+        return nullptr;
+    }
+}
+
+extern "C" int xicap_writer_write(xicap_writer* w, uint64_t timestamp, int client_to_server, const uint8_t* data, size_t size, char* err, size_t errlen)
+{
+    try
+    {
+        const auto direction = client_to_server ? xicap::PacketDirection::ClientToServer : xicap::PacketDirection::ServerToClient;
+        w->writer.write(timestamp, direction, std::span{ reinterpret_cast<const std::byte*>(data), size });
+        return 0;
+    }
+    catch (const std::exception& e)
+    {
+        setError(err, errlen, e.what());
+        return -1;
+    }
+}
+
+extern "C" int xicap_writer_close(xicap_writer* w, char* err, size_t errlen)
+{
+    int rc = 0;
+    try
+    {
+        w->writer.close();
+    }
+    catch (const std::exception& e)
+    {
+        setError(err, errlen, e.what());
+        rc = -1;
+    }
+    delete w;
+    return rc;
 }

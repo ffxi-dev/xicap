@@ -34,6 +34,25 @@ extern "C"
     // Reports whether two headers differ only in the fields the writer fills in after writing the header.
     int xicap_same_except_patched(const uint8_t* a, const uint8_t* b);
 
+    typedef struct xicap_writer xicap_writer;
+
+    typedef struct
+    {
+        const char* capture_agent;
+        const char* client_version;
+        const char* character_name;
+        uint16_t    start_zone_id;
+    } xicap_writer_info;
+
+    // Creates a capture at path. Returns NULL and fills err on failure.
+    xicap_writer* xicap_writer_open(const char* path, const xicap_writer_info* info, char* err, size_t errlen);
+
+    // Adds one packet; timestamp is Unix ms.
+    int xicap_writer_write(xicap_writer* w, uint64_t timestamp, int client_to_server, const uint8_t* data, size_t size, char* err, size_t errlen);
+
+    // Writes the footer and frees the writer, even on error.
+    int xicap_writer_close(xicap_writer* w, char* err, size_t errlen);
+
 #ifdef __cplusplus
 }
 #endif
