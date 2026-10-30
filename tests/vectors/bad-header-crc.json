@@ -1,0 +1,5 @@
+{
+  "result": "HeaderChecksumMismatch",
+  "refusal": "header",
+  "recovery": "header"
+}

@@ -2,6 +2,7 @@
 
 #include "internal/chain.h"
 #include "internal/crc32.h"
+#include "vectors.h"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -910,3 +911,21 @@ TEST_CASE("write errors are raised")
     CHECK_THROWS_AS(w.flush(), Error);
 }
 #endif
+
+TEST_CASE("the conformance set reads as recorded")
+{
+    size_t checked = 0;
+    for (const auto& entry : fs::directory_iterator(XICAP_VECTORS_DIR))
+    {
+        if (entry.path().extension() != ".xicap")
+        {
+            continue;
+        }
+        auto       expectedPath = entry.path();
+        const auto expected     = bytesOf(expectedPath.replace_extension(".json"));
+        INFO(entry.path().filename().string());
+        CHECK(vectors::reading(entry.path()) == std::string(expected.begin(), expected.end()));
+        checked++;
+    }
+    CHECK(checked >= 16);
+}

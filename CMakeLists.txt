@@ -109,6 +109,14 @@ if(XICAP_BUILD_FIXTURE_TOOL)
     target_link_libraries(xicap_make_fixture PRIVATE xicap)
 endif()
 
+# Conformance set generator (writes tests/vectors).
+option(XICAP_BUILD_VECTOR_TOOL "Build the xicap_make_vectors generator" OFF)
+if(XICAP_BUILD_VECTOR_TOOL)
+    add_executable(xicap_make_vectors tools/xicap_make_vectors.cpp)
+    target_link_libraries(xicap_make_vectors PRIVATE xicap)
+    target_include_directories(xicap_make_vectors PRIVATE src tools vendor/monocypher)
+endif()
+
 # Tests
 option(XICAP_BUILD_TESTS "Build xicap tests" OFF)
 if(XICAP_BUILD_TESTS)
@@ -124,7 +132,8 @@ if(XICAP_BUILD_TESTS)
     add_executable(xicap_tests tests/xicap_tests.cpp)
     target_link_libraries(xicap_tests PRIVATE xicap Catch2::Catch2WithMain)
     # Tests reach into src/internal to rebuild CRCs and chains when crafting bad files.
-    target_include_directories(xicap_tests PRIVATE src vendor/monocypher)
+    target_include_directories(xicap_tests PRIVATE src tools vendor/monocypher)
+    target_compile_definitions(xicap_tests PRIVATE XICAP_VECTORS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors")
 
     list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
     include(Catch)
