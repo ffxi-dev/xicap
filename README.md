@@ -2,34 +2,43 @@
 
 Binary capture format and C++20 library for Final Fantasy XI network packets.
 
-A capture is a fixed header + optional extension blocks (memory snapshots,
-character info) + zstd-compressed packet frames + an optional footer index.
-Truncated captures remain readable; the reader rebuilds the index by scanning.
-Each capture embeds the zstd dictionary it was compressed with, so it stays
-readable on any build.
+A capture is a header written once, format-level extension blocks (the zstd
+dictionary, the exclusion policy, the source of converted captures),
+zstd-compressed packet frames, and a footer index once the capture is closed.
+The file only ever grows, so a capture can be uploaded while it records, and a
+cut-off capture reads up to its last intact frame. Every block carries a CRC,
+every capture is signed by its recorder's Ed25519 key, and the exclusion policy
+stubs chat before it reaches disk.
 
-See [FORMAT.md](FORMAT.md) for the on-disk specification.
+See [FORMAT.md](FORMAT.md) for the on-disk specification (format 3).
 
 ## Library
 
 ```cpp
 #include <xicap/xicap.h>
 
-xicap::WriterConfig cfg{
-    .clientVersion = "30251101_2",
-    .captureAgent  = "Memoria 1.0",
-    .startZoneId   = 100,
-};
+xicap::WriterConfig cfg{};
+cfg.clientVersion = "30251101_2";
+cfg.captureAgent  = "Logbook 1.0";
+cfg.character     = character;   // content id, world, names
+cfg.network       = xicap::Network::Retail;
+cfg.signingSeed   = installSeed; // the recorder's Ed25519 seed
 
 xicap::Writer w("session.xicap", cfg);
+w.mark(xicap::MarkerKind::Login);
 w.write(timestampMs, xicap::PacketDirection::ServerToClient,
         std::as_bytes(std::span{packetBytes, packetLen}));
-w.close();   // appends footer
+w.write({ .timestamp = t, .direction = dir, .data = searchBytes,
+          .channel = 1, .opcode = type });   // search channel
+w.flush();   // on a timer: ends the frame, signs an idle capture
+w.close();   // appends the signed footer
 
 xicap::Reader r("session.xicap");
 for (const auto& pkt : r) {
-    // pkt.timestamp, pkt.opcode, pkt.direction, pkt.data
+    // pkt.timestamp, pkt.channel, pkt.opcode, pkt.flags, pkt.direction,
+    // pkt.data, pkt.markers
 }
+const auto v = r.verify();   // v.signedToEnd, v.verifiedPackets
 ```
 
 ## Build
@@ -39,9 +48,8 @@ cmake -S . -B build -G Ninja
 cmake --build build
 ```
 
-Tools (`xicap_dump`) require the Ashita SDK; set `ASHITA4_SDK_PATH` in the
-environment or disable with `-DXICAP_BUILD_TOOLS=OFF`. FFXI is a 32-bit client,
-so anything that consumes Ashita SDK structs must be built x86.
+`xicap_dump <file>` prints what a capture holds: header, provenance,
+signatures, zones, and packet statistics (`--dump` adds hex dumps).
 
 Tests are off by default. Enable with `-DXICAP_BUILD_TESTS=ON` (fetches Catch2
 via FetchContent). Run via `ctest` or the produced `xicap_tests` executable.

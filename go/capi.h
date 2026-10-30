@@ -14,25 +14,44 @@ extern "C"
         uint8_t  version_minor;
         char     capture_agent[32];
         char     client_version[32];
+        uint8_t  capture_id[16];
+        uint8_t  previous_capture_id[16];
+        uint32_t content_id;
+        uint32_t character_id;
+        uint16_t world_id;
         char     character_name[16];
         char     world_name[16];
-        uint16_t start_zone_id;
-        uint16_t end_zone_id;
+        uint8_t  clock_source;
+        uint8_t  origin;
+        uint8_t  network;
+        uint8_t  start_context;
+        uint16_t start_zone_id; // first packet frame's zone
+        uint16_t end_zone_id;   // last packet frame's zone
         uint64_t start_timestamp;
-        uint64_t end_timestamp;
+        uint64_t end_timestamp; // last packet read
         uint64_t packets;
-        uint64_t frames;
-        int      closed;
+        uint64_t frames; // packet frames
+        int      complete;
+        int      footer_damaged;
+        int      character_mismatch;
+        uint64_t unread_bytes;
+        char     policy_name[32];
+        uint32_t policy_version;
+        int      has_source;
+        char     source_format[16];
+        char     source_format_version[16];
+        uint32_t skipped_records;
+        uint8_t  signing_key[32];
+        int      signed_to_end;
+        uint64_t verified_packets;
     } xicap_summary;
 
-    // Checks that data starts with a header this library can read.
+    // Checks that data starts with a whole header this library can read.
     int xicap_check_header(const uint8_t* data, size_t size, char* err, size_t errlen);
 
-    // Reads a whole capture, decoding every frame. A cut-off capture reads up to its last whole frame.
+    // Reads a whole capture, decoding every frame and checking its signatures.
+    // A cut-off capture reads up to its last intact frame.
     int xicap_read(const char* path, xicap_summary* out, char* err, size_t errlen);
-
-    // Reports whether two headers differ only in the fields the writer fills in after writing the header.
-    int xicap_same_except_patched(const uint8_t* a, const uint8_t* b);
 
     typedef struct xicap_writer xicap_writer;
 
@@ -40,15 +59,44 @@ extern "C"
     {
         const char* capture_agent;
         const char* client_version;
+        uint32_t    content_id;
+        uint32_t    character_id;
+        uint16_t    world_id;
         const char* character_name;
-        uint16_t    start_zone_id;
+        const char* world_name;
+        uint8_t     clock_source;
+        uint8_t     origin;
+        uint8_t     network;
+        uint8_t     start_context;
+        uint8_t     previous_capture_id[16];
+        uint8_t     signing_seed[32];
+        int         dictionary; // compress with the built-in dictionary
+        // Source of a converted capture (origin 2).
+        int            has_source;
+        const char*    source_format;
+        const char*    source_format_version;
+        uint32_t       skipped_records;
+        int32_t        utc_offset_seconds;
+        uint8_t        source_hash[64];
+        const uint8_t* metadata;
+        size_t         metadata_size;
     } xicap_writer_info;
 
     // Creates a capture at path. Returns NULL and fills err on failure.
     xicap_writer* xicap_writer_open(const char* path, const xicap_writer_info* info, char* err, size_t errlen);
 
-    // Adds one packet; timestamp is Unix ms.
-    int xicap_writer_write(xicap_writer* w, uint64_t timestamp, int client_to_server, const uint8_t* data, size_t size, char* err, size_t errlen);
+    // Adds a metadata block (type 0x8000 and up) before the first packet.
+    int xicap_writer_add_extension(xicap_writer* w, uint32_t type, const uint8_t* data, size_t size, char* err, size_t errlen);
+
+    // Adds one packet; timestamp is Unix ms. opcode is used off the game channel.
+    int xicap_writer_write(xicap_writer* w, uint64_t timestamp, int client_to_server, uint8_t channel, uint16_t opcode, uint16_t provenance, const uint8_t* data, size_t size, char* err, size_t errlen);
+
+    // Places a marker (0 note, 1 login, 2 logout) before the next packet.
+    int xicap_writer_mark(xicap_writer* w, uint8_t kind, const char* text, char* err, size_t errlen);
+
+    int xicap_writer_flush(xicap_writer* w, char* err, size_t errlen);
+
+    void xicap_writer_ids(const xicap_writer* w, uint8_t capture_id[16], uint8_t public_key[32]);
 
     // Writes the footer and frees the writer, even on error.
     int xicap_writer_close(xicap_writer* w, char* err, size_t errlen);

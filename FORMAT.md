@@ -107,7 +107,7 @@ A reader refuses the file if the magic differs, `versionMajor` is not 3,
 | Off | Size | Field | Notes |
 |----:|-----:|-------|-------|
 | 0 | 4 | `contentId` | POL character id (`ffxi_id`), unique to the character |
-| 4 | 4 | `worldContentId` | the character's id on its world (`ffxi_id_world`) |
+| 4 | 4 | `characterId` | the character's id on its world, as the zone-in's `UniqueNo` carries it; the lobby splits it into `ffxi_id_world` (bits 0 to 15) and `ffxi_id_world_tbl` (bits 16 to 23) |
 | 8 | 2 | `worldId` | |
 | 10 | 2 | `reserved` | |
 | 12 | 16 | `characterName` | text |
@@ -256,11 +256,16 @@ bytes the addon injected.
 
 | Off | Size | Field | Notes |
 |----:|-----:|-------|-------|
-| 0 | 2 | `packetIndex` | the packet in this frame the marker attaches to, from 0 |
+| 0 | 2 | `packetIndex` | the packet in this frame the marker sits just before, from 0 |
 | 2 | 1 | `kind` | `0` note, `1` login, `2` logout; readers treat unknown kinds as notes |
 | 3 | 1 | `reserved` | |
 | 4 | 2 | `textLength` | |
 | 6 | `textLength` | text | UTF-8, no terminator |
+
+A marker marks a moment between two packets, so it sits just before the next
+packet written after it. A logout marker therefore sits before the first packet
+of the next login, and a marker with no packet after it when the capture closes
+is dropped. A frame's markers follow the order they were written in.
 
 ### Checkpoint frames
 
@@ -296,6 +301,12 @@ byte 0     byte 1             byte 2     byte 3
 - `id` = `u16(bytes 0..2) & 0x01FF`, 9 bits
 - `size` = `(u16(bytes 0..2) >> 9) & 0x7F`, in 4-byte words
 - `sync` = `u16(bytes 2..4)`, a sequence counter per direction
+
+A zone-in (`0x00A`, to the client) names the character: a u32 `UniqueNo` at
+byte 4 and a 16-byte name at byte 132, counting the 4-byte header; its zone is
+the u32 at byte 48. A reader compares every zone-in it reads that is neither
+stubbed nor redacted with the header's `characterId` and `characterName`, and
+reports a capture where any differs. Field offsets follow atom0s's XiPackets.
 
 A writer refuses a game packet shorter than 4 bytes and sets `opcode` to its
 `id`. A frame holding a game packet whose `opcode` differs from its `id` is a
@@ -410,9 +421,19 @@ A writer refuses a policy that stubs packets on a channel whose row in
   and the writer zeroes each range. A range that runs past the packet's end
   stops at the end.
 
-The library's default policy, `xicap-default`, stubs every chat packet on the
-game channel in both directions. Task 5.2 checks its opcodes against the
-client's resources and lists them here.
+The library's default policy, `xicap-default` version 1, stubs the game
+channel's packets that carry text players write to each other:
+
+| Opcode | Direction | Packet |
+|-------:|-----------|--------|
+| `0x017` | to the client | chat, in every channel (say, shout, party, linkshell, tell, yell, unity, assist) |
+| `0x0B5` | from the client | chat |
+| `0x0B6` | from the client | tell |
+| `0x0CC` | to the client | linkshell message board |
+| `0x0E2` | from the client | linkshell message board post |
+
+Opcodes and meanings follow atom0s's XiPackets. Public text, such as search and
+bazaar comments, is kept.
 
 ## Reading
 
@@ -458,7 +479,7 @@ it parses.
   the first frame boundary after 60 seconds of frames without one, when a flush
   finds the capture idle with frames since the last checkpoint, and when the
   host marks a login or logout: it ends the frame being built and writes the
-  checkpoint before the packet that carries the marker. It never writes one
+  checkpoint then, so the marker lands in the next frame. It never writes one
   when it has written no frame since the last, so a capture's opening login
   has none.
 - **When captures start.** A recorder starts a new capture when a
@@ -480,7 +501,84 @@ reader written from this document alone, reads them too.
 
 ## Worked example
 
-Task 1.2 replaces this section with an annotated dump of a conformance file.
+The conformance file `tests/vectors/converted.xicap`, whole: a converted
+capture with no dictionary, its exclusion policy and source blocks, one frame of
+four packets, and the footer. Offsets are in hex.
+
+```
+00000000  89 58 43 50 0d 0a 1a 0a 03 00 80 01 02 00 00 00  magic; version 3.0; headerSize 384; extensionCount 2
+00000010  00 00 00 00 00 00 00 00 33 33 33 33 33 33 33 33  reserved; captureId
+00000020  33 33 33 33 33 33 33 33 55 55 00 00 00 00 00 00  previousCaptureId
+00000030  00 00 00 00 00 00 00 00 00 6c 50 c4 a0 01 00 00  startTimestamp
+00000040  00 00 00 02 02 02 00 00 00 00 00 00 00 00 00 00  reserved; clockSource 2 (converted), origin 2 (converted), network 2 (private), startContext 0 (unknown); reserved; dictionaryId 0: no dictionary; reserved
+00000050  d7 59 79 3b bc 13 a2 81 9a 82 7c 76 ad b6 fb a8  signingKey
+00000060  a4 9a ee 00 7f 49 f2 d0 99 2d 99 b8 25 ad 2c 48
+00000070  78 69 63 61 70 5f 6d 61 6b 65 5f 76 65 63 74 6f  captureAgent
+00000080  72 73 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+00000090  76 65 63 74 6f 72 73 2d 31 2e 30 00 00 00 00 00  clientVersion
+000000a0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+000000b0  04 03 02 01 0d 0c 0b 0a 2a 00 00 00 4e 6f 75 75  contentId; characterId; worldId; characterName
+000000c0  72 73 00 00 00 00 00 00 00 00 00 00 41 73 75 72  worldName
+000000d0  61 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  reserved
+000000e0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+000000f0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+00000100  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+00000110  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+00000120  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+00000130  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+00000140  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+00000150  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+00000160  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+00000170  00 00 00 00 00 00 00 00 00 00 00 00 2a af 64 38  headerCrc
+00000180  09 00 00 00 50 00 00 00 78 69 63 61 70 2d 64 65  extension block: type 0x0009 (exclusion policy), length 80; policy name
+00000190  66 61 75 6c 74 00 00 00 00 00 00 00 00 00 00 00
+000001a0  00 00 00 00 00 00 00 00 01 00 00 00 05 00 00 00  version 1, 5 rules, reserved
+000001b0  00 00 01 00 17 00 00 00 00 01 01 00 b5 00 00 00  rules: channel, direction, action 1 (stub), reserved, opcode, rangeCount
+000001c0  00 01 01 00 b6 00 00 00 00 00 01 00 cc 00 00 00
+000001d0  00 01 01 00 e2 00 00 00 a2 a5 72 ea 0a 00 00 00  block CRC; extension block: type 0x000A (source), length 197
+000001e0  c5 00 00 00 63 61 70 74 61 69 6e 00 00 00 00 00  format
+000001f0  00 00 00 00 31 2e 31 33 2e 30 00 00 00 00 00 00  formatVersion
+00000200  00 00 00 00 03 00 00 00 a0 ab ff ff aa aa aa aa  skippedRecords 3, utcOffsetSeconds -21600; sourceHash
+00000210  aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa
+00000220  aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa
+00000230  aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa
+00000240  aa aa aa aa aa aa aa aa aa aa aa aa 59 00 00 00  metadataLength
+00000250  7b 20 43 61 70 74 61 69 6e 20 3d 20 7b 20 56 65  metadata: the manifest
+00000260  72 73 69 6f 6e 20 3d 20 22 31 2e 31 33 2e 30 22
+00000270  20 7d 2c 20 46 46 58 49 20 3d 20 7b 20 49 73 52
+00000280  65 74 61 69 6c 20 3d 20 66 61 6c 73 65 20 7d 2c
+00000290  20 53 74 61 72 74 54 69 6d 65 20 3d 20 31 37 39
+000002a0  30 30 30 30 30 30 30 20 7d b2 bf ce 4c 58 43 46  block CRC; frame: magic XCFR, kind 0x80 (packets), reserved, markerCount 0
+000002b0  52 80 00 00 00 34 00 00 00 04 00 00 00 00 6c 50  payloadSize 52, packetCount 4; baseTimestamp
+000002c0  c4 a0 01 00 00 00 00 00 00 28 b5 2f fd 24 70 3d  zoneId 0, reserved; payload: one zstd frame (decompressed below)
+000002d0  01 00 a8 00 00 00 00 00 00 df 00 10 00 00 00 df
+000002e0  08 01 00 0a 01 02 03 03 07 20 20 37 1d 6e 08 05
+000002f0  c6 8d 02 8c 7b 1d c3 05 30 37 f3 26 47 4f ee 6e  frame CRC
+00000300  c2 00 6c 50 c4 a0 01 00 00 ad 02 00 00 00 00 00  footer index entry: timestamp, fileOffset, zoneId, reserved
+00000310  00 00 00 00 00 00 00 00 00 1e 6c 50 c4 a0 01 00  trailer: endTimestamp
+00000320  00 04 00 00 00 00 00 00 00 00 00 00 00 01 00 00  totalPacketCount 4; reserved, entryCount 1
+00000330  00 01 03 00 00 00 00 00 00 6c 75 f8 5f 01 00 00  indexOffset; indexCrc, frameCount 1
+00000340  00 b8 98 a5 04 0c 94 1d ca 9b 0c d9 20 86 9b 17  signature
+00000350  8a 31 fc 81 55 39 64 5b 50 4f 8d 5c 89 5c c3 8c
+00000360  18 65 93 8d 0d 81 48 28 fa 2f bd 39 6a a9 0c 59
+00000370  fa ea 0f dc 6b 30 11 18 d6 70 62 ef 34 6e 82 82
+00000380  09 82 c2 ce 48 58 43 50 46                       trailerCrc, magic XCPF
+```
+
+The frame's payload, decompressed:
+
+```
+00000000  00 00 00 00 00 00 df 00 10 00 00 00 df 08 01 00  entry: deltaMs 0, flags 0, channel 0, opcode 0x0DF, length 16; packet bytes, from the 4-byte FFXI header
+00000010  00 00 00 00 00 00 00 00 00 00 00 00 0a 00 00 00  entry: deltaMs 10, flags 0, channel 0, opcode 0x0DF, length 16
+00000020  00 00 df 00 10 00 00 00 df 08 01 00 01 01 01 01  packet bytes, from the 4-byte FFXI header
+00000030  01 01 01 01 01 01 01 01 0a 00 00 00 00 00 df 00  entry: deltaMs 10, flags 0, channel 0, opcode 0x0DF, length 16
+00000040  10 00 00 00 df 08 01 00 02 02 02 02 02 02 02 02  packet bytes, from the 4-byte FFXI header
+00000050  02 02 02 02 0a 00 00 00 00 00 df 00 10 00 00 00  entry: deltaMs 10, flags 0, channel 0, opcode 0x0DF, length 16
+00000060  df 08 01 00 03 03 03 03 03 03 03 03 03 03 03 03  packet bytes, from the 4-byte FFXI header
+```
+
+`tests/spec_reader.py --example FORMAT.md` checks that these bytes are the
+conformance file and that it reads them.
 
 ## Versioning
 

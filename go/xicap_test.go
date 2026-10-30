@@ -1,19 +1,59 @@
 package xicap
 
 import (
+	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
-// Written by tools/xicap_make_fixture: one extension, one 50-packet frame at
-// offset 269, and a footer.
-const fixture = "../js/test/fixtures/sample.xicap"
+const t0 = 1790000000000
 
-func load(t *testing.T) []byte {
+// 0x015 with 4 words: id low byte, then size<<1 | id bit 8.
+var pkt = []byte{0x15, 0x08, 0x01, 0x00, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}
+
+func info() WriterInfo {
+	return WriterInfo{
+		CaptureAgent:  "test",
+		ClientVersion: "v1",
+		Character:     Character{ContentID: 0x01020304, CharacterID: 7, WorldID: 42, Name: "Nouurs", World: "Asura"},
+		ClockSource:   ClockLive,
+		Origin:        OriginLive,
+		Network:       NetworkRetail,
+		StartContext:  StartLogin,
+		SigningSeed:   [32]byte{1, 2, 3},
+	}
+}
+
+// capture writes frames of three packets each, one second apart, and returns its path.
+func capture(t *testing.T, frames int, wi WriterInfo) string {
 	t.Helper()
-	b, err := os.ReadFile(fixture)
+	p := filepath.Join(t.TempDir(), "c.xicap")
+	w, err := Create(p, wi)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for f := range frames {
+		for i := range 3 {
+			if err := w.Write(t0+uint64(f)*1000+uint64(i), i%2 == 0, pkt); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := w.Flush(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func load(t *testing.T, p string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(p)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -22,51 +62,88 @@ func load(t *testing.T) []byte {
 
 func write(t *testing.T, b []byte) string {
 	t.Helper()
-	p := filepath.Join(t.TempDir(), "c.xicap")
+	p := filepath.Join(t.TempDir(), "w.xicap")
 	if err := os.WriteFile(p, b, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return p
 }
 
-func TestReadClosed(t *testing.T) {
-	s, err := Read(fixture)
+// frameOffsets finds packet and checkpoint frames by their magic.
+func frameOffsets(b []byte) []int {
+	var out []int
+	for i := 0; ; {
+		j := bytes.Index(b[i:], []byte("XCFR"))
+		if j < 0 {
+			return out
+		}
+		out = append(out, i+j)
+		i += j + 4
+	}
+}
+
+func TestWriteThenRead(t *testing.T) {
+	p := capture(t, 2, info())
+	s, err := Read(p)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !s.Closed || s.Packets != 50 || s.Frames != 1 || s.CaptureAgent != "xicap_make_fixture" || s.ClientVersion != "fixture-1.0" {
+	if !s.Closed || s.Packets != 6 || s.Frames != 2 || s.VersionMajor != 3 || s.CaptureAgent != "test" ||
+		s.Character.Name != "Nouurs" || s.Character.ContentID != 0x01020304 || s.Network != NetworkRetail ||
+		s.StartContext != StartLogin || s.StartTimestamp != t0 || s.EndTimestamp != t0+1002 ||
+		s.PolicyName != "xicap-default" || !s.SignedToEnd || s.VerifiedPackets != 6 || s.Source != nil {
 		t.Fatalf("unexpected summary %+v", s)
 	}
 }
 
-func TestReadCutOff(t *testing.T) {
-	b := load(t)
-	s, err := Read(write(t, b[:len(b)-3])) // footer broken, frame whole
+func TestIDsMatchTheFile(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "c.xicap")
+	w, err := Create(p, info())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.Closed || s.Packets != 50 {
+	id, key := w.IDs()
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Read(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.CaptureID != id || s.SigningKey != key || id == [16]byte{} {
+		t.Fatalf("ids %x %x, file %x %x", id, key, s.CaptureID, s.SigningKey)
+	}
+}
+
+func TestReadCutOff(t *testing.T) {
+	b := load(t, capture(t, 3, info()))
+	s, err := Read(write(t, b[:len(b)-3])) // footer magic gone, frames whole
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Closed || s.FooterDamaged || s.Packets != 9 || s.SignedToEnd || s.UnreadBytes == 0 {
 		t.Fatalf("footer-less capture: %+v", s)
 	}
-	s, err = Read(write(t, b[:400])) // the only frame is half written
+	frames := frameOffsets(b)
+	s, err = Read(write(t, b[:frames[len(frames)-1]+10])) // last frame half written
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.Closed || s.Packets != 0 {
+	if s.Closed || s.UnreadBytes != 10 {
 		t.Fatalf("half-written frame: %+v", s)
 	}
 }
 
 func TestReadCorruptFrame(t *testing.T) {
-	b := load(t)
-	b[269+20+50] ^= 0xFF
-	if _, err := Read(write(t, b)); err == nil || !strings.Contains(err.Error(), "crc mismatch") {
-		t.Fatalf("want a CRC error, got %v", err)
+	b := load(t, capture(t, 2, info()))
+	b[frameOffsets(b)[0]+40] ^= 0xFF
+	if _, err := Read(write(t, b)); err == nil || !strings.Contains(err.Error(), "bad frame") {
+		t.Fatalf("want a bad frame error, got %v", err)
 	}
 }
 
 func TestCheckHeader(t *testing.T) {
-	b := load(t)
+	b := load(t, capture(t, 1, info()))
 	if err := CheckHeader(b[:HeaderSize]); err != nil {
 		t.Fatal(err)
 	}
@@ -77,51 +154,106 @@ func TestCheckHeader(t *testing.T) {
 	if CheckHeader(b[:100]) == nil {
 		t.Fatal("short header accepted")
 	}
-	v3 := append([]byte(nil), b[:HeaderSize]...)
-	v3[4] = 3
-	if CheckHeader(v3) == nil {
-		t.Fatal("version 3 accepted")
+	flipped := append([]byte(nil), b[:HeaderSize]...)
+	flipped[200] ^= 1
+	if CheckHeader(flipped) == nil {
+		t.Fatal("damaged header accepted")
+	}
+	v4 := append([]byte(nil), b[:HeaderSize]...)
+	v4[8] = 4
+	if CheckHeader(v4) == nil {
+		t.Fatal("version 4 accepted")
 	}
 }
 
-func TestSameExceptPatched(t *testing.T) {
-	a := load(t)[:HeaderSize]
-	b := append([]byte(nil), a...)
-	b[74]++  // startTimestamp
-	b[132]++ // endTimestamp
-	b[140]++ // totalPacketCount
-	b[148]++ // endZoneId
-	if !SameExceptPatched(a, b) {
-		t.Fatal("patched fields should be ignored")
-	}
-	b[72]++ // startZoneId
-	if SameExceptPatched(a, b) {
-		t.Fatal("startZoneId change accepted")
-	}
-}
-
-func TestWriteThenRead(t *testing.T) {
-	p := filepath.Join(t.TempDir(), "w.xicap")
-	w, err := Create(p, WriterInfo{CaptureAgent: "test", ClientVersion: "v1", CharacterName: "Mehdi", StartZoneID: 230})
+func TestConvertedCapture(t *testing.T) {
+	wi := info()
+	wi.Origin, wi.ClockSource, wi.Network = OriginConverted, ClockConverted, NetworkPrivate
+	wi.Source = &Source{Format: "captain", FormatVersion: "1.13.0", Skipped: 2, UTCOffsetSeconds: 21600, Metadata: []byte("{ StartTime = 1 }")}
+	s, err := Read(capture(t, 1, wi))
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 0x015, 4 words: id low byte, then size<<1 | id bit 8.
-	pkt := []byte{0x15, 0x08, 0x01, 0x00, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}
-	for i := range 3 {
-		if err := w.Write(1700000000000+uint64(i)*250, i%2 == 0, pkt); err != nil {
+	if s.Origin != OriginConverted || s.Source == nil || s.Source.Format != "captain" || s.Source.Skipped != 2 {
+		t.Fatalf("converted capture: %+v %+v", s, s.Source)
+	}
+	if _, err := Create(filepath.Join(t.TempDir(), "x.xicap"), WriterInfo{Origin: OriginConverted}); err == nil {
+		t.Fatal("converted capture without a source accepted")
+	}
+}
+
+func TestChannelsAndMarkers(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "c.xicap")
+	w, err := Create(p, info())
+	if err != nil {
+		t.Fatal(err)
+	}
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := w.Close(); err != nil {
-		t.Fatal(err)
+	must(w.Mark(MarkerLogin, ""))
+	must(w.WritePacket(Packet{Timestamp: t0, Data: pkt, Provenance: FlagInjected}))
+	must(w.WritePacket(Packet{Timestamp: t0 + 1, Data: []byte("search reply"), Channel: ChannelSearch, Opcode: 5}))
+	if w.AddExtension(0x8000, []byte{1}) == nil {
+		t.Fatal("extension after a packet accepted")
 	}
+	must(w.Close())
 	s, err := Read(p)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !s.Closed || s.Packets != 3 || s.CaptureAgent != "test" || s.CharacterName != "Mehdi" || s.StartZoneID != 230 ||
-		s.StartTimestamp != 1700000000000 || s.EndTimestamp != 1700000000500 {
-		t.Fatalf("unexpected summary %+v", s)
+	if s.Packets != 2 {
+		t.Fatalf("packets %d", s.Packets)
+	}
+}
+
+// TestConformanceSet reads the conformance set and compares what a Summary
+// holds with each recorded reading.
+func TestConformanceSet(t *testing.T) {
+	files, err := filepath.Glob("../tests/vectors/*.xicap")
+	if err != nil || len(files) < 17 {
+		t.Fatalf("conformance set: %d files, %v", len(files), err)
+	}
+	for _, f := range files {
+		t.Run(filepath.Base(f), func(t *testing.T) {
+			var want struct {
+				Refusal           string
+				Packets           []json.RawMessage
+				Complete          bool
+				FooterDamaged     bool
+				UnreadBytes       uint64
+				CharacterMismatch bool
+				Verify            []json.RawMessage
+			}
+			b, err := os.ReadFile(strings.TrimSuffix(f, ".xicap") + ".json")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(b, &want); err != nil {
+				t.Fatal(err)
+			}
+			s, err := Read(f)
+			if want.Refusal != "" {
+				if err == nil {
+					t.Fatalf("read a file that must be refused (%s)", want.Refusal)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			var signed bool
+			var verified uint64
+			json.Unmarshal(want.Verify[0], &signed)
+			json.Unmarshal(want.Verify[1], &verified)
+			if s.Packets != uint64(len(want.Packets)) || s.Closed != want.Complete || s.FooterDamaged != want.FooterDamaged ||
+				s.UnreadBytes != want.UnreadBytes || s.CharacterMismatch != want.CharacterMismatch ||
+				s.SignedToEnd != signed || s.VerifiedPackets != verified {
+				t.Fatalf("summary %+v, recorded %s", s, b)
+			}
+		})
 	}
 }

@@ -129,4 +129,12 @@ None for data: nothing is archived. Mogsafe's change in `ffxi-dev/vault` lands a
 
 ## Implementation Notes
 
-None yet.
+- **Markers sit before the next packet** (2026-10-30). A login marker must be able to open a capture, before any packet exists, so every marker marks the moment just before the next packet written; a logout marker therefore sits before the first packet of the next login. FORMAT.md says so. Revisit if a reader needs a logout's exact time: it is the previous packet's.
+- **`characterId` replaces `worldContentId`.** LandSandBoat's lobby splits a character's 24-bit id into `ffxi_id_world` (bits 0 to 15) and `ffxi_id_world_tbl` (bits 16 to 23); the zone-in carries it whole as `UniqueNo`. The header holds the whole id, so readers compare it with zone-ins directly. Offsets of `UniqueNo` (4), the zone (48), and the name (132) follow atom0s's XiPackets through LandSandBoat's definitions. Revisit if retail captures show a zone-in layout that differs.
+- **The default policy also stubs the linkshell message board** (`0x0CC` in, `0x0E2` out): it carries text members write to each other, like linkshell chat. Search and bazaar comments are public and stay.
+- **The 2.1 bug where a reader took the footer index for a frame cannot recur**: frames need their magic, and reading stops at `indexOffset`. Every test of a complete file reads exactly its packet count.
+- **RFC 8032 and FIPS 180-4 vectors** run in the C++ tests on Linux and on MSVC x64 and x86. The Wasm build is checked through the JavaScript tests instead, which verify the signatures of the conformance set signed by the native build.
+- **Python and JavaScript stay reader-only**, as in 2.x; writing is in C++ and Go, which Mogsafe and Logbook use.
+- **`xicap_dump` no longer needs the Ashita SDK**: it needed it only to decode the client memory snapshots format 3 dropped. CI builds it.
+- **The conformance readings are the C++ reader's**, saved by the generator after it checks each file shows what it was built to show. Their independence comes from `tests/spec_reader.py`, which reads all of them from FORMAT.md alone and must agree.
+- **CI** gained a 32-bit Windows job (`cmake.yml` `ci/v1.5` gained an `arch` input) and a job running the spec reader on the conformance set and the worked example.

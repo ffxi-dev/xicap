@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(xicap VERSION 2.0.0 LANGUAGES CXX)
+project(xicap VERSION 3.0.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -47,6 +47,8 @@ set(XICAP_SOURCES
     src/writer.cpp
     src/reader.cpp
     src/dictionary.cpp
+    vendor/monocypher/monocypher.c
+    vendor/monocypher/optional/monocypher-ed25519.c
 )
 
 set(XICAP_HEADERS
@@ -64,6 +66,9 @@ target_include_directories(xicap
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:include>
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/vendor/monocypher
 )
 
 if(zstd_FOUND)
@@ -93,21 +98,8 @@ install(EXPORT xicapTargets
 # Tools
 option(XICAP_BUILD_TOOLS "Build xicap tools" ON)
 if(XICAP_BUILD_TOOLS)
-    find_path(ASHITA_SDK_PATH
-        NAMES "Ashita.h"
-        PATHS ENV ASHITA4_SDK_PATH
-    )
-    if(NOT ASHITA_SDK_PATH)
-        message(FATAL_ERROR "Ashita SDK not found. Set ASHITA4_SDK_PATH environment variable.")
-    endif()
-    message(STATUS "Found Ashita SDK: ${ASHITA_SDK_PATH}")
-
     add_executable(xicap_dump tools/xicap_dump.cpp)
     target_link_libraries(xicap_dump PRIVATE xicap)
-    target_include_directories(xicap_dump PRIVATE
-        ${ASHITA_SDK_PATH}
-        ${ASHITA_SDK_PATH}/ffxi
-    )
 endif()
 
 # Fixture generator (no Ashita SDK needed; used by the JS test suite).
@@ -115,6 +107,14 @@ option(XICAP_BUILD_FIXTURE_TOOL "Build the xicap_make_fixture helper" OFF)
 if(XICAP_BUILD_FIXTURE_TOOL)
     add_executable(xicap_make_fixture tools/xicap_make_fixture.cpp)
     target_link_libraries(xicap_make_fixture PRIVATE xicap)
+endif()
+
+# Conformance set generator (writes tests/vectors).
+option(XICAP_BUILD_VECTOR_TOOL "Build the xicap_make_vectors generator" OFF)
+if(XICAP_BUILD_VECTOR_TOOL)
+    add_executable(xicap_make_vectors tools/xicap_make_vectors.cpp)
+    target_link_libraries(xicap_make_vectors PRIVATE xicap)
+    target_include_directories(xicap_make_vectors PRIVATE src tools vendor/monocypher)
 endif()
 
 # Tests
@@ -131,8 +131,9 @@ if(XICAP_BUILD_TESTS)
 
     add_executable(xicap_tests tests/xicap_tests.cpp)
     target_link_libraries(xicap_tests PRIVATE xicap Catch2::Catch2WithMain)
-    # Tests reach into src/internal to rebuild frame CRCs when crafting bad files.
-    target_include_directories(xicap_tests PRIVATE src)
+    # Tests reach into src/internal to rebuild CRCs and chains when crafting bad files.
+    target_include_directories(xicap_tests PRIVATE src tools vendor/monocypher)
+    target_compile_definitions(xicap_tests PRIVATE XICAP_VECTORS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors")
 
     list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
     include(Catch)

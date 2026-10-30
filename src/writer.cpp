@@ -1,10 +1,11 @@
 #include "xicap/writer.h"
+#include "internal/chain.h"
 #include "internal/crc32.h"
 
 #include <algorithm>
 #include <cstring>
 #include <format>
-#include <stdexcept>
+#include <random>
 #include <utility>
 #include <zstd.h>
 
@@ -13,82 +14,218 @@ namespace xicap
 namespace
 {
 
-inline constexpr size_t WRITE_BUFFER_BYTES = 256 * 1024;
-inline constexpr size_t MARKER_TEXT_MAX    = 1024;
-
-#pragma pack(push, 1)
-// FFXI GP_SERV_LOGIN (0x000A) — only the leading prefix up to ZoneNo is needed
-// for zone extraction. The full struct lives in the game client.
-struct LoginZonePrefix
-{
-    uint16_t idAndSize;
-    uint16_t sync;
-    uint8_t  posHead[44];
-    uint32_t ZoneNo;
-};
-static_assert(sizeof(LoginZonePrefix) == 52);
-#pragma pack(pop)
+inline constexpr size_t MARKER_TEXT_MAX = 1024;
+// The game channel's stub keeps the 4-byte FFXI header.
+inline constexpr size_t GAME_STUB_BYTES = sizeof(FFXIPacketHeader);
 
 template <typename T>
-auto writePod(std::ofstream& f, const T& v) -> void
-{
-    f.write(reinterpret_cast<const char*>(&v), sizeof(T));
-}
-
-auto writeBytes(std::ofstream& f, std::span<const uint8_t> bytes) -> void
-{
-    f.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
-}
-
-template <typename T>
-auto appendBytes(std::vector<uint8_t>& dst, const T& value) -> void
+auto appendPod(std::vector<uint8_t>& dst, const T& value) -> void
 {
     const auto* p = reinterpret_cast<const uint8_t*>(&value);
     dst.insert(dst.end(), p, p + sizeof(T));
 }
 
-auto appendBytes(std::vector<uint8_t>& dst, std::span<const std::byte> bytes) -> void
+auto appendBytes(std::vector<uint8_t>& dst, std::span<const uint8_t> bytes) -> void
 {
-    const auto* p = reinterpret_cast<const uint8_t*>(bytes.data());
-    dst.insert(dst.end(), p, p + bytes.size());
+    dst.insert(dst.end(), bytes.begin(), bytes.end());
 }
 
-auto copyTruncated(std::string_view src, std::span<char> dst) -> void
+auto asBytes(std::string_view text) -> std::span<const uint8_t>
 {
-    const auto n = std::min(src.size(), dst.size() - 1);
-    std::copy_n(src.begin(), n, dst.begin());
+    return { reinterpret_cast<const uint8_t*>(text.data()), text.size() };
 }
 
-auto defaultZoneExtractor(std::span<const std::byte> data) -> uint16_t
+auto appendCrc(std::vector<uint8_t>& block, size_t from) -> void
 {
-    if (data.size() < sizeof(LoginZonePrefix))
+    internal::Crc32 crc;
+    crc.update({ block.data() + from, block.size() - from });
+    appendPod(block, crc.value());
+}
+
+// Cuts text to at most maxBytes without splitting a UTF-8 character.
+auto cutUtf8(std::string_view text, size_t maxBytes) -> std::string_view
+{
+    if (text.size() <= maxBytes)
     {
-        return 0;
+        return text;
     }
-    LoginZonePrefix prefix{};
-    std::memcpy(&prefix, data.data(), sizeof(prefix));
-    return static_cast<uint16_t>(prefix.ZoneNo);
+    size_t n = maxBytes;
+    while (n > 0 && (static_cast<uint8_t>(text[n]) & 0xC0U) == 0x80U)
+    {
+        --n;
+    }
+    return text.substr(0, n);
+}
+
+auto copyText(std::string_view src, std::span<char> dst) -> void
+{
+    std::ranges::fill(dst, '\0');
+    const auto cut = cutUtf8(src, dst.size() - 1);
+    std::ranges::copy(cut, dst.begin());
+}
+
+auto randomCaptureId() -> CaptureId
+{
+    std::random_device rd;
+    CaptureId          id{};
+    while (std::ranges::all_of(id, [](uint8_t b)
+                               {
+                                   return b == 0;
+                               }))
+    {
+        for (size_t i = 0; i < id.size(); i += 4)
+        {
+            const uint32_t word = rd();
+            std::memcpy(id.data() + i, &word, 4);
+        }
+    }
+    return id;
+}
+
+auto validatePolicy(const ExclusionPolicy& policy) -> void
+{
+    if (policy.name.size() >= 32)
+    {
+        throw Error(ErrorCode::InvalidPolicy, "xicap: policy name over 31 bytes");
+    }
+    if (policy.rules.size() > UINT16_MAX)
+    {
+        throw Error(ErrorCode::InvalidPolicy, "xicap: too many policy rules");
+    }
+    for (const auto& rule : policy.rules)
+    {
+        if (rule.action == ExclusionAction::Stub && rule.channel != static_cast<uint8_t>(Channel::Game))
+        {
+            throw Error(ErrorCode::InvalidPolicy,
+                        std::format("xicap: channel {} does not define what a stub keeps", rule.channel));
+        }
+        if (rule.action == ExclusionAction::Stub && !rule.ranges.empty())
+        {
+            throw Error(ErrorCode::InvalidPolicy, "xicap: a stub rule has no byte ranges");
+        }
+        if (rule.ranges.size() > UINT16_MAX)
+        {
+            throw Error(ErrorCode::InvalidPolicy, "xicap: too many byte ranges in a rule");
+        }
+        if (rule.action != ExclusionAction::Stub && rule.action != ExclusionAction::ZeroRange)
+        {
+            throw Error(ErrorCode::InvalidPolicy, "xicap: unknown exclusion action");
+        }
+    }
+}
+
+auto encodePolicy(const ExclusionPolicy& policy) -> std::vector<uint8_t>
+{
+    std::vector<uint8_t>  out;
+    ExclusionPolicyHeader header{
+        .name      = {},
+        .version   = policy.version,
+        .ruleCount = static_cast<uint16_t>(policy.rules.size()),
+        .reserved  = 0,
+    };
+    copyText(policy.name, header.name);
+    appendPod(out, header);
+    for (const auto& rule : policy.rules)
+    {
+        appendPod(out, ExclusionRuleHeader{
+                           .channel    = rule.channel,
+                           .direction  = static_cast<uint8_t>(rule.direction),
+                           .action     = static_cast<uint8_t>(rule.action),
+                           .reserved   = 0,
+                           .opcode     = rule.opcode,
+                           .rangeCount = static_cast<uint16_t>(rule.ranges.size()),
+                       });
+        for (const auto& range : rule.ranges)
+        {
+            appendPod(out, range);
+        }
+    }
+    return out;
+}
+
+auto encodeSource(const SourceInfo& source) -> std::vector<uint8_t>
+{
+    if (source.metadata.size() > FrameLimits::MAX_EXTENSION_SIZE - sizeof(SourceHeader))
+    {
+        throw Error(ErrorCode::ExtensionTooLarge, "xicap: source metadata too large");
+    }
+    std::vector<uint8_t> out;
+    SourceHeader         header{
+        .format           = {},
+        .formatVersion    = {},
+        .skippedRecords   = source.skippedRecords,
+        .utcOffsetSeconds = source.utcOffsetSeconds,
+        .sourceHash       = source.sourceHash,
+        .metadataLength   = static_cast<uint32_t>(source.metadata.size()),
+    };
+    copyText(source.format, header.format);
+    copyText(source.formatVersion, header.formatVersion);
+    appendPod(out, header);
+    appendBytes(out, source.metadata);
+    return out;
+}
+
+auto matches(const ExclusionRule& rule, uint8_t channel, PacketDirection direction, uint16_t opcode) -> bool
+{
+    if (rule.channel != channel || rule.opcode != opcode)
+    {
+        return false;
+    }
+    return rule.direction == ExclusionDirection::Both ||
+           static_cast<uint8_t>(rule.direction) == static_cast<uint8_t>(direction);
 }
 
 } // namespace
 
+auto defaultExclusionPolicy() -> const ExclusionPolicy&
+{
+    // Packets carrying text players write to each other, from LandSandBoat's
+    // definitions after atom0s's XiPackets: chat in every channel (0x017 in,
+    // 0x0B5 out), tells (0x0B6 out), and the linkshell message board (0x0CC in,
+    // 0x0E2 out).
+    static const ExclusionPolicy policy{
+        .name    = "xicap-default",
+        .version = 1,
+        .rules   = {
+            { .channel = 0, .direction = ExclusionDirection::ServerToClient, .action = ExclusionAction::Stub, .opcode = 0x017, .ranges = {} },
+            { .channel = 0, .direction = ExclusionDirection::ClientToServer, .action = ExclusionAction::Stub, .opcode = 0x0B5, .ranges = {} },
+            { .channel = 0, .direction = ExclusionDirection::ClientToServer, .action = ExclusionAction::Stub, .opcode = 0x0B6, .ranges = {} },
+            { .channel = 0, .direction = ExclusionDirection::ServerToClient, .action = ExclusionAction::Stub, .opcode = 0x0CC, .ranges = {} },
+            { .channel = 0, .direction = ExclusionDirection::ClientToServer, .action = ExclusionAction::Stub, .opcode = 0x0E2, .ranges = {} },
+        },
+    };
+    return policy;
+}
+
 Writer::Writer(const std::filesystem::path& path, WriterConfig config, FramePolicy policy)
-: writeBuf_(WRITE_BUFFER_BYTES)
-, config_(std::move(config))
+: config_(std::move(config))
 , policy_(policy)
-, currentZoneId_(config_.startZoneId)
+, chain_(std::make_unique<internal::Chain>())
+, key_(std::make_unique<internal::SigningKey>(config_.signingSeed))
 , cctx_(ZSTD_createCCtx(), [](ZSTD_CCtx* c) noexcept
         {
             ZSTD_freeCCtx(c);
         })
-, zoneExtractor_(defaultZoneExtractor)
 {
     if (!cctx_)
     {
         throw Error(ErrorCode::ZstdContextFailed, "xicap: ZSTD_createCCtx failed");
     }
+    validatePolicy(config_.policy);
+    if ((config_.origin == Origin::Converted) != config_.source.has_value())
+    {
+        throw Error(ErrorCode::InvalidExtension, "xicap: a source block goes with converted captures, and only them");
+    }
+    policy_.maxPacketsPerFrame = std::min(policy_.maxPacketsPerFrame, FrameLimits::MAX_PACKETS);
+    policy_.maxFrameSize       = std::min<size_t>(policy_.maxFrameSize, FrameLimits::MAX_CONTENT_SIZE);
 
-    file_.rdbuf()->pubsetbuf(writeBuf_.data(), static_cast<std::streamsize>(writeBuf_.size()));
+    captureId_ = std::ranges::all_of(config_.captureId, [](uint8_t b)
+                                     {
+                                         return b == 0;
+                                     })
+                     ? randomCaptureId()
+                     : config_.captureId;
+
     file_.open(path, std::ios::binary | std::ios::trunc);
     if (!file_)
     {
@@ -97,12 +234,16 @@ Writer::Writer(const std::filesystem::path& path, WriterConfig config, FramePoli
 
     ZSTD_CCtx_setParameter(cctx_.get(), ZSTD_c_compressionLevel, policy_.compressionLevel);
     ZSTD_CCtx_setParameter(cctx_.get(), ZSTD_c_checksumFlag, 1);
+    ZSTD_CCtx_setParameter(cctx_.get(), ZSTD_c_contentSizeFlag, 1);
 
     if (!policy_.dictionary.empty())
     {
         dictionary_.assign(policy_.dictionary.begin(), policy_.dictionary.end());
         dictionaryId_ = ZSTD_getDictID_fromDict(dictionary_.data(), dictionary_.size());
-
+        if (dictionaryId_ == 0)
+        {
+            throw Error(ErrorCode::DictionaryMismatch, "xicap: the dictionary is not in zstd's dictionary format");
+        }
         const size_t rc = ZSTD_CCtx_loadDictionary(cctx_.get(), dictionary_.data(), dictionary_.size());
         if (ZSTD_isError(rc))
         {
@@ -112,7 +253,6 @@ Writer::Writer(const std::filesystem::path& path, WriterConfig config, FramePoli
     }
 
     frameBuffer_.reserve(policy_.maxFrameSize);
-    compressedBuffer_.reserve(ZSTD_compressBound(policy_.maxFrameSize));
 }
 
 Writer::~Writer()
@@ -127,97 +267,151 @@ Writer::~Writer()
     }
     catch (...)
     {
-        // dtor must not throw; truncated file is recoverable on read.
+        // A destructor must not throw; the file reads as cut off.
     }
+}
+
+auto Writer::publicKey() const noexcept -> const PublicKey&
+{
+    return key_->publicKey();
 }
 
 auto Writer::addExtension(uint32_t type, std::span<const std::byte> data) -> void
 {
-    if (extensionsWritten_)
+    if (started_ || totalPackets_ > 0)
     {
-        throw Error(ErrorCode::AddExtensionAfterPackets,
-                    "xicap: cannot add extensions after writing packets");
+        throw Error(ErrorCode::AddExtensionAfterPackets, "xicap: cannot add extensions after writing packets");
+    }
+    if (type < 0x8000 || type == 0xFFFFFFFF)
+    {
+        throw Error(ErrorCode::InvalidExtension,
+                    std::format("xicap: extension type {:#x} is not in the range for other programs", type));
+    }
+    if (data.size() > FrameLimits::MAX_EXTENSION_SIZE)
+    {
+        throw Error(ErrorCode::ExtensionTooLarge, "xicap: extension block over 16 MiB");
     }
     const auto* p = reinterpret_cast<const uint8_t*>(data.data());
     extensions_.push_back({ type, std::vector<uint8_t>(p, p + data.size()) });
 }
 
-auto Writer::setZoneExtractor(ZoneIdExtractor extractor) -> void
-{
-    zoneExtractor_ = std::move(extractor);
-}
-
-auto Writer::addMarker(std::string_view text) -> void
+auto Writer::mark(MarkerKind kind, std::string_view text) -> void
 {
     if (closed_)
     {
         throw Error(ErrorCode::WriterClosed, "xicap: writer is closed");
     }
-    if (framePacketCount_ == 0)
+    if (kind == MarkerKind::Login || kind == MarkerKind::Logout)
     {
-        throw Error(ErrorCode::AddMarkerWithoutPacket,
-                    "xicap: addMarker requires at least one packet in the current frame");
-    }
-    text = text.substr(0, std::min(text.size(), MARKER_TEXT_MAX));
-    pendingMarkers_.push_back({ static_cast<uint16_t>(framePacketCount_ - 1), std::string(text) });
-}
-
-auto Writer::write(uint64_t timestamp, PacketDirection direction, std::span<const std::byte> data) -> void
-{
-    if (closed_)
-    {
-        throw Error(ErrorCode::WriterClosed, "xicap: writer is closed");
-    }
-    if (data.size() > UINT16_MAX)
-    {
-        // PacketEntry::length is 16-bit; a silent truncation here would corrupt
-        // every following packet in the frame.
-        throw Error(ErrorCode::PacketTooLarge,
-                    std::format("xicap: packet of {} bytes exceeds the {} byte limit", data.size(), UINT16_MAX));
-    }
-
-    uint16_t opcode = 0;
-    if (data.size() >= sizeof(FFXIPacketHeader))
-    {
-        // Opcode is the low 9 bits of the first 16-bit word.
-        uint16_t firstWord = 0;
-        std::memcpy(&firstWord, data.data(), sizeof(firstWord));
-        opcode = firstWord & 0x1FFU;
-
-        if (direction == PacketDirection::ServerToClient && opcode == FFXIPacket::LOGIN_ZONE && zoneExtractor_)
+        endFrame();
+        if (unsignedFrames_ > 0)
         {
-            currentZoneId_ = zoneExtractor_(data);
+            checkpoint();
+        }
+    }
+    pendingMarkers_.push_back({ kind, std::string(cutUtf8(text, MARKER_TEXT_MAX)) });
+}
+
+auto Writer::write(const OutPacket& packet) -> void
+{
+    if (closed_)
+    {
+        throw Error(ErrorCode::WriterClosed, "xicap: writer is closed");
+    }
+    if (packet.data.size() > FrameLimits::MAX_CONTENT_SIZE - sizeof(PacketEntry))
+    {
+        throw Error(ErrorCode::PacketTooLarge, std::format("xicap: packet of {} bytes is over the frame limit", packet.data.size()));
+    }
+
+    const bool isGame = packet.channel == static_cast<uint8_t>(Channel::Game);
+    uint16_t   opcode = packet.opcode;
+    if (isGame)
+    {
+        if (packet.data.size() < sizeof(FFXIPacketHeader))
+        {
+            throw Error(ErrorCode::PacketTooShort, "xicap: a game packet is at least 4 bytes");
+        }
+        uint16_t firstWord = 0;
+        std::memcpy(&firstWord, packet.data.data(), sizeof(firstWord));
+        opcode = firstWord & 0x1FFU;
+    }
+
+    // Timestamps never go backwards.
+    const uint64_t timestamp = (totalPackets_ > 0) ? std::max(packet.timestamp, lastTimestamp_) : packet.timestamp;
+
+    uint16_t flags = packet.provenance & PacketFlag::Provenance;
+    if (packet.direction == PacketDirection::ClientToServer)
+    {
+        flags |= PacketFlag::ClientToServer;
+    }
+
+    std::span<const uint8_t> data{ reinterpret_cast<const uint8_t*>(packet.data.data()), packet.data.size() };
+    std::vector<uint8_t>     redacted;
+    const auto               rule = std::ranges::find_if(config_.policy.rules, [&](const ExclusionRule& r)
+                                                         {
+                                               return matches(r, packet.channel, packet.direction, opcode);
+                                                         });
+    if (rule != config_.policy.rules.end())
+    {
+        if (rule->action == ExclusionAction::Stub)
+        {
+            data = data.first(GAME_STUB_BYTES);
+            flags |= PacketFlag::Excluded;
+        }
+        else
+        {
+            redacted.assign(data.begin(), data.end());
+            for (const auto& range : rule->ranges)
+            {
+                if (range.offset >= redacted.size())
+                {
+                    continue;
+                }
+                const auto length = std::min<uint64_t>(range.length, redacted.size() - range.offset);
+                std::fill_n(redacted.begin() + range.offset, length, uint8_t{ 0 });
+            }
+            data = redacted;
+            flags |= PacketFlag::Redacted;
         }
     }
 
+    const bool zoneIn = isGame && packet.direction == PacketDirection::ServerToClient && opcode == FFXIPacket::LOGIN_ZONE;
+    if (zoneIn || shouldEndFrame(timestamp, sizeof(PacketEntry) + data.size()))
+    {
+        endFrame();
+    }
+    if (zoneIn && packet.data.size() >= FFXIPacket::LOGIN_ZONE_NO_OFFSET + 4)
+    {
+        uint32_t zone = 0;
+        std::memcpy(&zone, packet.data.data() + FFXIPacket::LOGIN_ZONE_NO_OFFSET, sizeof(zone));
+        currentZoneId_ = static_cast<uint16_t>(zone);
+    }
+
     if (framePacketCount_ == 0)
     {
         frameBaseTimestamp_ = timestamp;
-        frameLastTimestamp_ = timestamp;
     }
-
-    if (shouldFlush(timestamp))
+    if (totalPackets_ == 0)
     {
-        flushFrame();
-        frameBaseTimestamp_ = timestamp;
-        frameLastTimestamp_ = timestamp;
+        firstTimestamp_ = timestamp;
     }
+    const auto deltaMs = static_cast<uint16_t>(framePacketCount_ == 0 ? 0 : timestamp - lastTimestamp_);
+    lastTimestamp_     = timestamp;
 
-    uint16_t deltaMs = 0;
-    if (framePacketCount_ > 0)
+    for (auto& marker : pendingMarkers_)
     {
-        // shouldFlush ensures the gap fits in uint16_t.
-        deltaMs = static_cast<uint16_t>(timestamp - frameLastTimestamp_);
+        frameMarkers_.push_back({ static_cast<uint16_t>(framePacketCount_), std::move(marker) });
     }
-    frameLastTimestamp_ = timestamp;
+    pendingMarkers_.clear();
 
-    const PacketEntry entry{
-        .deltaMs = deltaMs,
-        .length  = static_cast<uint16_t>(data.size()),
-        .opcode  = opcode,
-        .flags   = (direction == PacketDirection::ClientToServer) ? PACKET_FLAG_DIRECTION_BIT : uint16_t{ 0 },
-    };
-    appendBytes(frameBuffer_, entry);
+    appendPod(frameBuffer_, PacketEntry{
+                                .deltaMs  = deltaMs,
+                                .flags    = flags,
+                                .channel  = packet.channel,
+                                .reserved = 0,
+                                .opcode   = opcode,
+                                .length   = static_cast<uint32_t>(data.size()),
+                            });
     appendBytes(frameBuffer_, data);
 
     framePacketCount_++;
@@ -226,7 +420,18 @@ auto Writer::write(uint64_t timestamp, PacketDirection direction, std::span<cons
 
 auto Writer::flush() -> void
 {
-    flushFrame();
+    if (closed_)
+    {
+        return;
+    }
+    if (framePacketCount_ > 0)
+    {
+        endFrame();
+    }
+    else if (unsignedFrames_ > 0)
+    {
+        checkpoint();
+    }
 }
 
 auto Writer::close() -> void
@@ -235,175 +440,139 @@ auto Writer::close() -> void
     {
         return;
     }
-
-    if (!headerWritten_)
+    endFrame();
+    if (!started_)
     {
-        writeHeader();
+        writeStart();
     }
-    if (!extensionsWritten_)
-    {
-        writeExtensions();
-    }
-    flushFrame();
-
-    // Back-patch end-of-capture metadata.
-    if (totalFrames_ > 0)
-    {
-        const auto currentPos = file_.tellp();
-
-        file_.seekp(offsetof(Header, endTimestamp));
-        writePod(file_, frameLastTimestamp_);
-
-        file_.seekp(offsetof(Header, totalPacketCount));
-        writePod(file_, totalPackets_);
-
-        file_.seekp(offsetof(Header, endZoneId));
-        writePod(file_, currentZoneId_);
-
-        file_.seekp(currentPos);
-    }
-
     writeFooter();
-
     file_.close();
     closed_ = true;
-}
-
-auto Writer::bytesWritten() -> uint64_t
-{
-    return static_cast<uint64_t>(file_.tellp());
-}
-
-auto Writer::extensionCount() const noexcept -> uint16_t
-{
-    return static_cast<uint16_t>(extensions_.size() + (dictionary_.empty() ? 0U : 1U));
-}
-
-auto Writer::writeHeader() -> void
-{
-    Header header{
-        .magic            = MAGIC,
-        .versionMajor     = VERSION_MAJOR,
-        .versionMinor     = VERSION_MINOR,
-        .captureAgent     = {},
-        .extensionCount   = extensionCount(),
-        .clientVersion    = {},
-        .startZoneId      = config_.startZoneId,
-        .startTimestamp   = 0,
-        .lobby            = config_.lobby,
-        .startWeather     = config_.startWeather,
-        .padding0         = 0,
-        .dictionaryId     = dictionaryId_,
-        .endTimestamp     = 0,
-        .totalPacketCount = 0,
-        .endZoneId        = 0,
-        .reserved         = {},
-    };
-    copyTruncated(config_.clientVersion, header.clientVersion);
-    copyTruncated(config_.captureAgent, header.captureAgent);
-
-    writePod(file_, header);
-    headerWritten_ = true;
-}
-
-auto Writer::writeExtensions() -> void
-{
-    if (!headerWritten_)
+    if (!file_)
     {
-        writeHeader();
+        throw Error(ErrorCode::WriteFailed, "xicap: closing the capture failed");
+    }
+}
+
+auto Writer::emit(std::span<const uint8_t> block) -> void
+{
+    file_.write(reinterpret_cast<const char*>(block.data()), static_cast<std::streamsize>(block.size()));
+    file_.flush();
+    if (!file_)
+    {
+        throw Error(ErrorCode::WriteFailed, std::format("xicap: write failed at offset {}", offset_));
+    }
+    offset_ += block.size();
+}
+
+auto Writer::writeStart() -> void
+{
+    Header header{};
+    header.magic              = MAGIC;
+    header.versionMajor       = VERSION_MAJOR;
+    header.versionMinor       = VERSION_MINOR;
+    header.headerSize         = HEADER_SIZE;
+    header.extensionCount     = static_cast<uint32_t>(extensions_.size() + 1U + (dictionary_.empty() ? 0U : 1U) +
+                                                      (config_.source ? 1U : 0U));
+    header.captureId          = captureId_;
+    header.previousCaptureId  = config_.previousCaptureId;
+    header.startTimestamp     = totalPackets_ > 0 ? firstTimestamp_ : 0;
+    header.clockSource        = config_.clockSource;
+    header.origin             = config_.origin;
+    header.network            = config_.network;
+    header.startContext       = config_.startContext;
+    header.dictionaryId       = dictionaryId_;
+    header.signingKey         = key_->publicKey();
+    header.character          = config_.character;
+    header.character.reserved = 0;
+    copyText(config_.captureAgent, header.captureAgent);
+    copyText(config_.clientVersion, header.clientVersion);
+    {
+        internal::Crc32 crc;
+        crc.update({ reinterpret_cast<const uint8_t*>(&header), offsetof(Header, headerCrc) });
+        header.headerCrc = crc.value();
     }
 
+    blockBuffer_.clear();
+    appendPod(blockBuffer_, header);
+    chain_->start(blockBuffer_);
+    emit(blockBuffer_);
+
+    const auto writeBlock = [this](uint32_t type, std::span<const uint8_t> payload)
+    {
+        blockBuffer_.clear();
+        appendPod(blockBuffer_, ExtensionBlockHeader{ .type = type, .length = static_cast<uint32_t>(payload.size()) });
+        appendBytes(blockBuffer_, payload);
+        appendCrc(blockBuffer_, 0);
+        chain_->absorb(blockBuffer_);
+        emit(blockBuffer_);
+    };
+
+    // The dictionary goes first so a reader can decode frames as they arrive.
     if (!dictionary_.empty())
     {
-        // Written first so a streaming consumer can decode frames as they arrive.
-        const ExtensionBlockHeader hdr{
-            .type   = EXT_ZSTD_DICT,
-            .length = static_cast<uint32_t>(dictionary_.size()),
-        };
-        writePod(file_, hdr);
-        writeBytes(file_, dictionary_);
+        writeBlock(EXT_ZSTD_DICT, dictionary_);
     }
-
+    writeBlock(EXT_EXCLUSION_POLICY, encodePolicy(config_.policy));
+    if (config_.source)
+    {
+        writeBlock(EXT_SOURCE, encodeSource(*config_.source));
+    }
     for (const auto& ext : extensions_)
     {
-        if (ext.data.size() > UINT32_MAX)
-        {
-            throw Error(ErrorCode::ExtensionTooLarge, "xicap: extension block exceeds 4 GiB");
-        }
-        const ExtensionBlockHeader hdr{
-            .type   = ext.type,
-            .length = static_cast<uint32_t>(ext.data.size()),
-        };
-        writePod(file_, hdr);
-        writeBytes(file_, ext.data);
+        writeBlock(ext.type, ext.data);
     }
-    extensionsWritten_ = true;
+    started_ = true;
 }
 
-auto Writer::flushFrame() -> void
+auto Writer::endFrame() -> void
 {
     if (framePacketCount_ == 0)
     {
         return;
     }
-    if (!extensionsWritten_)
+    if (!started_)
     {
-        writeExtensions();
+        writeStart();
     }
 
-    if (totalFrames_ == 0)
+    for (const auto& [packetIndex, marker] : frameMarkers_)
     {
-        // First frame's base is the capture's start timestamp; back-patch the
-        // header field that was zero-initialised.
-        const auto currentPos = file_.tellp();
-        file_.seekp(offsetof(Header, startTimestamp));
-        writePod(file_, frameBaseTimestamp_);
-        file_.seekp(currentPos);
+        appendPod(frameBuffer_, FrameMarker{
+                                    .packetIndex = packetIndex,
+                                    .kind        = marker.kind,
+                                    .reserved    = 0,
+                                    .textLength  = static_cast<uint16_t>(marker.text.size()),
+                                });
+        appendBytes(frameBuffer_, asBytes(marker.text));
     }
 
-    for (const auto& marker : pendingMarkers_)
-    {
-        const FrameMarker fm{
-            .packetIndex = marker.packetIndex,
-            .textLength  = static_cast<uint16_t>(marker.text.size()),
-        };
-        appendBytes(frameBuffer_, fm);
-        appendBytes(frameBuffer_, std::as_bytes(std::span{ marker.text }));
-    }
-
-    const size_t bound = ZSTD_compressBound(frameBuffer_.size());
-    if (compressedBuffer_.size() < bound)
-    {
-        compressedBuffer_.resize(bound);
-    }
+    compressedBuffer_.resize(ZSTD_compressBound(frameBuffer_.size()));
     const size_t compressedSize = ZSTD_compress2(cctx_.get(), compressedBuffer_.data(), compressedBuffer_.size(), frameBuffer_.data(), frameBuffer_.size());
     if (ZSTD_isError(compressedSize))
     {
-        throw Error(ErrorCode::CompressFailed,
-                    std::string("xicap: zstd compress: ") + ZSTD_getErrorName(compressedSize));
+        throw Error(ErrorCode::CompressFailed, std::string("xicap: zstd compress: ") + ZSTD_getErrorName(compressedSize));
     }
-
     totalUncompressedBytes_ += frameBuffer_.size();
     totalCompressedBytes_ += compressedSize;
 
-    const auto frameOffset = static_cast<uint64_t>(file_.tellp());
-
-    const FrameHeader frameHeader{
-        .compressedSize = static_cast<uint32_t>(compressedSize),
-        .packetCount    = framePacketCount_,
-        .baseTimestamp  = frameBaseTimestamp_,
-        .zoneId         = currentZoneId_,
-        .markerCount    = static_cast<uint16_t>(pendingMarkers_.size()),
-    };
-
-    internal::Crc32 crc;
-    crc.update({ reinterpret_cast<const uint8_t*>(&frameHeader), sizeof(frameHeader) });
-    crc.update({ compressedBuffer_.data(), compressedSize });
-    const uint32_t frameCrc = crc.value();
-
-    writePod(file_, frameHeader);
-    writeBytes(file_, std::span{ compressedBuffer_.data(), compressedSize });
-    writePod(file_, frameCrc);
+    const uint64_t frameOffset = offset_;
+    blockBuffer_.clear();
+    appendPod(blockBuffer_, FrameHeader{
+                                .magic         = FRAME_MAGIC,
+                                .kind          = FrameKind::Packets,
+                                .reserved0     = 0,
+                                .markerCount   = static_cast<uint16_t>(frameMarkers_.size()),
+                                .payloadSize   = static_cast<uint32_t>(compressedSize),
+                                .packetCount   = framePacketCount_,
+                                .baseTimestamp = frameBaseTimestamp_,
+                                .zoneId        = currentZoneId_,
+                                .reserved1     = 0,
+                            });
+    appendBytes(blockBuffer_, { compressedBuffer_.data(), compressedSize });
+    appendCrc(blockBuffer_, 0);
+    chain_->absorb(blockBuffer_);
+    emit(blockBuffer_);
 
     frameIndex_.push_back({
         .timestamp  = frameBaseTimestamp_,
@@ -412,56 +581,97 @@ auto Writer::flushFrame() -> void
         .reserved   = {},
     });
 
+    if (unsignedFrames_ == 0)
+    {
+        firstUnsignedTimestamp_ = frameBaseTimestamp_;
+    }
+    unsignedFrames_++;
     totalFrames_++;
     frameBuffer_.clear();
+    frameMarkers_.clear();
     framePacketCount_ = 0;
-    pendingMarkers_.clear();
+
+    if (lastTimestamp_ - firstUnsignedTimestamp_ >= policy_.checkpointIntervalMs)
+    {
+        checkpoint();
+    }
+}
+
+auto Writer::checkpoint() -> void
+{
+    const CheckpointPayload payload{
+        .chain     = chain_->value(),
+        .signature = key_->sign(internal::CHECKPOINT_PREFIX, chain_->value()),
+    };
+    blockBuffer_.clear();
+    appendPod(blockBuffer_, FrameHeader{
+                                .magic         = FRAME_MAGIC,
+                                .kind          = FrameKind::Checkpoint,
+                                .reserved0     = 0,
+                                .markerCount   = 0,
+                                .payloadSize   = sizeof(CheckpointPayload),
+                                .packetCount   = 0,
+                                .baseTimestamp = lastTimestamp_,
+                                .zoneId        = currentZoneId_,
+                                .reserved1     = 0,
+                            });
+    appendPod(blockBuffer_, payload);
+    appendCrc(blockBuffer_, 0);
+    chain_->absorb(blockBuffer_);
+    emit(blockBuffer_);
+    unsignedFrames_ = 0;
+    totalFrames_++;
 }
 
 auto Writer::writeFooter() -> void
 {
-    if (frameIndex_.empty())
-    {
-        return;
-    }
+    const uint64_t  indexOffset = offset_;
+    const auto      indexBytes  = std::span{ reinterpret_cast<const uint8_t*>(frameIndex_.data()),
+                                             frameIndex_.size() * sizeof(FooterIndexEntry) };
+    internal::Crc32 indexCrc;
+    indexCrc.update(indexBytes);
 
-    const auto indexOffset = static_cast<uint64_t>(file_.tellp());
-    file_.write(reinterpret_cast<const char*>(frameIndex_.data()),
-                static_cast<std::streamsize>(frameIndex_.size() * sizeof(FooterIndexEntry)));
-
-    const FooterTrailer trailer{
-        .magic       = FOOTER_MAGIC,
-        .entryCount  = static_cast<uint32_t>(frameIndex_.size()),
-        .indexOffset = indexOffset,
-        .reserved    = {},
+    FooterTrailer trailer{
+        .endTimestamp     = totalPackets_ > 0 ? lastTimestamp_ : 0,
+        .totalPacketCount = totalPackets_,
+        .reserved         = 0,
+        .entryCount       = static_cast<uint32_t>(frameIndex_.size()),
+        .indexOffset      = indexOffset,
+        .indexCrc         = indexCrc.value(),
+        .frameCount       = totalFrames_,
+        .signature        = {},
+        .trailerCrc       = 0,
+        .magic            = FOOTER_MAGIC,
     };
-    writePod(file_, trailer);
-    file_.flush();
+
+    chain_->begin();
+    chain_->update(indexBytes);
+    chain_->update({ reinterpret_cast<const uint8_t*>(&trailer), offsetof(FooterTrailer, signature) });
+    chain_->end();
+    trailer.signature = key_->sign(internal::FOOTER_PREFIX, chain_->value());
+
+    internal::Crc32 trailerCrc;
+    trailerCrc.update({ reinterpret_cast<const uint8_t*>(&trailer), offsetof(FooterTrailer, trailerCrc) });
+    trailer.trailerCrc = trailerCrc.value();
+
+    blockBuffer_.assign(indexBytes.begin(), indexBytes.end());
+    appendPod(blockBuffer_, trailer);
+    emit(blockBuffer_);
 }
 
-auto Writer::shouldFlush(uint64_t nextTimestamp) const noexcept -> bool
+auto Writer::shouldEndFrame(uint64_t timestamp, size_t added) const noexcept -> bool
 {
-    if (framePacketCount_ >= policy_.maxPacketsPerFrame)
+    if (framePacketCount_ == 0)
     {
-        return true;
+        return false;
     }
-    if (frameBuffer_.size() >= policy_.maxFrameSize)
-    {
-        return true;
-    }
-    if (framePacketCount_ > 0)
-    {
-        if ((frameLastTimestamp_ - frameBaseTimestamp_) >= policy_.maxFrameTimeMs)
-        {
-            return true;
-        }
-        // Force a flush before deltaMs would clip.
-        if ((nextTimestamp - frameLastTimestamp_) > UINT16_MAX)
-        {
-            return true;
-        }
-    }
-    return false;
+    // Markers are appended when the frame ends; count them at their largest.
+    const size_t markerBytes = (frameMarkers_.size() + pendingMarkers_.size()) * (sizeof(FrameMarker) + MARKER_TEXT_MAX);
+    return framePacketCount_ >= policy_.maxPacketsPerFrame ||
+           frameBuffer_.size() >= policy_.maxFrameSize ||
+           frameBuffer_.size() + added + markerBytes > FrameLimits::MAX_CONTENT_SIZE ||
+           timestamp - frameBaseTimestamp_ >= policy_.maxFrameTimeMs ||
+           timestamp - lastTimestamp_ > UINT16_MAX;
 }
 
 } // namespace xicap

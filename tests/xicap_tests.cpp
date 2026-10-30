@@ -1,19 +1,25 @@
 #include <xicap/xicap.h>
 
+#include "internal/chain.h"
 #include "internal/crc32.h"
+#include "vectors.h"
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <span>
 #include <string>
 #include <vector>
+#include <zstd.h>
 
 namespace fs = std::filesystem;
+using namespace xicap;
 
 namespace
 {
@@ -30,774 +36,975 @@ struct TempCapture
     }
 };
 
-struct OwnedPacket
-{
-    uint64_t                 timestamp;
-    uint16_t                 opcode;
-    xicap::PacketDirection   direction;
-    std::vector<uint8_t>     data;
-    std::vector<std::string> markers;
-};
+constexpr uint64_t T0 = 1'790'000'000'000ULL;
 
-auto materialize(const xicap::ReadPacket& p) -> OwnedPacket
+auto seed(uint8_t fill = 7) -> SecretSeed
 {
-    OwnedPacket o;
-    o.timestamp       = p.timestamp;
-    o.opcode          = p.opcode;
-    o.direction       = p.direction;
-    const auto* bytes = reinterpret_cast<const uint8_t*>(p.data.data());
-    o.data.assign(bytes, bytes + p.data.size());
-    for (const auto& m : p.markers)
-    {
-        o.markers.push_back(m.text);
-    }
-    return o;
+    SecretSeed s{};
+    s.fill(fill);
+    return s;
 }
 
-auto makePacket(uint16_t opcode, uint16_t size, uint8_t fill) -> std::vector<std::byte>
+auto config() -> WriterConfig
 {
-    std::vector<std::byte> p(size);
-    const uint16_t         hdr = static_cast<uint16_t>(((size & 0x7F) << 9) | (opcode & 0x1FF));
-    p[0]                       = std::byte(hdr & 0xFF);
-    p[1]                       = std::byte(hdr >> 8);
-    for (size_t i = 4; i < size; ++i)
-    {
-        p[i] = std::byte(fill);
-    }
-    return p;
-}
-
-auto baseConfig() -> xicap::WriterConfig
-{
-    xicap::WriterConfig cfg{};
-    cfg.clientVersion   = "test-client";
-    cfg.captureAgent    = "xicap-tests";
-    cfg.startZoneId     = 100;
-    cfg.lobby.contentId = 0xDEADBEEF;
-    cfg.lobby.worldId   = 42;
-    std::memcpy(cfg.lobby.characterName.data(), "TestChar", 8);
-    std::memcpy(cfg.lobby.worldName.data(), "Asura", 5);
+    WriterConfig cfg{};
+    cfg.clientVersion         = "test-client";
+    cfg.captureAgent          = "xicap tests";
+    cfg.character.contentId   = 0x01020304;
+    cfg.character.worldId     = 42;
+    cfg.character.characterId = 0x0A0B0C0D;
+    std::memcpy(cfg.character.characterName.data(), "Nouurs", 6);
+    std::memcpy(cfg.character.worldName.data(), "Asura", 5);
+    cfg.network     = Network::Retail;
+    cfg.signingSeed = seed();
     return cfg;
 }
 
-auto writeNPackets(xicap::Writer& w, int n, uint64_t startTs = 1'700'000'000'000ULL, uint64_t deltaMs = 50) -> void
+// No dictionary, so tests can recompress frames they tamper with.
+auto plain() -> FramePolicy
 {
-    for (int i = 0; i < n; ++i)
-    {
-        const auto pkt = makePacket(static_cast<uint16_t>(0x100 + (i % 4)), 32, static_cast<uint8_t>(i));
-        w.write(startTs + i * deltaMs,
-                (i % 2) ? xicap::PacketDirection::ClientToServer : xicap::PacketDirection::ServerToClient,
-                pkt);
-    }
+    FramePolicy p{};
+    p.dictionary = {};
+    return p;
 }
 
-// Frames start after the header and every extension block — including the
-// EXT_ZSTD_DICT block the writer emits. Tests that poke at raw frame bytes must
-// walk the blocks rather than assume sizeof(Header).
-auto firstFrameOffset(const fs::path& path) -> uint64_t
+auto gamePacket(uint16_t opcode, size_t size, uint8_t fill = 0xAB) -> std::vector<std::byte>
+{
+    std::vector<std::byte> p(size, std::byte{ fill });
+    const auto             words = static_cast<uint16_t>((size / 4) & 0x7F);
+    const auto             hdr   = static_cast<uint16_t>((words << 9) | (opcode & 0x1FF));
+    p[0]                         = std::byte(hdr & 0xFF);
+    p[1]                         = std::byte(hdr >> 8);
+    p[2]                         = std::byte{ 0x34 };
+    p[3]                         = std::byte{ 0x12 };
+    return p;
+}
+
+auto zoneIn(uint16_t zone, const char* name = "Nouurs", uint32_t id = 0x0A0B0C0D) -> std::vector<std::byte>
+{
+    auto p = gamePacket(FFXIPacket::LOGIN_ZONE, 160, 0);
+    std::memcpy(p.data() + FFXIPacket::LOGIN_ZONE_NO_OFFSET, &zone, sizeof(zone));
+    std::memcpy(p.data() + FFXIPacket::LOGIN_UNIQUE_NO_OFFSET, &id, sizeof(id));
+    std::memcpy(p.data() + FFXIPacket::LOGIN_NAME_OFFSET, name, std::strlen(name));
+    return p;
+}
+
+struct Owned
+{
+    uint64_t                timestamp;
+    uint8_t                 channel;
+    uint16_t                opcode;
+    uint16_t                flags;
+    PacketDirection         direction;
+    std::vector<uint8_t>    data;
+    std::vector<ReadMarker> markers;
+};
+
+auto readAll(Reader& reader) -> std::vector<Owned>
+{
+    std::vector<Owned> out;
+    ReadPacket         p{};
+    while (reader.next(p))
+    {
+        const auto* d = reinterpret_cast<const uint8_t*>(p.data.data());
+        out.push_back({ p.timestamp, p.channel, p.opcode, p.flags, p.direction, { d, d + p.data.size() }, { p.markers.begin(), p.markers.end() } });
+    }
+    return out;
+}
+
+auto readAll(const fs::path& path, ReaderOptions options = {}) -> std::vector<Owned>
+{
+    Reader reader(path, options);
+    return readAll(reader);
+}
+
+auto bytesOf(const fs::path& path) -> std::vector<uint8_t>
 {
     std::ifstream f(path, std::ios::binary);
-    xicap::Header h{};
-    f.read(reinterpret_cast<char*>(&h), sizeof(h));
-    uint64_t off = sizeof(xicap::Header);
-    for (uint16_t i = 0; i < h.extensionCount; ++i)
-    {
-        xicap::ExtensionBlockHeader eh{};
-        f.seekg(static_cast<std::streamoff>(off));
-        f.read(reinterpret_cast<char*>(&eh), sizeof(eh));
-        off += sizeof(eh) + eh.length;
-    }
-    return off;
+    return { std::istreambuf_iterator<char>(f), {} };
 }
 
-// Rewrites a frame header in place and refreshes the frame CRC so the frame
-// stays well-formed apart from the field under test.
-template <typename Fn>
-auto patchFrameHeader(const fs::path& path, uint64_t frameOffset, Fn mutate) -> void
+auto save(const fs::path& path, std::span<const uint8_t> bytes) -> void
 {
-    std::fstream f(path, std::ios::binary | std::ios::in | std::ios::out);
-    f.seekg(static_cast<std::streamoff>(frameOffset));
-    xicap::FrameHeader fh{};
-    f.read(reinterpret_cast<char*>(&fh), sizeof(fh));
-
-    std::vector<uint8_t> payload(fh.compressedSize);
-    f.read(reinterpret_cast<char*>(payload.data()), static_cast<std::streamsize>(payload.size()));
-
-    mutate(fh);
-
-    xicap::internal::Crc32 crc;
-    crc.update({ reinterpret_cast<const uint8_t*>(&fh), sizeof(fh) });
-    crc.update(payload);
-    const uint32_t value = crc.value();
-
-    f.seekp(static_cast<std::streamoff>(frameOffset));
-    f.write(reinterpret_cast<const char*>(&fh), sizeof(fh));
-    f.seekp(static_cast<std::streamoff>(frameOffset + sizeof(fh) + payload.size()));
-    f.write(reinterpret_cast<const char*>(&value), sizeof(value));
+    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    f.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
 }
 
-auto readAllOwned(xicap::Reader& r) -> std::vector<OwnedPacket>
+template <typename T>
+auto podAt(std::span<const uint8_t> bytes, size_t offset) -> T
 {
-    std::vector<OwnedPacket> all;
-    xicap::ReadPacket        pkt;
-    while (r.next(pkt))
+    T v{};
+    std::memcpy(&v, bytes.data() + offset, sizeof(T));
+    return v;
+}
+
+auto crcOf(std::span<const uint8_t> bytes) -> uint32_t
+{
+    internal::Crc32 crc;
+    crc.update(bytes);
+    return crc.value();
+}
+
+struct FrameRef
+{
+    size_t      offset;
+    size_t      size;
+    FrameHeader header;
+};
+
+// Walks the file the way FORMAT.md describes, independent of Reader.
+auto dataStart(std::span<const uint8_t> bytes) -> size_t
+{
+    const auto header = podAt<Header>(bytes, 0);
+    size_t     offset = header.headerSize;
+    for (uint32_t i = 0; i < header.extensionCount; ++i)
     {
-        all.push_back(materialize(pkt));
+        offset += sizeof(ExtensionBlockHeader) + podAt<ExtensionBlockHeader>(bytes, offset).length + 4;
     }
-    return all;
+    return offset;
+}
+
+auto framesOf(std::span<const uint8_t> bytes) -> std::vector<FrameRef>
+{
+    std::vector<FrameRef> out;
+    if (bytes.size() < HEADER_SIZE)
+    {
+        return out; // nothing written yet
+    }
+    size_t offset = dataStart(bytes);
+    while (offset + sizeof(FrameHeader) <= bytes.size() && podAt<uint32_t>(bytes, offset) == FRAME_MAGIC)
+    {
+        const auto header = podAt<FrameHeader>(bytes, offset);
+        const auto size   = sizeof(FrameHeader) + header.payloadSize + 4;
+        out.push_back({ offset, size, header });
+        offset += size;
+    }
+    return out;
+}
+
+auto fixFrameCrc(std::vector<uint8_t>& bytes, const FrameRef& frame) -> void
+{
+    const auto crc = crcOf({ bytes.data() + frame.offset, frame.size - 4 });
+    std::memcpy(bytes.data() + frame.offset + frame.size - 4, &crc, 4);
+}
+
+// Rewrites a packet frame's decompressed content (no dictionary).
+auto rewriteFrame(std::vector<uint8_t>& bytes, const FrameRef& frame, const std::function<void(std::vector<uint8_t>&)>& edit) -> std::vector<uint8_t>
+{
+    const uint8_t*       payload = bytes.data() + frame.offset + sizeof(FrameHeader);
+    std::vector<uint8_t> content(ZSTD_getFrameContentSize(payload, frame.header.payloadSize));
+    ZSTD_decompress(content.data(), content.size(), payload, frame.header.payloadSize);
+    edit(content);
+    std::vector<uint8_t> compressed(ZSTD_compressBound(content.size()));
+    auto*                cctx = ZSTD_createCCtx();
+    ZSTD_CCtx_setParameter(cctx, ZSTD_c_checksumFlag, 1);
+    compressed.resize(ZSTD_compress2(cctx, compressed.data(), compressed.size(), content.data(), content.size()));
+    ZSTD_freeCCtx(cctx);
+
+    auto header        = frame.header;
+    header.payloadSize = static_cast<uint32_t>(compressed.size());
+    std::vector<uint8_t> out(sizeof(header));
+    std::memcpy(out.data(), &header, sizeof(header));
+    out.insert(out.end(), compressed.begin(), compressed.end());
+    const auto crc = crcOf(out);
+    out.resize(out.size() + 4);
+    std::memcpy(out.data() + out.size() - 4, &crc, 4);
+    return out;
+}
+
+auto truncateAt(const fs::path& path, size_t size) -> void
+{
+    auto bytes = bytesOf(path);
+    bytes.resize(size);
+    save(path, bytes);
+}
+
+auto footerOffset(std::span<const uint8_t> bytes) -> size_t
+{
+    return podAt<FooterTrailer>(bytes, bytes.size() - sizeof(FooterTrailer)).indexOffset;
+}
+
+// Writes `frames` packet frames of `perFrame` packets each, one second apart.
+auto writeFrames(const fs::path& path, int frames, int perFrame = 3, FramePolicy policy = plain()) -> void
+{
+    Writer w(path, config(), policy);
+    for (int f = 0; f < frames; ++f)
+    {
+        for (int i = 0; i < perFrame; ++i)
+        {
+            w.write(T0 + static_cast<uint64_t>(f) * 1000 + static_cast<uint64_t>(i), PacketDirection::ServerToClient, gamePacket(static_cast<uint16_t>(0x100 + f), 16, static_cast<uint8_t>(f)));
+        }
+        w.flush();
+    }
+    w.close();
 }
 
 } // namespace
 
-TEST_CASE("round-trip preserves packet count, opcodes, directions, payloads", "[round-trip]")
+TEST_CASE("round trip keeps header, packets, channels, flags, and markers")
 {
     TempCapture tmp;
+    CaptureId   firstId{};
     {
-        xicap::Writer w(tmp.path, baseConfig());
-        writeNPackets(w, 200);
+        Writer w(tmp.path, config());
+        firstId = w.captureId();
+        w.mark(MarkerKind::Login, "hello");
+        w.write(T0, PacketDirection::ServerToClient, gamePacket(0x0DF, 20));
+        w.write({ .timestamp = T0 + 5, .direction = PacketDirection::ClientToServer, .data = gamePacket(0x015, 32), .provenance = PacketFlag::Injected | PacketFlag::FirstInChunk });
+        const std::vector<std::byte> search(40, std::byte{ 0x11 });
+        w.write({ .timestamp = T0 + 9, .direction = PacketDirection::ClientToServer, .data = search, .channel = 1, .opcode = 0x05 });
         w.close();
     }
+    Reader r(tmp.path);
+    CHECK(r.versionMajor() == 3);
+    CHECK(r.complete());
+    CHECK(r.captureId() == firstId);
+    CHECK(r.startTimestamp() == T0);
+    CHECK(r.endTimestamp() == T0 + 9);
+    CHECK(r.totalPacketCount() == 3);
+    CHECK(r.clientVersion() == "test-client");
+    CHECK(r.character().contentId == 0x01020304);
+    CHECK(r.character().characterId == 0x0A0B0C0D);
+    CHECK(std::string(r.character().characterName.data()) == "Nouurs");
+    CHECK(r.network() == Network::Retail);
+    CHECK(r.startContext() == StartContext::Login);
+    CHECK(r.policy().name == "xicap-default");
 
-    xicap::Reader r(tmp.path);
-    const auto    pkts = readAllOwned(r);
+    const auto packets = readAll(r);
+    REQUIRE(packets.size() == 3);
+    CHECK(packets[0].opcode == 0x0DF);
+    REQUIRE(packets[0].markers.size() == 1);
+    CHECK(packets[0].markers[0].kind == MarkerKind::Login);
+    CHECK(packets[0].markers[0].text == "hello");
+    CHECK(packets[1].direction == PacketDirection::ClientToServer);
+    CHECK(packets[1].flags == (PacketFlag::ClientToServer | PacketFlag::Injected | PacketFlag::FirstInChunk));
+    CHECK(packets[2].channel == 1);
+    CHECK(packets[2].opcode == 0x05);
+    CHECK(packets[2].data.size() == 40);
+}
 
-    REQUIRE(pkts.size() == 200);
-    for (size_t i = 0; i < pkts.size(); ++i)
+TEST_CASE("two writers pick different capture ids")
+{
+    TempCapture a;
+    TempCapture b;
+    Writer      wa(a.path, config());
+    Writer      wb(b.path, config());
+    CHECK(wa.captureId() != wb.captureId());
+}
+
+TEST_CASE("a continued capture names its predecessor")
+{
+    TempCapture tmp;
+    auto        cfg       = config();
+    cfg.previousCaptureId = CaptureId{ 1, 2, 3 };
+    cfg.startContext      = StartContext::MidSession;
+    Writer(tmp.path, cfg).close();
+    Reader r(tmp.path);
+    CHECK(r.previousCaptureId() == CaptureId{ 1, 2, 3 });
+    CHECK(r.startContext() == StartContext::MidSession);
+}
+
+TEST_CASE("a recording file only grows")
+{
+    TempCapture                       tmp;
+    std::vector<std::vector<uint8_t>> copies;
     {
-        CHECK(pkts[i].opcode == 0x100 + (i % 4));
-        CHECK(pkts[i].direction == ((i % 2) ? xicap::PacketDirection::ClientToServer : xicap::PacketDirection::ServerToClient));
-        CHECK(pkts[i].data.size() == 32);
-        for (size_t j = 4; j < pkts[i].data.size(); ++j)
+        Writer w(tmp.path, config());
+        for (int f = 0; f < 4; ++f)
         {
-            CHECK(pkts[i].data[j] == static_cast<uint8_t>(i));
+            w.write(T0 + static_cast<uint64_t>(f) * 1000, PacketDirection::ServerToClient, gamePacket(0x010, 24));
+            w.flush();
+            copies.push_back(bytesOf(tmp.path));
         }
+        w.close();
+    }
+    copies.push_back(bytesOf(tmp.path));
+    for (size_t i = 1; i < copies.size(); ++i)
+    {
+        REQUIRE(copies[i].size() >= copies[i - 1].size());
+        CHECK(std::equal(copies[i - 1].begin(), copies[i - 1].end(), copies[i].begin()));
     }
 }
 
-TEST_CASE("clean close writes a footer; truncated capture falls back to scan", "[footer]")
+TEST_CASE("an empty capture still gets a footer")
+{
+    TempCapture tmp;
+    Writer(tmp.path, config()).close();
+    Reader r(tmp.path);
+    CHECK(r.complete());
+    CHECK(r.totalPacketCount() == 0);
+    CHECK(r.startTimestamp() == 0);
+    CHECK(readAll(r).empty());
+    CHECK(r.verify().signedToEnd);
+}
+
+TEST_CASE("timestamps never go backwards and ties stay ties")
 {
     TempCapture tmp;
     {
-        xicap::Writer w(tmp.path, baseConfig());
-        writeNPackets(w, 250);
+        Writer w(tmp.path, config());
+        w.write(T0 + 5000, PacketDirection::ServerToClient, gamePacket(0x010, 8));
+        w.write(T0 + 3000, PacketDirection::ServerToClient, gamePacket(0x010, 8)); // clock stepped back
+        w.write(T0 + 5000, PacketDirection::ServerToClient, gamePacket(0x010, 8));
+        w.write(T0 + 5000, PacketDirection::ServerToClient, gamePacket(0x010, 8));
         w.close();
     }
-    const auto sealedSize = fs::file_size(tmp.path);
-
-    SECTION("clean close: hasFooter() == true and full packets read")
+    for (const auto& p : readAll(tmp.path))
     {
-        xicap::Reader r(tmp.path);
-        REQUIRE(r.hasFooter());
-        REQUIRE(r.totalFrames() > 0);
-        const auto pkts = readAllOwned(r);
-        CHECK(pkts.size() == 250);
-    }
-
-    SECTION("truncated: hasFooter() == false and the readable prefix is recovered")
-    {
-        const auto truncated = tmp.path.parent_path() / "xicap-trunc.xicap";
-        fs::copy_file(tmp.path, truncated, fs::copy_options::overwrite_existing);
-        fs::resize_file(truncated, sealedSize - 100);
-
-        {
-            xicap::Reader r(truncated);
-            CHECK_FALSE(r.hasFooter());
-            const auto pkts = readAllOwned(r);
-            CHECK_FALSE(pkts.empty());
-            CHECK(pkts.size() <= 250);
-        }
-        fs::remove(truncated);
+        CHECK(p.timestamp == T0 + 5000);
     }
 }
 
-TEST_CASE("invalid magic and bad version rejected with typed error", "[validation]")
+TEST_CASE("a zone-in starts a frame carrying the new zone")
 {
     TempCapture tmp;
     {
-        xicap::Writer w(tmp.path, baseConfig());
-        writeNPackets(w, 10);
+        Writer w(tmp.path, config());
+        w.write(T0, PacketDirection::ServerToClient, gamePacket(0x010, 8));
+        w.write(T0 + 1, PacketDirection::ServerToClient, zoneIn(230));
+        w.write(T0 + 2, PacketDirection::ServerToClient, gamePacket(0x010, 8));
         w.close();
     }
-
-    SECTION("invalid magic")
-    {
-        std::fstream f(tmp.path, std::ios::binary | std::ios::in | std::ios::out);
-        const char   bogus[4] = { 'N', 'O', 'P', 'E' };
-        f.write(bogus, 4);
-        f.close();
-
-        try
-        {
-            xicap::Reader r(tmp.path);
-            FAIL("expected throw");
-        }
-        catch (const xicap::Error& e)
-        {
-            CHECK(e.code() == xicap::ErrorCode::BadMagic);
-        }
-    }
-
-    SECTION("unsupported version")
-    {
-        std::fstream f(tmp.path, std::ios::binary | std::ios::in | std::ios::out);
-        f.seekp(4);
-        const uint8_t bumped = xicap::VERSION_MAJOR + 1;
-        f.write(reinterpret_cast<const char*>(&bumped), 1);
-        f.close();
-
-        try
-        {
-            xicap::Reader r(tmp.path);
-            FAIL("expected throw");
-        }
-        catch (const xicap::Error& e)
-        {
-            CHECK(e.code() == xicap::ErrorCode::UnsupportedVersion);
-        }
-    }
-}
-
-TEST_CASE("dictionary id mismatch is rejected at open time", "[dict]")
-{
-    TempCapture tmp;
-    {
-        xicap::Writer w(tmp.path, baseConfig());
-        writeNPackets(w, 10);
-        w.close();
-    }
-
-    std::fstream f(tmp.path, std::ios::binary | std::ios::in | std::ios::out);
-    f.seekp(offsetof(xicap::Header, dictionaryId));
-    const uint32_t bogusDictId = 0xDEADBEEF;
-    f.write(reinterpret_cast<const char*>(&bogusDictId), sizeof(bogusDictId));
-    f.close();
-
-    try
-    {
-        xicap::Reader r(tmp.path);
-        FAIL("expected throw");
-    }
-    catch (const xicap::Error& e)
-    {
-        CHECK(e.code() == xicap::ErrorCode::DictionaryMismatch);
-    }
-}
-
-TEST_CASE("extension blocks round-trip in order", "[extensions]")
-{
-    TempCapture tmp;
-    {
-        xicap::Writer  w(tmp.path, baseConfig());
-        const uint8_t  payloadA[] = { 1, 2, 3, 4, 5 };
-        const uint8_t  payloadB[] = { 'h', 'i' };
-        const uint32_t custom     = 0xC0DECAFE;
-        w.addExtension(xicap::EXT_PLAYER, std::as_bytes(std::span{ payloadA }));
-        w.addExtension(xicap::EXT_LOBBY_SNAPSHOT, std::as_bytes(std::span{ payloadB }));
-        w.addExtension(custom, std::as_bytes(std::span{ payloadA }));
-        writeNPackets(w, 10);
-        w.close();
-    }
-
-    xicap::Reader r(tmp.path);
-    REQUIRE(r.extensions().size() == 3);
-
-    const auto* p = r.getExtension(xicap::EXT_PLAYER);
-    REQUIRE(p != nullptr);
-    CHECK(p->data == std::vector<uint8_t>{ 1, 2, 3, 4, 5 });
-
-    const auto* l = r.getExtension(xicap::EXT_LOBBY_SNAPSHOT);
-    REQUIRE(l != nullptr);
-    CHECK(l->data == std::vector<uint8_t>{ 'h', 'i' });
-
-    const auto* c = r.getExtension(0xC0DECAFE);
-    REQUIRE(c != nullptr);
-    CHECK(c->data.size() == 5);
-}
-
-TEST_CASE("lobby identity round-trips", "[lobby]")
-{
-    TempCapture tmp;
-    {
-        auto cfg                = baseConfig();
-        cfg.lobby               = {};
-        cfg.lobby.contentId     = 0x12345678;
-        cfg.lobby.worldId       = 7;
-        cfg.lobby.status        = 3;
-        cfg.lobby.pendingRename = 1;
-        std::memcpy(cfg.lobby.characterName.data(), "Mehdi", 5);
-        std::memcpy(cfg.lobby.worldName.data(), "Phoenix", 7);
-        xicap::Writer w(tmp.path, cfg);
-        writeNPackets(w, 10);
-        w.close();
-    }
-
-    xicap::Reader r(tmp.path);
-    const auto&   l = r.lobby();
-    CHECK(l.contentId == 0x12345678);
-    CHECK(l.worldId == 7);
-    CHECK(l.status == 3);
-    CHECK(l.pendingRename == 1);
-    CHECK(std::string(l.characterName.data()) == "Mehdi");
-    CHECK(std::string(l.worldName.data()) == "Phoenix");
-}
-
-TEST_CASE("multi-frame seek by index, time, zone returns SeekResult", "[seek]")
-{
-    TempCapture tmp;
-    {
-        xicap::FramePolicy pol{};
-        pol.maxPacketsPerFrame = 50;
-        xicap::Writer w(tmp.path, baseConfig(), pol);
-        writeNPackets(w, 250, 1'700'000'000'000ULL, 100);
-        w.close();
-    }
-
-    xicap::Reader r(tmp.path);
-    REQUIRE(r.totalFrames() >= 5);
-
-    SECTION("seekToFrame jumps to the right starting timestamp")
-    {
-        REQUIRE(r.seekToFrame(2) == xicap::SeekResult::Ok);
-        const auto        expected = r.frameTimestamp(2);
-        xicap::ReadPacket pkt;
-        REQUIRE(r.next(pkt));
-        CHECK(pkt.timestamp == expected);
-    }
-
-    SECTION("seekToFrame out of range")
-    {
-        CHECK(r.seekToFrame(99999) == xicap::SeekResult::OutOfRange);
-    }
-
-    SECTION("seekToTime lands on or before the requested ts")
-    {
-        const uint64_t target = 1'700'000'000'000ULL + 5'000;
-        REQUIRE(r.seekToTime(target) == xicap::SeekResult::Ok);
-        xicap::ReadPacket pkt;
-        REQUIRE(r.next(pkt));
-        CHECK(pkt.timestamp >= target);
-    }
-
-    SECTION("seekToZone for unknown zone")
-    {
-        CHECK(r.seekToZone(9999) == xicap::SeekResult::NotFound);
-    }
-}
-
-TEST_CASE("markers attach to the packet they target", "[markers]")
-{
-    TempCapture tmp;
-    {
-        xicap::Writer w(tmp.path, baseConfig());
-        writeNPackets(w, 5);
-        w.addMarker("after-fifth");
-        writeNPackets(w, 3, 1'700'000'001'000ULL);
-        w.close();
-    }
-
-    xicap::Reader r(tmp.path);
-    const auto    pkts = readAllOwned(r);
-    REQUIRE(pkts.size() == 8);
-
-    int markerCount = 0;
-    for (size_t i = 0; i < pkts.size(); ++i)
-    {
-        if (i == 4)
-        {
-            REQUIRE(pkts[i].markers.size() == 1);
-            CHECK(pkts[i].markers[0] == "after-fifth");
-            markerCount++;
-        }
-        else
-        {
-            CHECK(pkts[i].markers.empty());
-        }
-    }
-    CHECK(markerCount == 1);
-}
-
-TEST_CASE("addMarker before any packet throws AddMarkerWithoutPacket", "[markers]")
-{
-    TempCapture   tmp;
-    xicap::Writer w(tmp.path, baseConfig());
-    try
-    {
-        w.addMarker("too early");
-        FAIL("expected throw");
-    }
-    catch (const xicap::Error& e)
-    {
-        CHECK(e.code() == xicap::ErrorCode::AddMarkerWithoutPacket);
-    }
-}
-
-TEST_CASE("hostile extension length is rejected", "[validation]")
-{
-    TempCapture tmp;
-    {
-        xicap::Writer w(tmp.path, baseConfig());
-        const uint8_t payload[] = { 1, 2, 3, 4 };
-        w.addExtension(xicap::EXT_PLAYER, std::as_bytes(std::span{ payload }));
-        writeNPackets(w, 5);
-        w.close();
-    }
-
-    std::fstream f(tmp.path, std::ios::binary | std::ios::in | std::ios::out);
-    f.seekp(sizeof(xicap::Header) + offsetof(xicap::ExtensionBlockHeader, length));
-    const uint32_t hostile = 0xC0000000u;
-    f.write(reinterpret_cast<const char*>(&hostile), sizeof(hostile));
-    f.close();
-
-    try
-    {
-        xicap::Reader r(tmp.path);
-        FAIL("expected throw");
-    }
-    catch (const xicap::Error& e)
-    {
-        CHECK(e.code() == xicap::ErrorCode::ShortExtension);
-    }
-}
-
-TEST_CASE("startTimestamp falls back to first frame when header is unpatched", "[truncation]")
-{
-    TempCapture tmp;
-    uint64_t    expected = 0;
-    {
-        xicap::Writer w(tmp.path, baseConfig());
-        writeNPackets(w, 100, 1'700'000'000'000ULL);
-        expected = 1'700'000'000'000ULL;
-        w.close();
-    }
-
-    std::fstream f(tmp.path, std::ios::binary | std::ios::in | std::ios::out);
-    f.seekp(offsetof(xicap::Header, startTimestamp));
-    const uint64_t zero = 0;
-    f.write(reinterpret_cast<const char*>(&zero), sizeof(zero));
-    f.close();
-
-    xicap::Reader r(tmp.path);
-    CHECK(r.startTimestamp() == expected);
-}
-
-TEST_CASE("end-of-capture metadata is back-patched on clean close", "[end-meta]")
-{
-    TempCapture    tmp;
-    constexpr int  N        = 73;
-    const uint64_t startTs  = 1'700'000'000'000ULL;
-    const uint64_t deltaMs  = 50;
-    const uint64_t expected = startTs + (N - 1) * deltaMs;
-
-    {
-        xicap::Writer w(tmp.path, baseConfig());
-        writeNPackets(w, N, startTs, deltaMs);
-        w.close();
-    }
-
-    xicap::Reader r(tmp.path);
-    CHECK(r.endTimestamp() == expected);
-    CHECK(r.totalPacketCount() == N);
-    CHECK(r.endZoneId() == 100); // no zone change, so still the configured start zone
-}
-
-TEST_CASE("frame CRC mismatch is detected", "[crc]")
-{
-    TempCapture tmp;
-    {
-        xicap::Writer w(tmp.path, baseConfig());
-        writeNPackets(w, 10);
-        w.close();
-    }
-
-    // Flip a bit in the first frame's compressed payload.
-    const auto   frameOffset = firstFrameOffset(tmp.path);
-    std::fstream f(tmp.path, std::ios::binary | std::ios::in | std::ios::out);
-    f.seekg(static_cast<std::streamoff>(frameOffset + sizeof(xicap::FrameHeader) + 4));
-    char b = 0;
-    f.read(&b, 1);
-    f.seekp(static_cast<std::streamoff>(frameOffset + sizeof(xicap::FrameHeader) + 4));
-    char flipped = b ^ 0x01;
-    f.write(&flipped, 1);
-    f.close();
-
-    xicap::Reader     r(tmp.path);
-    xicap::ReadPacket pkt;
-    try
-    {
-        r.next(pkt);
-        FAIL("expected throw");
-    }
-    catch (const xicap::Error& e)
-    {
-        // Either the CRC check trips, or zstd detects a corrupt frame first.
-        CHECK((e.code() == xicap::ErrorCode::FrameChecksumMismatch || e.code() == xicap::ErrorCode::DecompressFailed || e.code() == xicap::ErrorCode::CorruptFrame));
-    }
-}
-
-TEST_CASE("skipCurrentFrame recovers iteration past a corrupt frame", "[recovery]")
-{
-    TempCapture tmp;
-    {
-        xicap::FramePolicy pol{};
-        pol.maxPacketsPerFrame = 10;
-        xicap::Writer w(tmp.path, baseConfig(), pol);
-        writeNPackets(w, 30);
-        w.close();
-    }
-
-    // Corrupt the first frame's CRC by flipping its trailer bytes.
-    {
-        const auto   frameOffset = firstFrameOffset(tmp.path);
-        std::fstream f(tmp.path, std::ios::binary | std::ios::in | std::ios::out);
-        f.seekg(0, std::ios::end);
-        const auto size = f.tellg();
-        REQUIRE(static_cast<uint64_t>(size) > frameOffset + sizeof(xicap::FrameHeader) + 4);
-        // Read first frame's compressedSize.
-        f.seekg(static_cast<std::streamoff>(frameOffset));
-        xicap::FrameHeader fh{};
-        f.read(reinterpret_cast<char*>(&fh), sizeof(fh));
-        // Position of CRC = after frame header + compressed payload.
-        const auto crcPos = static_cast<std::streampos>(frameOffset + sizeof(xicap::FrameHeader) + fh.compressedSize);
-        f.seekp(crcPos);
-        const uint32_t bogus = 0xBADDCAFE;
-        f.write(reinterpret_cast<const char*>(&bogus), sizeof(bogus));
-    }
-
-    xicap::Reader     r(tmp.path);
-    int               recovered = 0;
-    bool              sawError  = false;
-    xicap::ReadPacket pkt;
-    while (true)
-    {
-        try
-        {
-            if (!r.next(pkt))
-            {
-                break;
-            }
-            ++recovered;
-        }
-        catch (const xicap::Error& e)
-        {
-            sawError = true;
-            CHECK(e.code() == xicap::ErrorCode::FrameChecksumMismatch);
-            r.skipCurrentFrame();
-        }
-    }
-    CHECK(sawError);
-    CHECK(recovered > 0);  // we recovered some packets after the bad frame
-    CHECK(recovered < 30); // we lost the first frame
-}
-
-TEST_CASE("force flush prevents deltaMs clip on long gaps", "[force-flush]")
-{
-    TempCapture tmp;
-    {
-        xicap::Writer w(tmp.path, baseConfig());
-        const auto    pkt = makePacket(0x100, 32, 0);
-        w.write(1'000'000ULL, xicap::PacketDirection::ServerToClient, pkt);
-        // 5 minutes later — far past UINT16_MAX ms.
-        w.write(1'000'000ULL + 300'000ULL, xicap::PacketDirection::ServerToClient, pkt);
-        w.close();
-    }
-
-    xicap::Reader     r(tmp.path);
-    xicap::ReadPacket p;
-    REQUIRE(r.next(p));
-    const auto t0 = p.timestamp;
-    REQUIRE(r.next(p));
-    const auto t1 = p.timestamp;
-    CHECK(t1 - t0 == 300'000ULL); // exact, no clip
-    CHECK_FALSE(r.next(p));
-    CHECK(r.totalFrames() == 2); // a frame boundary was forced
-}
-
-TEST_CASE("packets larger than one frame's uncompressed budget split cleanly", "[frame-split]")
-{
-    TempCapture tmp;
-    {
-        xicap::FramePolicy pol{};
-        pol.maxFrameSize = 4 * 1024;
-        xicap::Writer w(tmp.path, baseConfig(), pol);
-        writeNPackets(w, 500);
-        w.close();
-    }
-
-    xicap::Reader r(tmp.path);
-    CHECK(r.totalFrames() > 1);
-    const auto pkts = readAllOwned(r);
-    CHECK(pkts.size() == 500);
-}
-
-TEST_CASE("frames before any LOGIN_ZONE carry the configured start zone", "[zone]")
-{
-    TempCapture tmp;
-    {
-        xicap::Writer w(tmp.path, baseConfig()); // startZoneId = 100
-        writeNPackets(w, 10);
-        w.close();
-    }
-
-    xicap::Reader r(tmp.path);
-    const auto    zones = r.listZones();
+    Reader r(tmp.path);
+    REQUIRE(r.totalFrames() == 2);
+    const auto zones = r.listZones();
     REQUIRE(zones.size() == 1);
-    CHECK(zones[0].zoneId == 100);
-    CHECK(r.seekToZone(100) == xicap::SeekResult::Ok);
+    CHECK(zones[0].zoneId == 230);
+    CHECK(zones[0].timestamp == T0 + 1);
+    CHECK(r.seekToZone(230) == SeekResult::Ok);
+    ReadPacket p{};
+    REQUIRE(r.next(p));
+    CHECK(p.opcode == FFXIPacket::LOGIN_ZONE);
 }
 
-TEST_CASE("the capture's dictionary is embedded and not surfaced as agent data", "[dict]")
+TEST_CASE("zone-ins are checked against the header's character")
 {
     TempCapture tmp;
+    const auto  mismatch = [&](const std::vector<std::byte>& zone)
     {
-        xicap::Writer w(tmp.path, baseConfig());
-        const uint8_t payload[] = { 1, 2, 3 };
-        w.addExtension(xicap::EXT_PLAYER, std::as_bytes(std::span{ payload }));
-        writeNPackets(w, 10);
+        {
+            Writer w(tmp.path, config());
+            w.write(T0, PacketDirection::ServerToClient, zoneIn(230));
+            w.write(T0 + 1, PacketDirection::ServerToClient, zone);
+            w.close();
+        }
+        Reader r(tmp.path);
+        readAll(r);
+        return r.characterMismatch();
+    };
+    CHECK_FALSE(mismatch(zoneIn(231)));
+    CHECK(mismatch(zoneIn(231, "Mule")));
+    CHECK(mismatch(zoneIn(231, "Nouurs", 0x00000001)));
+}
+
+TEST_CASE("chat is stubbed before it reaches disk")
+{
+    TempCapture       tmp;
+    const std::string secret = "meet me at the docks";
+    {
+        Writer w(tmp.path, config(), plain());
+        auto   chat = gamePacket(0x017, 64, 0);
+        std::memcpy(chat.data() + 20, secret.data(), secret.size());
+        w.write(T0, PacketDirection::ServerToClient, chat);
         w.close();
     }
-
-    // Header counts the dictionary block; Reader::extensions() does not expose it.
-    xicap::Header h{};
-    {
-        std::ifstream f(tmp.path, std::ios::binary);
-        f.read(reinterpret_cast<char*>(&h), sizeof(h));
-    }
-    CHECK(h.extensionCount == 2);
-
-    xicap::Reader r(tmp.path);
-    CHECK(r.extensions().size() == 1);
-    CHECK(r.extensions()[0].type == xicap::EXT_PLAYER);
-    CHECK(r.getExtension(xicap::EXT_ZSTD_DICT) == nullptr);
-    CHECK(readAllOwned(r).size() == 10);
+    const auto bytes = bytesOf(tmp.path);
+    CHECK(std::search(bytes.begin(), bytes.end(), secret.begin(), secret.end()) == bytes.end());
+    const auto packets = readAll(tmp.path);
+    REQUIRE(packets.size() == 1);
+    CHECK(packets[0].flags & PacketFlag::Excluded);
+    REQUIRE(packets[0].data.size() == 4);
+    CHECK(((packets[0].data[1] >> 1) & 0x7F) == 16); // original size, in words
 }
 
-TEST_CASE("a capture written with a foreign dictionary still reads", "[dict]")
+TEST_CASE("the default policy stubs every chat opcode")
 {
-    // Stands in for a capture produced by a build with a different builtin
-    // dictionary: the reader must use the bytes in the file, not its own.
-    std::vector<uint8_t> foreign(4096);
-    for (size_t i = 0; i < foreign.size(); ++i)
+    TempCapture                                             tmp;
+    const std::vector<std::pair<uint16_t, PacketDirection>> chat{
+        { 0x017, PacketDirection::ServerToClient },
+        { 0x0B5, PacketDirection::ClientToServer },
+        { 0x0B6, PacketDirection::ClientToServer },
+        { 0x0CC, PacketDirection::ServerToClient },
+        { 0x0E2, PacketDirection::ClientToServer },
+    };
     {
-        foreign[i] = static_cast<uint8_t>((i * 7) & 0xFF);
-    }
-
-    TempCapture tmp;
-    {
-        xicap::FramePolicy pol{};
-        pol.dictionary = foreign;
-        xicap::Writer w(tmp.path, baseConfig(), pol);
-        writeNPackets(w, 25);
+        Writer   w(tmp.path, config());
+        uint64_t t = T0;
+        for (const auto& [opcode, direction] : chat)
+        {
+            w.write(t++, direction, gamePacket(opcode, 64));
+        }
+        w.write(t, PacketDirection::ClientToServer, gamePacket(0x017, 64)); // 0x017 from the client is another packet: kept
+        w.write(t, PacketDirection::ClientToServer, gamePacket(0x0E0, 64)); // search comment: public, kept
         w.close();
     }
-
-    xicap::Reader r(tmp.path);
-    CHECK(readAllOwned(r).size() == 25);
+    const auto packets = readAll(tmp.path);
+    REQUIRE(packets.size() == 7);
+    for (size_t i = 0; i < chat.size(); ++i)
+    {
+        CHECK(packets[i].flags & PacketFlag::Excluded);
+        CHECK(packets[i].data.size() == 4);
+    }
+    CHECK(packets[5].data.size() == 64);
+    CHECK(packets[6].data.size() == 64);
 }
 
-TEST_CASE("a capture written without a dictionary still reads", "[dict]")
-{
-    TempCapture tmp;
-    {
-        xicap::FramePolicy pol{};
-        pol.dictionary = {};
-        xicap::Writer w(tmp.path, baseConfig(), pol);
-        writeNPackets(w, 25);
-        w.close();
-    }
-
-    xicap::Reader r(tmp.path);
-    CHECK(readAllOwned(r).size() == 25);
-}
-
-TEST_CASE("a packet too large for PacketEntry::length is rejected", "[validation]")
-{
-    TempCapture   tmp;
-    xicap::Writer w(tmp.path, baseConfig());
-
-    const std::vector<std::byte> oversized(UINT16_MAX + 1);
-    try
-    {
-        w.write(1'700'000'000'000ULL, xicap::PacketDirection::ServerToClient, oversized);
-        FAIL("expected throw");
-    }
-    catch (const xicap::Error& e)
-    {
-        CHECK(e.code() == xicap::ErrorCode::PacketTooLarge);
-    }
-    CHECK(w.packetsWritten() == 0);
-}
-
-TEST_CASE("a frame claiming more content than its entries allow is rejected", "[validation]")
+TEST_CASE("redaction zeroes byte ranges and keeps the length")
 {
     TempCapture tmp;
+    auto        cfg = config();
+    cfg.policy      = { .name = "test", .version = 2, .rules = { { .channel = 0, .direction = ExclusionDirection::Both, .action = ExclusionAction::ZeroRange, .opcode = 0x020, .ranges = { { 8, 4 }, { 30, 0xFFFFFFFF } } } } };
     {
-        xicap::Writer w(tmp.path, baseConfig());
-        writeNPackets(w, 10);
+        Writer w(tmp.path, cfg);
+        w.write(T0, PacketDirection::ServerToClient, gamePacket(0x020, 40, 0xFF));
         w.close();
     }
+    Reader r(tmp.path);
+    CHECK(r.policy().name == "test");
+    CHECK(r.policy().version == 2);
+    const auto p = readAll(r).at(0);
+    CHECK(p.flags & PacketFlag::Redacted);
+    REQUIRE(p.data.size() == 40);
+    CHECK(p.data[7] == 0xFF);
+    CHECK(p.data[8] == 0);
+    CHECK(p.data[11] == 0);
+    CHECK(p.data[12] == 0xFF);
+    CHECK(p.data[29] == 0xFF);
+    CHECK(p.data[39] == 0);
+}
 
-    // packetCount 0 means no entry can account for the decompressed payload, so
-    // the reader must refuse to size a buffer from the zstd content-size field.
-    patchFrameHeader(tmp.path, firstFrameOffset(tmp.path), [](xicap::FrameHeader& fh)
-                     {
-                         fh.packetCount = 0;
-                     });
-
-    xicap::Reader     r(tmp.path);
-    xicap::ReadPacket pkt;
-    try
+TEST_CASE("the writer refuses bad input")
+{
+    TempCapture tmp;
+    SECTION("a stub on a channel without one")
     {
-        r.next(pkt);
-        FAIL("expected throw");
+        auto cfg   = config();
+        cfg.policy = { .name = "x", .version = 1, .rules = { { .channel = 1, .direction = ExclusionDirection::Both, .action = ExclusionAction::Stub, .opcode = 1, .ranges = {} } } };
+        CHECK_THROWS_AS(Writer(tmp.path, cfg), Error);
     }
-    catch (const xicap::Error& e)
+    SECTION("a converted capture without its source, or a live one with it")
     {
-        CHECK(e.code() == xicap::ErrorCode::CorruptFrame);
+        auto cfg   = config();
+        cfg.origin = Origin::Converted;
+        CHECK_THROWS_AS(Writer(tmp.path, cfg), Error);
+        auto live   = config();
+        live.source = SourceInfo{};
+        CHECK_THROWS_AS(Writer(tmp.path, live), Error);
+    }
+    SECTION("extension ids outside the range for other programs")
+    {
+        Writer                       w(tmp.path, config());
+        const std::vector<std::byte> data(4);
+        CHECK_THROWS_AS(w.addExtension(0x0001, data), Error);
+        CHECK_THROWS_AS(w.addExtension(EXT_EXCLUSION_POLICY, data), Error);
+        CHECK_NOTHROW(w.addExtension(0x8000, data));
+        w.write(T0, PacketDirection::ServerToClient, gamePacket(0x010, 8));
+        CHECK_THROWS_AS(w.addExtension(0x8001, data), Error); // after a packet
+    }
+    SECTION("a game packet under 4 bytes, and writes after close")
+    {
+        Writer w(tmp.path, config());
+        CHECK_THROWS_AS(w.write(T0, PacketDirection::ServerToClient, std::vector<std::byte>(3)), Error);
+        w.close();
+        CHECK_THROWS_AS(w.write(T0, PacketDirection::ServerToClient, gamePacket(0x010, 8)), Error);
     }
 }
 
-TEST_CASE("a pre-2.1 capture with no embedded dictionary falls back to the build's", "[dict]")
+TEST_CASE("a source block round-trips on converted captures")
 {
     TempCapture tmp;
+    auto        cfg            = config();
+    cfg.origin                 = Origin::Converted;
+    cfg.clockSource            = ClockSource::Converted;
+    cfg.network                = Network::Private;
+    const std::string manifest = "{ Captain = { Version = \"1.13.0\" }, FFXI = { IsRetail = false } }";
+    cfg.source                 = SourceInfo{ .format = "captain", .formatVersion = "1.13.0", .skippedRecords = 1, .utcOffsetSeconds = 21600, .sourceHash = {}, .metadata = { manifest.begin(), manifest.end() } };
+    Writer(tmp.path, cfg).close();
+    Reader r(tmp.path);
+    REQUIRE(r.source());
+    CHECK(r.source()->format == "captain");
+    CHECK(r.source()->skippedRecords == 1);
+    CHECK(r.source()->utcOffsetSeconds == 21600);
+    CHECK(std::string(r.source()->metadata.begin(), r.source()->metadata.end()) == manifest);
+    CHECK(r.origin() == Origin::Converted);
+    CHECK(r.network() == Network::Private);
+}
+
+TEST_CASE("a packet over 64 KiB on a non-game channel")
+{
+    TempCapture                  tmp;
+    const std::vector<std::byte> big(100'000, std::byte{ 3 });
     {
-        xicap::Writer w(tmp.path, baseConfig());
-        writeNPackets(w, 25);
+        Writer w(tmp.path, config());
+        w.write({ .timestamp = T0, .direction = PacketDirection::ServerToClient, .data = big, .channel = 9, .opcode = 1 });
         w.close();
     }
+    const auto p = readAll(tmp.path).at(0);
+    CHECK(p.channel == 9); // unknown channels pass through
+    CHECK(p.data.size() == big.size());
+}
 
-    // Rewrite the capture without its EXT_ZSTD_DICT block — what a 2.0 writer,
-    // which only recorded a dictionary id, produced.
-    std::vector<uint8_t> raw;
+TEST_CASE("readers refuse what they must")
+{
+    TempCapture tmp;
+    writeFrames(tmp.path, 2, 3, FramePolicy{});
+    auto bytes = bytesOf(tmp.path);
+
+    SECTION("a 2.x file")
     {
-        std::ifstream f(tmp.path, std::ios::binary);
-        raw.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+        std::vector<uint8_t> old(512);
+        std::memcpy(old.data(), "XCAP\x02\x01", 6);
+        save(tmp.path, old);
+        CHECK_THROWS_AS(Reader(tmp.path), Error);
+    }
+    SECTION("a flipped header bit")
+    {
+        bytes[120] ^= 1;
+        save(tmp.path, bytes);
+        try
+        {
+            Reader r(tmp.path);
+            FAIL("opened");
+        }
+        catch (const Error& e)
+        {
+            CHECK(e.code() == ErrorCode::HeaderChecksumMismatch);
+        }
+    }
+    SECTION("a flipped extension bit")
+    {
+        bytes[HEADER_SIZE + 100] ^= 1;
+        save(tmp.path, bytes);
+        try
+        {
+            Reader r(tmp.path);
+            FAIL("opened");
+        }
+        catch (const Error& e)
+        {
+            CHECK(e.code() == ErrorCode::ExtensionChecksumMismatch);
+        }
+    }
+    SECTION("a missing dictionary")
+    {
+        // Drop the dictionary block, fix the count and the header CRC.
+        const auto dictLength = podAt<ExtensionBlockHeader>(bytes, HEADER_SIZE).length;
+        bytes.erase(bytes.begin() + HEADER_SIZE, bytes.begin() + HEADER_SIZE + 8 + dictLength + 4);
+        auto header = podAt<Header>(bytes, 0);
+        header.extensionCount--;
+        header.headerCrc = crcOf({ reinterpret_cast<const uint8_t*>(&header), offsetof(Header, headerCrc) });
+        std::memcpy(bytes.data(), &header, sizeof(header));
+        save(tmp.path, bytes);
+        try
+        {
+            Reader r(tmp.path);
+            FAIL("opened");
+        }
+        catch (const Error& e)
+        {
+            CHECK(e.code() == ErrorCode::MissingDictionary);
+        }
+    }
+}
+
+TEST_CASE("frame kinds and flags a reader must understand")
+{
+    TempCapture tmp;
+    writeFrames(tmp.path, 2);
+    auto bytes = bytesOf(tmp.path);
+    bytes.resize(footerOffset(bytes)); // cut off, so frames can be appended
+    const auto                 frames = framesOf(bytes);
+    const std::vector<uint8_t> second(bytes.begin() + static_cast<std::ptrdiff_t>(frames[1].offset), bytes.end());
+
+    const auto withKind = [&](uint8_t kind)
+    {
+        auto out = bytes;
+        out.resize(frames[1].offset);
+        FrameHeader          h{ .magic = FRAME_MAGIC, .kind = static_cast<FrameKind>(kind), .reserved0 = 0, .markerCount = 0, .payloadSize = 3, .packetCount = 0, .baseTimestamp = T0, .zoneId = 0, .reserved1 = 0 };
+        std::vector<uint8_t> frame(sizeof(h));
+        std::memcpy(frame.data(), &h, sizeof(h));
+        frame.insert(frame.end(), { 1, 2, 3 });
+        const auto crc = crcOf(frame);
+        frame.resize(frame.size() + 4);
+        std::memcpy(frame.data() + frame.size() - 4, &crc, 4);
+        out.insert(out.end(), frame.begin(), frame.end());
+        out.insert(out.end(), second.begin(), second.end());
+        return out;
+    };
+
+    SECTION("an unknown skippable kind is skipped")
+    {
+        save(tmp.path, withKind(0x02));
+        CHECK(readAll(tmp.path).size() == 6);
+    }
+    SECTION("an unknown must-understand kind is refused")
+    {
+        save(tmp.path, withKind(0x81));
+        CHECK_THROWS_AS(Reader(tmp.path), Error);
+    }
+    SECTION("an unknown must-understand flag is refused")
+    {
+        auto rewritten = rewriteFrame(bytes, frames[0], [](std::vector<uint8_t>& content)
+                                      {
+                                          auto entry = podAt<PacketEntry>(content, 0);
+                                          entry.flags |= 0x0400;
+                                          std::memcpy(content.data(), &entry, sizeof(entry));
+                                      });
+        bytes.erase(bytes.begin() + static_cast<std::ptrdiff_t>(frames[0].offset), bytes.begin() + static_cast<std::ptrdiff_t>(frames[0].offset + frames[0].size));
+        bytes.insert(bytes.begin() + static_cast<std::ptrdiff_t>(frames[0].offset), rewritten.begin(), rewritten.end());
+        save(tmp.path, bytes);
+        Reader     r(tmp.path);
+        ReadPacket p{};
+        CHECK_THROWS_AS(r.next(p), Error);
+    }
+}
+
+TEST_CASE("cut-off captures read up to the last intact frame")
+{
+    TempCapture tmp;
+    writeFrames(tmp.path, 3);
+    const auto bytes  = bytesOf(tmp.path);
+    const auto frames = framesOf(bytes);
+
+    SECTION("power lost mid-frame")
+    {
+        truncateAt(tmp.path, frames[2].offset + 10);
+        Reader r(tmp.path);
+        CHECK_FALSE(r.complete());
+        CHECK(readAll(r).size() == 6);
+        CHECK(r.unreadBytes() == 10);
+    }
+    SECTION("a tail torn to zeros")
+    {
+        auto torn = bytes;
+        torn.resize(frames[2].offset);
+        torn.resize(torn.size() + 4096, 0);
+        save(tmp.path, torn);
+        CHECK(readAll(tmp.path).size() == 6);
+    }
+    SECTION("the footer cut off")
+    {
+        truncateAt(tmp.path, footerOffset(bytes));
+        Reader r(tmp.path);
+        CHECK_FALSE(r.complete());
+        CHECK_FALSE(r.footerDamaged());
+        CHECK(readAll(r).size() == 9);
+    }
+    SECTION("a damaged footer")
+    {
+        auto damaged = bytes;
+        damaged[damaged.size() - 20] ^= 1;
+        save(tmp.path, damaged);
+        Reader r(tmp.path);
+        CHECK_FALSE(r.complete());
+        CHECK(r.footerDamaged());
+        CHECK(readAll(r).size() == 9);
+    }
+}
+
+TEST_CASE("a damaged middle frame")
+{
+    TempCapture tmp;
+    writeFrames(tmp.path, 3);
+    auto       bytes  = bytesOf(tmp.path);
+    const auto frames = framesOf(bytes);
+    // Damage the second packet frame's size field.
+    const auto target = std::ranges::find_if(frames, [](const FrameRef& f)
+                                             {
+                                                 return f.header.kind == FrameKind::Packets && f.header.baseTimestamp == T0 + 1000;
+                                             });
+    REQUIRE(target != frames.end());
+    bytes[target->offset + 8] ^= 0x40;
+
+    SECTION("with a footer: refused, or skipped in recovery mode")
+    {
+        save(tmp.path, bytes);
+        Reader     r(tmp.path);
+        ReadPacket p{};
+        CHECK_THROWS_AS(readAll(r), Error);
+        const auto recovered = readAll(tmp.path, { .recovery = true });
+        CHECK(recovered.size() == 6);
+    }
+    SECTION("without a footer: the capture ends there, or recovery skips it")
+    {
+        bytes.resize(footerOffset(bytes));
+        save(tmp.path, bytes);
+        CHECK(readAll(tmp.path).size() == 3);
+        Reader r(tmp.path, { .recovery = true });
+        CHECK(readAll(r).size() == 6);
+        CHECK(r.skippedRegions().size() == 1);
+    }
+}
+
+TEST_CASE("a game packet whose opcode differs from its header is a bad frame")
+{
+    TempCapture tmp;
+    writeFrames(tmp.path, 1);
+    auto       bytes     = bytesOf(tmp.path);
+    const auto frame     = framesOf(bytes).at(0);
+    const auto rewritten = rewriteFrame(bytes, frame, [](std::vector<uint8_t>& content)
+                                        {
+                                            auto entry = podAt<PacketEntry>(content, 0);
+                                            entry.opcode ^= 1;
+                                            std::memcpy(content.data(), &entry, sizeof(entry));
+                                        });
+    bytes.resize(frame.offset);
+    bytes.insert(bytes.end(), rewritten.begin(), rewritten.end());
+    save(tmp.path, bytes);
+    CHECK(readAll(tmp.path).empty()); // cut off: ends at the bad frame
+}
+
+TEST_CASE("signatures")
+{
+    TempCapture tmp;
+    auto        policy          = plain();
+    policy.checkpointIntervalMs = 2000;
+    writeFrames(tmp.path, 6, 3, policy);
+    auto bytes = bytesOf(tmp.path);
+
+    SECTION("a clean capture is signed to the end")
+    {
+        Reader     r(tmp.path);
+        const auto v = r.verify();
+        CHECK(v.signedToEnd);
+        CHECK(v.verifiedPackets == 18);
+        CHECK(v.key == r.signingKey());
+        CHECK(v.goodCheckpoints >= 2);
+        CHECK_FALSE(v.firstFailureOffset);
+    }
+    SECTION("a cut-off capture verifies up to its last checkpoint")
+    {
+        const auto frames         = framesOf(bytes);
+        size_t     lastCheckpoint = 0;
+        uint64_t   packetsBefore  = 0;
+        uint64_t   running        = 0;
+        for (const auto& f : frames)
+        {
+            if (f.header.kind == FrameKind::Checkpoint)
+            {
+                lastCheckpoint = f.offset;
+                packetsBefore  = running;
+            }
+            running += f.header.packetCount;
+        }
+        REQUIRE(lastCheckpoint != 0);
+        truncateAt(tmp.path, footerOffset(bytes));
+        Reader     r(tmp.path);
+        const auto v = r.verify();
+        CHECK_FALSE(v.signedToEnd);
+        CHECK(v.verifiedPackets == packetsBefore);
+        CHECK(readAll(r).size() == 18);
+    }
+    // The tampering below changes frame sizes, so it works on cut-off copies,
+    // where no footer offsets need to stay valid.
+    const auto frames = framesOf(bytes);
+    const auto slice  = [&](const FrameRef& f)
+    {
+        return std::vector<uint8_t>(bytes.begin() + static_cast<std::ptrdiff_t>(f.offset), bytes.begin() + static_cast<std::ptrdiff_t>(f.offset + f.size));
+    };
+    const auto rebuild = [&](const std::vector<std::vector<uint8_t>>& parts)
+    {
+        std::vector<uint8_t> out(bytes.begin(), bytes.begin() + static_cast<std::ptrdiff_t>(frames[0].offset));
+        for (const auto& part : parts)
+        {
+            out.insert(out.end(), part.begin(), part.end());
+        }
+        save(tmp.path, out);
+    };
+    std::vector<std::vector<uint8_t>> parts;
+    for (const auto& f : frames)
+    {
+        parts.push_back(slice(f));
     }
 
-    xicap::Header h{};
-    std::memcpy(&h, raw.data(), sizeof(h));
-    REQUIRE(h.extensionCount == 1);
-
-    xicap::ExtensionBlockHeader eh{};
-    std::memcpy(&eh, raw.data() + sizeof(h), sizeof(eh));
-    REQUIRE(eh.type == xicap::EXT_ZSTD_DICT);
-
-    h.extensionCount = 0;
-    h.versionMinor   = 0;
-    std::memcpy(raw.data(), &h, sizeof(h));
-    raw.erase(raw.begin() + sizeof(h), raw.begin() + sizeof(h) + sizeof(eh) + eh.length);
-
-    // The footer's recorded frame offsets shift with the removed block, so this
-    // stands in for a truncated 2.0 capture: the reader rebuilds by scanning.
-    raw.resize(raw.size() - sizeof(xicap::FooterTrailer));
-
-    TempCapture legacy;
+    SECTION("an edited packet with a fixed CRC still reads but fails verification")
     {
-        std::ofstream f(legacy.path, std::ios::binary);
-        f.write(reinterpret_cast<const char*>(raw.data()), static_cast<std::streamsize>(raw.size()));
+        parts[0] = rewriteFrame(bytes, frames[0], [](std::vector<uint8_t>& content)
+                                {
+                                    content[sizeof(PacketEntry) + 6] ^= 0xFF;
+                                });
+        rebuild(parts);
+        Reader r(tmp.path);
+        CHECK(readAll(r).size() == 18);
+        const auto v = r.verify();
+        CHECK_FALSE(v.signedToEnd);
+        CHECK(v.verifiedPackets == 0);
+        CHECK(v.firstFailureOffset);
     }
+    SECTION("swapped frames fail from the first swap")
+    {
+        std::swap(parts[0], parts[1]);
+        rebuild(parts);
+        Reader     r(tmp.path);
+        const auto v = r.verify();
+        CHECK(v.verifiedPackets == 0);
+        CHECK(v.firstFailureOffset);
+    }
+}
 
-    xicap::Reader r(legacy.path);
-    CHECK(r.versionMinor() == 0);
-    CHECK(r.extensions().empty());
-    CHECK(readAllOwned(r).size() == 25);
+TEST_CASE("checkpoints follow activity")
+{
+    TempCapture tmp;
+    const auto  checkpoints = [&]
+    {
+        const auto frames = framesOf(bytesOf(tmp.path));
+        return std::ranges::count_if(frames, [](const FrameRef& f)
+                                     {
+                                         return f.header.kind == FrameKind::Checkpoint;
+                                     });
+    };
+
+    SECTION("a busy session signs about once a minute")
+    {
+        Writer w(tmp.path, config());
+        for (uint64_t s = 0; s < 600; ++s)
+        {
+            w.write(T0 + s * 1000, PacketDirection::ServerToClient, gamePacket(0x010, 16));
+        }
+        w.flush();
+        CHECK((checkpoints() >= 9 && checkpoints() <= 10));
+        w.close();
+    }
+    SECTION("an idle flush signs a burst once")
+    {
+        Writer w(tmp.path, config());
+        w.write(T0, PacketDirection::ServerToClient, gamePacket(0x010, 16));
+        w.flush(); // ends the frame
+        CHECK(checkpoints() == 0);
+        w.flush(); // idle: signs it
+        CHECK(checkpoints() == 1);
+        const auto size = fs::file_size(tmp.path);
+        w.flush(); // nothing new
+        CHECK(fs::file_size(tmp.path) == size);
+        w.close();
+    }
+    SECTION("login and logout sign what came before, but not an empty start")
+    {
+        Writer w(tmp.path, config());
+        w.mark(MarkerKind::Login);
+        CHECK(checkpoints() == 0);
+        w.write(T0, PacketDirection::ServerToClient, gamePacket(0x010, 16));
+        w.mark(MarkerKind::Logout);
+        CHECK(checkpoints() == 1);
+        w.mark(MarkerKind::Login);
+        CHECK(checkpoints() == 1);
+        w.write(T0 + 10'000, PacketDirection::ServerToClient, gamePacket(0x010, 16));
+        w.close();
+        const auto packets = readAll(tmp.path);
+        REQUIRE(packets.size() == 2);
+        REQUIRE(packets[0].markers.size() == 1);
+        CHECK(packets[0].markers[0].kind == MarkerKind::Login);
+        REQUIRE(packets[1].markers.size() == 2);
+        CHECK(packets[1].markers[0].kind == MarkerKind::Logout);
+        CHECK(packets[1].markers[1].kind == MarkerKind::Login);
+    }
+}
+
+TEST_CASE("marker text is cut between characters")
+{
+    TempCapture tmp;
+    std::string text(1023, 'a');
+    text += "\xC3\xA9"; // é straddles the 1024-byte limit
+    {
+        Writer w(tmp.path, config());
+        w.mark(MarkerKind::Note, text);
+        w.write(T0, PacketDirection::ServerToClient, gamePacket(0x010, 8));
+        w.close();
+    }
+    CHECK(readAll(tmp.path).at(0).markers.at(0).text == std::string(1023, 'a'));
+}
+
+TEST_CASE("seek to a time")
+{
+    TempCapture tmp;
+    writeFrames(tmp.path, 5);
+    Reader r(tmp.path);
+    REQUIRE(r.seekToTime(T0 + 2001) == SeekResult::Ok);
+    ReadPacket p{};
+    REQUIRE(r.next(p));
+    CHECK(p.timestamp == T0 + 2001);
+    CHECK(r.currentFrameIndex() == 2);
+}
+
+TEST_CASE("Ed25519 matches RFC 8032 test 1")
+{
+    // RFC 8032 section 7.1, TEST 1: empty message.
+    SecretSeed                 seedBytes{ 0x9d, 0x61, 0xb1, 0x9d, 0xef, 0xfd, 0x5a, 0x60, 0xba, 0x84, 0x4a, 0xf4, 0x92, 0xec, 0x2c, 0xc4, 0x44, 0x49, 0xc5, 0x69, 0x7b, 0x32, 0x69, 0x19, 0x70, 0x3b, 0xac, 0x03, 0x1c, 0xae, 0x7f, 0x60 };
+    const PublicKey            expected{ 0xd7, 0x5a, 0x98, 0x01, 0x82, 0xb1, 0x0a, 0xb7, 0xd5, 0x4b, 0xfe, 0xd3, 0xc9, 0x64, 0x07, 0x3a, 0x0e, 0xe1, 0x72, 0xf3, 0xda, 0xa6, 0x23, 0x25, 0xaf, 0x02, 0x1a, 0x68, 0xf7, 0x07, 0x51, 0x1a };
+    const internal::SigningKey key(seedBytes);
+    CHECK(key.publicKey() == expected);
+
+    uint8_t   secret[64];
+    PublicKey pub{};
+    crypto_ed25519_key_pair(secret, pub.data(), seedBytes.data());
+    Signature sig{};
+    crypto_ed25519_sign(sig.data(), secret, nullptr, 0);
+    const Signature expectedSig{ 0xe5, 0x56, 0x43, 0x00, 0xc3, 0x60, 0xac, 0x72, 0x90, 0x86, 0xe2, 0xcc, 0x80, 0x6e, 0x82, 0x8a, 0x84, 0x87, 0x7f, 0x1e, 0xb8, 0xe5, 0xd9, 0x74, 0xd8, 0x73, 0xe0, 0x65, 0x22, 0x49, 0x01, 0x55, 0x5f, 0xb8, 0x82, 0x15, 0x90, 0xa3, 0x3b, 0xac, 0xc6, 0x1e, 0x39, 0x70, 0x1c, 0xf9, 0xb4, 0x6b, 0xd2, 0x5b, 0xf5, 0xf0, 0x59, 0x5b, 0xbe, 0x24, 0x65, 0x51, 0x41, 0x43, 0x8e, 0x7a, 0x10, 0x0b };
+    CHECK(sig == expectedSig);
+}
+
+TEST_CASE("SHA-512 matches FIPS 180-4 for abc")
+{
+    std::array<uint8_t, 64> hash{};
+    crypto_sha512(hash.data(), reinterpret_cast<const uint8_t*>("abc"), 3);
+    CHECK(hash[0] == 0xdd);
+    CHECK(hash[1] == 0xaf);
+    CHECK(hash[63] == 0x9f);
+}
+
+TEST_CASE("CRC-32 check value")
+{
+    CHECK(crcOf({ reinterpret_cast<const uint8_t*>("123456789"), 9 }) == 0xCBF43926);
+}
+
+#ifdef __linux__
+TEST_CASE("write errors are raised")
+{
+    Writer w("/dev/full", config());
+    w.write(T0, PacketDirection::ServerToClient, gamePacket(0x010, 16));
+    CHECK_THROWS_AS(w.flush(), Error);
+}
+#endif
+
+TEST_CASE("the conformance set reads as recorded")
+{
+    size_t checked = 0;
+    for (const auto& entry : fs::directory_iterator(XICAP_VECTORS_DIR))
+    {
+        if (entry.path().extension() != ".xicap")
+        {
+            continue;
+        }
+        auto       expectedPath = entry.path();
+        const auto expected     = bytesOf(expectedPath.replace_extension(".json"));
+        INFO(entry.path().filename().string());
+        CHECK(vectors::reading(entry.path()) == std::string(expected.begin(), expected.end()));
+        checked++;
+    }
+    CHECK(checked >= 16);
+}
+
+TEST_CASE("the writer keeps frames within the reader's limits")
+{
+    TempCapture tmp;
+    FramePolicy policy        = plain();
+    policy.maxPacketsPerFrame = 1'000'000;        // over the 65535 a frame can hold
+    policy.maxFrameSize       = 64 * 1024 * 1024; // over the 16 MiB a frame can hold
+    policy.maxFrameTimeMs     = 1'000'000;
+    {
+        Writer w(tmp.path, config(), policy);
+        for (int i = 0; i < 70'000; ++i)
+        {
+            w.write(T0, PacketDirection::ServerToClient, gamePacket(0x010, 8));
+        }
+        const std::vector<std::byte> big(300'000, std::byte{ 1 });
+        for (int i = 0; i < 60; ++i) // 18 MB on one channel
+        {
+            w.write({ .timestamp = T0, .direction = PacketDirection::ServerToClient, .data = big, .channel = 2, .opcode = 1 });
+        }
+        w.close();
+    }
+    Reader r(tmp.path);
+    CHECK(readAll(r).size() == 70'060);
+    CHECK(r.totalFrames() >= 3);
 }
