@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(xicap VERSION 2.0.0 LANGUAGES CXX)
+project(xicap VERSION 3.0.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -47,6 +47,8 @@ set(XICAP_SOURCES
     src/writer.cpp
     src/reader.cpp
     src/dictionary.cpp
+    vendor/monocypher/monocypher.c
+    vendor/monocypher/optional/monocypher-ed25519.c
 )
 
 set(XICAP_HEADERS
@@ -64,6 +66,9 @@ target_include_directories(xicap
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:include>
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/vendor/monocypher
 )
 
 if(zstd_FOUND)
@@ -131,8 +136,8 @@ if(XICAP_BUILD_TESTS)
 
     add_executable(xicap_tests tests/xicap_tests.cpp)
     target_link_libraries(xicap_tests PRIVATE xicap Catch2::Catch2WithMain)
-    # Tests reach into src/internal to rebuild frame CRCs when crafting bad files.
-    target_include_directories(xicap_tests PRIVATE src)
+    # Tests reach into src/internal to rebuild CRCs and chains when crafting bad files.
+    target_include_directories(xicap_tests PRIVATE src vendor/monocypher)
 
     list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
     include(Catch)

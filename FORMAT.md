@@ -256,11 +256,16 @@ bytes the addon injected.
 
 | Off | Size | Field | Notes |
 |----:|-----:|-------|-------|
-| 0 | 2 | `packetIndex` | the packet in this frame the marker attaches to, from 0 |
+| 0 | 2 | `packetIndex` | the packet in this frame the marker sits just before, from 0 |
 | 2 | 1 | `kind` | `0` note, `1` login, `2` logout; readers treat unknown kinds as notes |
 | 3 | 1 | `reserved` | |
 | 4 | 2 | `textLength` | |
 | 6 | `textLength` | text | UTF-8, no terminator |
+
+A marker marks a moment between two packets, so it sits just before the next
+packet written after it. A logout marker therefore sits before the first packet
+of the next login, and a marker with no packet after it when the capture closes
+is dropped. A frame's markers follow the order they were written in.
 
 ### Checkpoint frames
 
@@ -458,7 +463,7 @@ it parses.
   the first frame boundary after 60 seconds of frames without one, when a flush
   finds the capture idle with frames since the last checkpoint, and when the
   host marks a login or logout: it ends the frame being built and writes the
-  checkpoint before the packet that carries the marker. It never writes one
+  checkpoint then, so the marker lands in the next frame. It never writes one
   when it has written no frame since the last, so a capture's opening login
   has none.
 - **When captures start.** A recorder starts a new capture when a

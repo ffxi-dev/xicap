@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <span>
 #include <stdexcept>
@@ -16,48 +17,133 @@ inline constexpr size_t CAPTURE_AGENT_MAX_LEN  = 32;
 inline constexpr size_t CHARACTER_NAME_MAX_LEN = 16;
 inline constexpr size_t WORLD_NAME_MAX_LEN     = 16;
 
+using CaptureId  = std::array<uint8_t, 16>;
+using PublicKey  = std::array<uint8_t, 32>;
+using SecretSeed = std::array<uint8_t, 32>;
+using Signature  = std::array<uint8_t, 64>;
+using ChainValue = std::array<uint8_t, 64>;
+
+enum class ClockSource : uint8_t
+{
+    Unknown   = 0,
+    Live      = 1,
+    Converted = 2,
+};
+
+enum class Origin : uint8_t
+{
+    Unknown   = 0,
+    Live      = 1,
+    Converted = 2,
+};
+
+enum class Network : uint8_t
+{
+    Unknown = 0,
+    Retail  = 1,
+    Private = 2,
+};
+
+enum class StartContext : uint8_t
+{
+    Unknown    = 0,
+    Login      = 1,
+    MidSession = 2,
+};
+
+// Channel numbers come from the registry in FORMAT.md. Readers pass on
+// packets of channels this enum does not name.
+enum class Channel : uint8_t
+{
+    Game   = 0,
+    Search = 1,
+};
+
+enum class FrameKind : uint8_t
+{
+    Checkpoint = 0x01,
+    Packets    = 0x80,
+};
+
+enum class MarkerKind : uint8_t
+{
+    Note   = 0,
+    Login  = 1,
+    Logout = 2,
+};
+
+enum class PacketDirection : uint8_t
+{
+    ServerToClient = 0,
+    ClientToServer = 1
+};
+
+namespace PacketFlag
+{
+inline constexpr uint16_t ClientToServer = 0x0001;
+inline constexpr uint16_t Injected       = 0x0002;
+inline constexpr uint16_t Blocked        = 0x0004;
+inline constexpr uint16_t Modified       = 0x0008;
+inline constexpr uint16_t FirstInChunk   = 0x0010;
+inline constexpr uint16_t Provenance     = 0x00FE; // bits 1 to 7
+inline constexpr uint16_t Excluded       = 0x0100;
+inline constexpr uint16_t Redacted       = 0x0200;
+inline constexpr uint16_t KnownRequired  = Excluded | Redacted;
+inline constexpr uint16_t Required       = 0xFF00; // bits 8 to 15
+} // namespace PacketFlag
+
 #pragma pack(push, 1)
 
-// Stable POL lobby identifiers carried in the Header. The runtime
-// TC_OPERATION_MAKE blob lives in EXT_LOBBY_SNAPSHOT, not here.
-struct LobbyIdentity
+struct CharacterIdentity
 {
-    uint32_t                                 contentId;      // POL ffxi_id
-    uint16_t                                 worldContentId; // ffxi_id_world
+    uint32_t                                 contentId;
+    uint32_t                                 worldContentId;
     uint16_t                                 worldId;
-    uint16_t                                 status;
-    uint8_t                                  pendingRename : 1;
-    uint8_t                                  pendingRaceChange : 1;
-    uint8_t                                  reservedFlags : 6;
-    uint8_t                                  worldTableIndex; // ffxi_id_world_tbl
+    uint16_t                                 reserved;
     std::array<char, CHARACTER_NAME_MAX_LEN> characterName;
     std::array<char, WORLD_NAME_MAX_LEN>     worldName;
 };
-static_assert(sizeof(LobbyIdentity) == 44);
+static_assert(sizeof(CharacterIdentity) == 44);
 
-// On-disk file header. End-of-capture fields are back-patched on clean close
-// and remain zero on truncated captures.
+// Written once, with every field final. See FORMAT.md.
 struct Header
 {
-    uint32_t                                 magic;
+    std::array<uint8_t, 8>                   magic;
     uint8_t                                  versionMajor;
     uint8_t                                  versionMinor;
-    std::array<char, CAPTURE_AGENT_MAX_LEN>  captureAgent;
-    uint16_t                                 extensionCount;
-    std::array<char, CLIENT_VERSION_MAX_LEN> clientVersion;
-    uint16_t                                 startZoneId;
+    uint16_t                                 headerSize;
+    uint32_t                                 extensionCount;
+    uint64_t                                 reserved0;
+    CaptureId                                captureId;
+    CaptureId                                previousCaptureId;
     uint64_t                                 startTimestamp;
-    LobbyIdentity                            lobby;
-    uint8_t                                  startWeather;
-    uint8_t                                  padding0;
+    std::array<uint8_t, 3>                   reserved1;
+    ClockSource                              clockSource;
+    Origin                                   origin;
+    Network                                  network;
+    StartContext                             startContext;
+    uint8_t                                  reserved2;
     uint32_t                                 dictionaryId;
-    uint64_t                                 endTimestamp;     // 0 on truncated captures
-    uint64_t                                 totalPacketCount; // 0 on truncated captures
-    uint16_t                                 endZoneId;        // 0 on truncated captures
-    std::array<uint8_t, 106>                 reserved;
+    uint32_t                                 reserved3;
+    PublicKey                                signingKey;
+    std::array<char, CAPTURE_AGENT_MAX_LEN>  captureAgent;
+    std::array<char, CLIENT_VERSION_MAX_LEN> clientVersion;
+    CharacterIdentity                        character;
+    std::array<uint8_t, 160>                 reserved4;
+    uint32_t                                 headerCrc;
 };
-static_assert(sizeof(Header) == 256);
+static_assert(sizeof(Header) == 384);
+static_assert(offsetof(Header, startTimestamp) == 56);
+static_assert(offsetof(Header, clockSource) == 67);
+static_assert(offsetof(Header, startContext) == 70);
+static_assert(offsetof(Header, dictionaryId) == 72);
+static_assert(offsetof(Header, signingKey) == 80);
+static_assert(offsetof(Header, captureAgent) == 112);
+static_assert(offsetof(Header, clientVersion) == 144);
+static_assert(offsetof(Header, character) == 176);
+static_assert(offsetof(Header, headerCrc) == 380);
 
+// Followed by the payload, then a u32 CRC of type, length, and payload.
 struct ExtensionBlockHeader
 {
     uint32_t type;
@@ -65,46 +151,51 @@ struct ExtensionBlockHeader
 };
 static_assert(sizeof(ExtensionBlockHeader) == 8);
 
-// Frame layout on disk:
-//   FrameHeader (20 B)
-//   compressed payload (compressedSize bytes)
-//   uint32_t crc32          // CRC-32/IEEE over (FrameHeader bytes + compressed payload)
+// Followed by payloadSize bytes, then a u32 CRC of everything from magic on.
 struct FrameHeader
 {
-    uint32_t compressedSize;
-    uint32_t packetCount;
-    uint64_t baseTimestamp;
-    uint16_t zoneId;
-    uint16_t markerCount;
+    uint32_t  magic;
+    FrameKind kind;
+    uint8_t   reserved0;
+    uint16_t  markerCount;
+    uint32_t  payloadSize;
+    uint32_t  packetCount;
+    uint64_t  baseTimestamp;
+    uint16_t  zoneId;
+    uint16_t  reserved1;
 };
-static_assert(sizeof(FrameHeader) == 20);
+static_assert(sizeof(FrameHeader) == 28);
+static_assert(offsetof(FrameHeader, baseTimestamp) == 16);
 
-// Followed by char text[textLength] when textLength > 0.
-struct FrameMarker
-{
-    uint16_t packetIndex;
-    uint16_t textLength;
-};
-static_assert(sizeof(FrameMarker) == 4);
-
-// deltaMs is from previous packet, clipped to UINT16_MAX (writers force a frame
-// flush before that ever happens, so the clip is unreachable in practice).
-// flags bit 0 = direction (0 = server→client, 1 = client→server). Other bits
-// are reserved and must be zero.
-// Followed by uint8_t data[length] (full FFXI packet, including its 4-byte
-// header).
+// Followed by `length` bytes of packet data.
 struct PacketEntry
 {
     uint16_t deltaMs;
-    uint16_t length;
-    uint16_t opcode;
     uint16_t flags;
+    uint8_t  channel;
+    uint8_t  reserved;
+    uint16_t opcode;
+    uint32_t length;
 };
-static_assert(sizeof(PacketEntry) == 8);
+static_assert(sizeof(PacketEntry) == 12);
 
-inline constexpr uint16_t PACKET_FLAG_DIRECTION_BIT = 0x0001;
+// Followed by textLength bytes of UTF-8. Sits just before packet packetIndex.
+struct FrameMarker
+{
+    uint16_t   packetIndex;
+    MarkerKind kind;
+    uint8_t    reserved;
+    uint16_t   textLength;
+};
+static_assert(sizeof(FrameMarker) == 6);
 
-// One per frame, present only on clean close.
+struct CheckpointPayload
+{
+    ChainValue chain;
+    Signature  signature;
+};
+static_assert(sizeof(CheckpointPayload) == 128);
+
 struct FooterIndexEntry
 {
     uint64_t timestamp;
@@ -114,61 +205,137 @@ struct FooterIndexEntry
 };
 static_assert(sizeof(FooterIndexEntry) == 24);
 
-// Last 24 bytes of the file. Absent => truncated capture; reader falls back
-// to scanning frames.
 struct FooterTrailer
 {
-    uint32_t magic;
-    uint32_t entryCount;
-    uint64_t indexOffset;
-    uint8_t  reserved[8];
+    uint64_t  endTimestamp;
+    uint64_t  totalPacketCount;
+    uint32_t  reserved;
+    uint32_t  entryCount;
+    uint64_t  indexOffset;
+    uint32_t  indexCrc;
+    uint32_t  frameCount;
+    Signature signature;
+    uint32_t  trailerCrc;
+    uint32_t  magic;
 };
-static_assert(sizeof(FooterTrailer) == 24);
+static_assert(sizeof(FooterTrailer) == 112);
+static_assert(offsetof(FooterTrailer, signature) == 40);
+static_assert(offsetof(FooterTrailer, trailerCrc) == 104);
+
+struct ExclusionPolicyHeader
+{
+    std::array<char, 32> name;
+    uint32_t             version;
+    uint16_t             ruleCount;
+    uint16_t             reserved;
+};
+static_assert(sizeof(ExclusionPolicyHeader) == 40);
+
+struct ExclusionRuleHeader
+{
+    uint8_t  channel;
+    uint8_t  direction;
+    uint8_t  action;
+    uint8_t  reserved;
+    uint16_t opcode;
+    uint16_t rangeCount;
+};
+static_assert(sizeof(ExclusionRuleHeader) == 8);
+
+struct SourceHeader
+{
+    std::array<char, 16>    format;
+    std::array<char, 16>    formatVersion;
+    uint32_t                skippedRecords;
+    int32_t                 utcOffsetSeconds;
+    std::array<uint8_t, 64> sourceHash;
+    uint32_t                metadataLength;
+};
+static_assert(sizeof(SourceHeader) == 108);
 
 #pragma pack(pop)
 
-enum class PacketDirection : uint8_t
+// Well-known extension block types. 0x0001 to 0x0007 held client memory copies
+// in 2.x and are retired.
+enum ExtensionType : uint32_t
+{
+    EXT_ZSTD_DICT        = 0x0008,
+    EXT_EXCLUSION_POLICY = 0x0009,
+    EXT_SOURCE           = 0x000A,
+};
+
+inline constexpr uint32_t EXT_RETIRED_FIRST = 0x0001;
+inline constexpr uint32_t EXT_RETIRED_LAST  = 0x0007;
+
+enum class ExclusionDirection : uint8_t
 {
     ServerToClient = 0,
-    ClientToServer = 1
+    ClientToServer = 1,
+    Both           = 2,
+};
+
+enum class ExclusionAction : uint8_t
+{
+    Stub      = 1,
+    ZeroRange = 2,
+};
+
+struct ByteRange
+{
+    uint32_t offset;
+    uint32_t length; // 0xFFFFFFFF runs to the packet's end
+};
+
+struct ExclusionRule
+{
+    uint8_t                channel{};
+    ExclusionDirection     direction{};
+    ExclusionAction        action{};
+    uint16_t               opcode{};
+    std::vector<ByteRange> ranges;
+};
+
+struct ExclusionPolicy
+{
+    std::string                name;
+    uint32_t                   version{};
+    std::vector<ExclusionRule> rules;
+};
+
+// Metadata a converted capture carries about its source.
+struct SourceInfo
+{
+    std::string             format;
+    std::string             formatVersion;
+    uint32_t                skippedRecords{};
+    int32_t                 utcOffsetSeconds{};
+    std::array<uint8_t, 64> sourceHash{};
+    std::vector<uint8_t>    metadata;
 };
 
 struct ReadMarker
 {
+    MarkerKind  kind;
     std::string text;
 };
 
-// Yielded by Reader::next. ``data`` and ``markers`` reference internal Reader
-// buffers and are invalidated by the next call to ``next``, ``seekTo*``,
-// ``reset``, or destruction. Callers that need ownership should copy.
+// Yielded by Reader::next. data and markers reference internal Reader buffers
+// and are invalidated by the next call to next, a seek, reset, or destruction.
 struct ReadPacket
 {
     uint64_t                    timestamp;
+    uint8_t                     channel;
     uint16_t                    opcode;
+    uint16_t                    flags;
     PacketDirection             direction;
     std::span<const std::byte>  data;
-    std::span<const ReadMarker> markers;
+    std::span<const ReadMarker> markers; // markers just before this packet
 };
 
 struct ExtensionBlock
 {
     uint32_t             type;
     std::vector<uint8_t> data;
-};
-
-// Well-known extension block type ids. See FORMAT.md.
-enum ExtensionType : uint32_t
-{
-    EXT_PLAYER         = 0x0001,
-    EXT_INVENTORY      = 0x0002,
-    EXT_ENTITY         = 0x0003,
-    EXT_MISSIONS       = 0x0004,
-    EXT_SPELLS         = 0x0005,
-    EXT_ABILITIES      = 0x0006,
-    EXT_LOBBY_SNAPSHOT = 0x0007,
-    // Format-level, not agent data: the zstd dictionary the capture was written
-    // with. The Reader consumes it and does not surface it in extensions().
-    EXT_ZSTD_DICT = 0x0008,
 };
 
 enum class ErrorCode
@@ -187,9 +354,19 @@ enum class ErrorCode
     WriterClosed,
     AddExtensionAfterPackets,
     AddMarkerWithoutPacket,
-    // Appended only — the bindings mirror this enum by ordinal.
     PacketTooLarge,
     CompressFailed,
+    // Appended only: the bindings mirror this enum by ordinal.
+    HeaderChecksumMismatch,
+    ExtensionChecksumMismatch,
+    MissingDictionary,
+    MissingPolicy,
+    UnknownFrameKind,
+    UnknownPacketFlag,
+    InvalidPolicy,
+    InvalidExtension,
+    WriteFailed,
+    PacketTooShort,
 };
 
 class Error : public std::runtime_error
