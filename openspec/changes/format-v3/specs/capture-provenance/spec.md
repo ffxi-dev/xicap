@@ -39,7 +39,7 @@ Each packet SHALL record its direction and whether the game client's hook report
 - **THEN** the capture holds it with the injected flag set
 
 ### Requirement: The header says where a capture came from
-The header SHALL record whether the capture was recorded live or converted from another format, whether it is from retail, a private server, or unknown, the server's name, the client build, the program that recorded it, and whether the capture starts at a login, mid-session, or unknown. A converted capture SHALL carry its source's metadata, such as a captain manifest, in a source extension, with the number of source records it skipped.
+The header SHALL record whether the capture was recorded live or converted from another format, whether it is from retail, a private server, or unknown, the client build, the program that recorded it, and whether the capture starts at a login, mid-session, or unknown. A converted capture SHALL carry its source's metadata, such as a captain manifest, in a source extension, with the number of source records it skipped.
 
 #### Scenario: Private-server captain log
 - **WHEN** a captain log whose manifest says `IsRetail = false` is converted

@@ -2,7 +2,7 @@
 
 ## 1. Specification
 
-- [ ] 1.1 Rewrite `FORMAT.md` for format 3: magic, header (feature mask, clock source, origin, retail or private, server name, capture ids, public key, header CRC), extension blocks with CRCs, frames with magic and kind, packet flags in two groups, checkpoints, footer with end fields and final signature, the zstd rules, and the exact chain and signature inputs; verify every structure's size and offsets against `static_assert`s in `types.h`
+- [ ] 1.1 Rewrite `FORMAT.md` for format 3: magic, header (feature mask, clock source, origin, retail or private, capture ids, public key, header CRC), extension blocks with CRCs, frames with magic and kind, packet flags in two groups, checkpoints, footer with end fields and final signature, the zstd rules, and the exact chain and signature inputs; verify every structure's size and offsets against `static_assert`s in `types.h`
 - [ ] 1.2 Replace the worked example with a hex dump of a real conformance file, annotated byte by byte; verify the test-only reader (6.1) reads the dumped bytes
 - [ ] 1.3 Update `AGENTS.md`: readers keep reading every released version from production on, and `tests/spec_reader.py` is a test-only reader, not a binding
 

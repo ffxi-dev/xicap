@@ -78,9 +78,8 @@ there is none, with every field final.
 | 80 | 32 | `signingKey` | the recorder's Ed25519 public key |
 | 112 | 32 | `captureAgent` | text: the program that recorded the capture, with its version |
 | 144 | 32 | `clientVersion` | text: the game client's build |
-| 176 | 32 | `serverName` | text: the server, such as `retail` or a private server's name |
-| 208 | 44 | `character` | `CharacterIdentity`: the capture's character |
-| 252 | 128 | `reserved` | |
+| 176 | 44 | `character` | `CharacterIdentity`: the capture's character |
+| 220 | 160 | `reserved` | |
 | 380 | 4 | `headerCrc` | CRC-32 of bytes `0` to `headerSize - 4` |
 
 The magic follows PNG's pattern:
@@ -96,7 +95,7 @@ stops DOS `type`. 2.x files start with `XCAP`, so a 3.x reader refuses them as a
 bad magic.
 
 `headerCrc` is always the last 4 bytes of the header. A later minor version may
-grow the header: it adds fields after offset 252, moves the CRC to the new end,
+grow the header: it adds fields in the reserved bytes or after them, moves the CRC to the new end,
 and raises `headerSize`.
 
 A reader refuses the file if the magic differs, `versionMajor` is not 3,
