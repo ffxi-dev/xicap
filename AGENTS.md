@@ -10,7 +10,7 @@ cmake --build build --target xicap_tests
 ctest --test-dir build --output-on-failure --build-config Release
 ```
 
-On Windows run these from an MSVC developer shell (x64). The tools (`xicap_dump`) need the Ashita SDK (`ASHITA4_SDK_PATH`) and an x86 build, because FFXI is a 32-bit client; keep `-DXICAP_BUILD_TOOLS=OFF` otherwise.
+On Windows run these from an MSVC developer shell (x64). `xicap_dump` prints what a capture holds; it builds by default (`-DXICAP_BUILD_TOOLS=OFF` skips it).
 
 Bindings, each with its own CI workflow:
 
@@ -22,7 +22,8 @@ go test ./go/                                          # Go via cgo; needs g++ a
 
 ## Rules
 
-- A change to the on-disk format updates `FORMAT.md`, bumps the version in the header constants, and adds reader and writer tests, including reading captures written by the previous version. Captures are archived for the long term, so readers keep reading every released version.
+- A change to the on-disk format updates `FORMAT.md`, bumps the version in the header constants, and adds reader and writer tests. Captures are archived for the long term: from the day the owner declares the format in production, readers keep reading every released version, with tests that read captures written by each one. Until then a draft may break compatibility.
+- `tests/spec_reader.py` is a reader written from `FORMAT.md` alone, for tests only. It proves the spec is complete; it is not a binding and never ships.
 - The C++ library and the Python, JavaScript, and Go bindings change together. Bindings wrap the C++ library; none reimplements the format.
 
 ## Part of Vault

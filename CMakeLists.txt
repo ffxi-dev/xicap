@@ -98,21 +98,8 @@ install(EXPORT xicapTargets
 # Tools
 option(XICAP_BUILD_TOOLS "Build xicap tools" ON)
 if(XICAP_BUILD_TOOLS)
-    find_path(ASHITA_SDK_PATH
-        NAMES "Ashita.h"
-        PATHS ENV ASHITA4_SDK_PATH
-    )
-    if(NOT ASHITA_SDK_PATH)
-        message(FATAL_ERROR "Ashita SDK not found. Set ASHITA4_SDK_PATH environment variable.")
-    endif()
-    message(STATUS "Found Ashita SDK: ${ASHITA_SDK_PATH}")
-
     add_executable(xicap_dump tools/xicap_dump.cpp)
     target_link_libraries(xicap_dump PRIVATE xicap)
-    target_include_directories(xicap_dump PRIVATE
-        ${ASHITA_SDK_PATH}
-        ${ASHITA_SDK_PATH}/ffxi
-    )
 endif()
 
 # Fixture generator (no Ashita SDK needed; used by the JS test suite).
