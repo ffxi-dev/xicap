@@ -38,8 +38,8 @@ The writer writes the header when the first frame is flushed, so `startTimestamp
 - The header can carry its own CRC.
 - Rejected: keep the rewrites. They are the only thing standing between the format and an append-only file, and they make Mogsafe compare two headers on every close.
 
-### Feature mask, frame kinds, two flag groups
-- Header: a u64 `requiredFeatures`; a reader refuses any bit it does not know. Format 3.0 defines none: every 3.x reader knows everything in 3.0, including exclusion and signing. The mask is for features later minor versions add.
+### Frame kinds and two flag groups
+- Rejected: a header feature mask (owner, 2026-10-30). Frame kinds and packet flags already mark what a reader must understand where it is used, and anything else old readers would misread takes a major version. A mask would only let old readers open newer files that skip the new feature, which matters little once readers keep every released version.
 - Frames: a kind byte. Kinds below 0x80 may be skipped by readers that do not know them; kinds from 0x80 must be understood. 3.0 defines packets (0x80) and checkpoint (0x01).
 - `PacketEntry.flags`: the low byte holds flags a reader may ignore (injected, blocked, modified, first in datagram); the high byte holds flags it must understand (excluded, redacted). Direction stays bit 0 and every 3.x reader knows it.
 - Rejected: one version number for everything. A reader cannot tell which part of a newer file it can still read.

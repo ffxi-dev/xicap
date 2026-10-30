@@ -25,11 +25,11 @@ A writer SHALL write the header once, with every field final, before the first f
 - **THEN** the first read's bytes are a prefix of the second read's
 
 ### Requirement: Features a reader must understand
-The header SHALL carry a feature mask in which every set bit names a feature a reader must understand to read the file. Readers SHALL refuse a file with a bit they do not know. Frame kinds and packet flags SHALL each be split into values a reader may skip or ignore and values it must understand.
+Frame kinds and packet flags SHALL each be split into values a reader may skip or ignore and values it must understand. Readers SHALL refuse a file holding a must-understand value they do not know. A change that old readers would misread without such a value to stop them SHALL take a new major version.
 
-#### Scenario: Unknown required feature
-- **WHEN** a reader opens a file whose feature mask has a bit it does not know
-- **THEN** it refuses the file and names the bit
+#### Scenario: Unknown must-understand frame kind
+- **WHEN** a reader meets a frame of an unknown kind in the must-understand range
+- **THEN** it refuses the file and names the kind
 
 #### Scenario: Unknown optional frame kind
 - **WHEN** a reader meets a frame of an unknown kind in the skippable range
@@ -79,7 +79,7 @@ The repository SHALL hold a set of test files, each with its expected reading, c
 
 #### Scenario: Coverage
 - **WHEN** the conformance set is listed
-- **THEN** it holds at least a clean capture, an empty capture, a cut-off capture, a torn tail, a damaged middle frame with and without a footer, an unknown required feature, an unknown skippable frame kind, a missing dictionary, excluded and redacted packets, packets on every registered channel and on an unknown one, and a capture with a bad signature
+- **THEN** it holds at least a clean capture, an empty capture, a cut-off capture, a torn tail, a damaged middle frame with and without a footer, an unknown must-understand frame kind and flag, an unknown skippable frame kind, a missing dictionary, excluded and redacted packets, packets on every registered channel and on an unknown one, and a capture with a bad signature
 
 #### Scenario: Spec alone is enough
 - **WHEN** the test-only reader, which uses only `FORMAT.md`, zstd, and a signature library, reads the conformance set

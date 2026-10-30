@@ -11,9 +11,9 @@ is, a later draft may change any part of it without keeping compatibility.
 - Every integer is little-endian. Structures are byte-packed, with no padding.
 - Offsets and sizes are in bytes. `u8`, `u16`, `u32`, `u64` are unsigned; `i32`
   is two's complement.
-- `reserved` fields and bytes are written as zero. Readers ignore their value,
-  unless a feature bit (see [Required features](#required-features)) gives them
-  a meaning.
+- `reserved` fields and bytes are written as zero, and readers ignore their
+  value. A later minor version may give them a meaning only where an old reader
+  can safely ignore it.
 - A text field of N bytes holds UTF-8, padded with zero bytes. It holds at most
   N - 1 bytes of text, cut only between characters, so it always ends with at
   least one zero byte.
@@ -63,7 +63,7 @@ there is none, with every field final.
 | 9 | 1 | `versionMinor` | `0` |
 | 10 | 2 | `headerSize` | `384` in 3.0. Readers accept any value from 384 to 4096 and skip to it |
 | 12 | 4 | `extensionCount` | number of extension blocks after the header |
-| 16 | 8 | `requiredFeatures` | see [Required features](#required-features) |
+| 16 | 8 | `reserved` | |
 | 24 | 16 | `captureId` | 16 random bytes, never all zero |
 | 40 | 16 | `previousCaptureId` | the capture this one continues, or all zero |
 | 56 | 8 | `startTimestamp` | the first packet's timestamp; `0` if the capture holds no packet |
@@ -115,13 +115,6 @@ A reader refuses the file if the magic differs, `versionMajor` is not 3,
 A capture holds one character's session. The character in `character` must be
 the one the capture's zone-in packets name; a reader reports a capture where
 they differ.
-
-### Required features
-
-Each set bit of `requiredFeatures` names a feature a reader must understand to
-read the file. A reader refuses a file with a bit it does not know. Format 3.0
-defines no bits, so a 3.0 writer writes `0`. A minor version that adds a feature
-old readers would misread also adds a bit for it.
 
 ## Extension blocks
 
@@ -419,7 +412,7 @@ resources and listed here by task 5.2.
 
 A reader:
 
-1. checks the header, its CRC, `requiredFeatures`, and every extension block's
+1. checks the header and its CRC, and every extension block's
    CRC and length, and the dictionary and policy rules above, and refuses the
    file if any fails;
 2. checks the footer;
@@ -483,12 +476,13 @@ Replaced in task 1.2 by an annotated dump of a conformance file.
 | Change | Version |
 |--------|---------|
 | Layout of an existing structure changes | major |
-| A new required feature bit, frame kind, channel, extension type, marker kind, or field in reserved bytes | minor |
+| A new frame kind, packet flag, channel, extension type, marker kind, or a field in reserved bytes that old readers can ignore | minor |
+| Anything an old reader would misread without a must-understand frame kind or flag to stop it | major |
 | A new check readers make | none |
 
 A reader refuses a different major version. It reads a newer minor version,
-skipping what it does not know, unless a required feature bit or a
-must-understand frame kind or flag tells it to refuse.
+skipping what it does not know, unless a must-understand frame kind or flag
+tells it to refuse.
 
 Before production, a draft may change anything. From production on, readers
 keep reading every released version.

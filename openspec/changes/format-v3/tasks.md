@@ -2,14 +2,14 @@
 
 ## 1. Specification
 
-- [ ] 1.1 Rewrite `FORMAT.md` for format 3: magic, header (feature mask, clock source, origin, retail or private, capture ids, public key, header CRC), extension blocks with CRCs, frames with magic and kind, packet flags in two groups, checkpoints, footer with end fields and final signature, the zstd rules, and the exact chain and signature inputs; verify every structure's size and offsets against `static_assert`s in `types.h`
+- [ ] 1.1 Rewrite `FORMAT.md` for format 3: magic, header (clock source, origin, retail or private, capture ids, public key, header CRC), extension blocks with CRCs, frames with magic and kind, packet flags in two groups, checkpoints, footer with end fields and final signature, the zstd rules, and the exact chain and signature inputs; verify every structure's size and offsets against `static_assert`s in `types.h`
 - [ ] 1.2 Replace the worked example with a hex dump of a real conformance file, annotated byte by byte; verify the test-only reader (6.1) reads the dumped bytes
 - [ ] 1.3 Update `AGENTS.md`: readers keep reading every released version from production on, and `tests/spec_reader.py` is a test-only reader, not a binding
 
 ## 2. Layout and recovery
 
 - [ ] 2.1 Write the header once at the first frame and move the end fields to the footer; verify a test that copies a recording file at every frame boundary and finds each copy a prefix of the next
-- [ ] 2.2 Add the feature mask, frame kinds, and the two flag groups; verify tests that refuse an unknown required bit, an unknown must-understand frame kind, and an unknown must-understand flag, and skip an unknown skippable frame kind
+- [ ] 2.2 Add frame kinds and the two flag groups; verify tests that refuse an unknown must-understand frame kind and an unknown must-understand flag, and skip an unknown skippable frame kind
 - [ ] 2.3 Add frame magic, CRCs on the header, extension blocks, and footer index, and stop iteration at the index; verify tests for each checksum failure and for a footer index whose first entry would fit as a frame
 - [ ] 2.4 Add recovery mode: resync on frame magic plus a passing CRC, count damaged frames, and end a cut-off capture at its last intact frame; verify tests for a damaged size field with and without a footer and for a torn tail
 - [ ] 2.5 Require the embedded dictionary and remove the built-in fallback; verify a test that refuses a file naming a dictionary it does not carry
@@ -38,7 +38,7 @@
 ## 6. Conformance
 
 - [ ] 6.1 Write `tests/spec_reader.py` from `FORMAT.md` alone, using only `zstandard` and `cryptography`; verify it reads the conformance set
-- [ ] 6.2 Commit the conformance set under `tests/vectors/` (each file with its expected reading as JSON), made by a generator in `tools/`: clean, empty, cut off, torn tail, damaged middle frame with and without footer, unknown required feature, unknown skippable frame kind, missing dictionary, excluded and redacted packets, bad signature; verify the C++ tests read every file as expected
+- [ ] 6.2 Commit the conformance set under `tests/vectors/` (each file with its expected reading as JSON), made by a generator in `tools/`: clean, empty, cut off, torn tail, damaged middle frame with and without footer, unknown must-understand frame kind and flag, unknown skippable frame kind, missing dictionary, excluded and redacted packets, bad signature; verify the C++ tests read every file as expected
 - [ ] 6.3 Run the conformance set in the Python, JavaScript, and Go bindings' CI; verify every binding matches every expected reading
 
 ## 7. Bindings and release

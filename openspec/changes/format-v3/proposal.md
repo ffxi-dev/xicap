@@ -18,7 +18,7 @@ No capture has been uploaded yet and the format is not in production, so a clean
 
 - **BREAKING:** format 3, with a new file magic. Readers do not read 1.x or 2.x files; nothing archived uses them.
 - The header is written once and never rewritten. The end-of-capture fields move to the footer, so the file only ever grows at the end.
-- Readers refuse files that need a feature they do not know: a header feature mask, frame kinds, and packet flags split into ones a reader may ignore and ones it must understand.
+- Readers refuse files that need a feature they do not know: frame kinds and packet flags are split into ones a reader may skip or ignore and ones it must understand.
 - Each frame starts with a magic number, so a reader resyncs after damage. The header, each extension, each frame, and the footer index carry a checksum.
 - Each capture carries the zstd dictionary it was written with, and the spec pins the zstd details, so the file plus the spec is enough to decode it.
 - Timestamps are UTC milliseconds that never go backwards in file order. The header says whether the times are live or were converted with a guessed offset.
