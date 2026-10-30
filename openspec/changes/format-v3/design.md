@@ -39,16 +39,16 @@ The writer writes the header when the first frame is flushed, so `startTimestamp
 - Rejected: keep the rewrites. They are the only thing standing between the format and an append-only file, and they make Mogsafe compare two headers on every close.
 
 ### Feature mask, frame kinds, two flag groups
-- Header: a u64 `requiredFeatures`; a reader refuses any bit it does not know. Format 3.0 defines bits for exclusion and signing.
+- Header: a u64 `requiredFeatures`; a reader refuses any bit it does not know. Format 3.0 defines none: every 3.x reader knows everything in 3.0, including exclusion and signing. The mask is for features later minor versions add.
 - Frames: a kind byte. Kinds below 0x80 may be skipped by readers that do not know them; kinds from 0x80 must be understood. 3.0 defines packets (0x80) and checkpoint (0x01).
 - `PacketEntry.flags`: the low byte holds flags a reader may ignore (injected, blocked, modified, first in datagram); the high byte holds flags it must understand (excluded, redacted). Direction stays bit 0 and every 3.x reader knows it.
 - Rejected: one version number for everything. A reader cannot tell which part of a newer file it can still read.
 
 ### Frame magic and recovery
-Each frame starts with `XCFR`, then the kind, then the 2.1 fields. The CRC covers the magic through the payload. Without a footer, a reader scans frame by frame; in recovery mode it searches for the next magic whose frame passes its CRC. Cost: 5 bytes per frame, about 30 KB for an 8-hour capture of about 9 MB.
+Each frame starts with `XCFR`, then the kind, then the 2.1 fields, in a 28-byte header that every kind shares. The CRC covers the magic through the payload. Without a footer, a reader scans frame by frame; in recovery mode it searches for the next magic whose frame passes its CRC. Cost: 8 bytes per frame over 2.1, about 46 KB for an 8-hour capture of about 9 MB.
 
 ### Magic
-`\x89XCAP\r\n\x1a\n` (8 bytes), in the PNG pattern: the high byte catches 7-bit transfers, and the `\r\n`, `\x1a`, and `\n` catch line-ending rewrites and DOS `type`.
+`\x89XCP\r\n\x1a\n` (8 bytes), PNG's pattern with `XCP`: the high byte catches 7-bit transfers, and the `\r\n`, `\x1a`, and `\n` catch line-ending rewrites and DOS `type`.
 
 ### Checksums
 CRC-32/IEEE everywhere, as 2.1 uses for frames. The signature chain (below) is what defends against deliberate change; CRCs find accidental damage and keep recovery cheap.

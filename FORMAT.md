@@ -1,291 +1,507 @@
 # XICAP Binary Format
 
-Version 2.1. Little-endian throughout; all structs are byte-packed.
+Version 3.0. This document is normative: a reader built from it alone, with the
+references below, must read every capture the library writes.
+
+**Status: draft.** Format 3 is not in production. Until the owner declares it
+is, a later draft may change any part of it without keeping compatibility.
+
+## Conventions
+
+- Every integer is little-endian. Structures are byte-packed, with no padding.
+- Offsets and sizes are in bytes. `u8`, `u16`, `u32`, `u64` are unsigned; `i32`
+  is two's complement.
+- `reserved` fields and bytes are written as zero. Readers ignore their value,
+  unless a feature bit (see [Required features](#required-features)) gives them
+  a meaning.
+- A text field of N bytes holds UTF-8, padded with zero bytes. It holds at most
+  N - 1 bytes of text, cut only between characters, so it always ends with at
+  least one zero byte.
+- Timestamps are milliseconds since the Unix epoch, in UTC.
+
+### References
+
+| Name | Used for |
+|------|----------|
+| CRC-32 | Polynomial `0x04C11DB7` reflected (`0xEDB88320`), initial value `0xFFFFFFFF`, final XOR `0xFFFFFFFF` (CRC-32/ISO-HDLC, as zlib). Check value: CRC of ASCII `123456789` is `0xCBF43926`. |
+| SHA-512 | FIPS 180-4. |
+| Ed25519 | RFC 8032, pure Ed25519 (not Ed25519ph or Ed25519ctx). |
+| zstd | RFC 8878. |
+
+## File layout
 
 ```
-+----------------------+
-|        Header        |   256 bytes (fixed)
-+----------------------+
-|   Extension blocks   |   0..N blocks, sized by Header.extensionCount
-+----------------------+
-|        Frames        |   1..M zstd-compressed frames
-+----------------------+
-|     Footer index     |   only present after a clean close
-|         …            |
-+----------------------+
-|    Footer trailer    |   24 bytes; magic identifies a clean close
-+----------------------+
++--------------------+
+| Header             |  headerSize bytes (384 in 3.0)
++--------------------+
+| Extension blocks   |  Header.extensionCount blocks
++--------------------+
+| Frames             |  0..N frames: packet frames and checkpoint frames
++--------------------+
+| Footer index       |  only after a clean close
++--------------------+
+| Footer trailer     |  112 bytes, only after a clean close
++--------------------+
 ```
 
-Frames are independently decodable. The footer is optional; absent on
-truncated captures, readers scan frames in that case.
+A writer writes each byte once and only ever appends. Nothing already written is
+changed, so every copy of a file being recorded is a prefix of the finished
+file.
 
-## Header — 256 bytes
+A file with a valid footer is **complete**. A file without one is **cut off**:
+the recorder crashed, or is still recording.
 
-| Off | Size | Field              | Notes |
-|----:|-----:|--------------------|-------|
-| 0   |  4   | `magic`            | `'XCAP'` little-endian = `0x50414358` |
-| 4   |  1   | `versionMajor`     | `2` |
-| 5   |  1   | `versionMinor`     | `1` |
-| 6   | 32   | `captureAgent`     | NUL-terminated UTF-8, max 31 chars |
-| 38  |  2   | `extensionCount`   | number of extension blocks following |
-| 40  | 32   | `clientVersion`    | NUL-terminated UTF-8, max 31 chars |
-| 72  |  2   | `startZoneId`      | zone at capture start; frames carry it until a `GP_SERV_LOGIN` changes it |
-| 74  |  8   | `startTimestamp`   | Unix-epoch milliseconds of first packet (back-patched on first flush) |
-| 82  | 44   | `lobby`            | `LobbyIdentity` — see below |
-| 126 |  1   | `startWeather`     | weather id at capture start |
-| 127 |  1   | `padding0`         | 0 |
-| 128 |  4   | `dictionaryId`     | zstd dict id (`ZSTD_getDictID_fromDict`) of the dictionary frames were compressed with; `0` if none. See [Dictionary](#dictionary) |
-| 132 |  8   | `endTimestamp`     | last packet's timestamp; back-patched on `close()`, `0` on truncated captures |
-| 140 |  8   | `totalPacketCount` | back-patched on `close()`, `0` on truncated captures |
-| 148 |  2   | `endZoneId`        | back-patched on `close()`, `0` on truncated captures |
-| 150 | 106  | `reserved`         | zeroed |
+## Header
 
-### `LobbyIdentity` — 44 bytes
+The writer writes the header when the first frame is written, or at close if
+there is none, with every field final.
 
-| Off | Size | Field             | Notes |
-|----:|-----:|-------------------|-------|
-| 0   |  4   | `contentId`       | POL FFXI character ID (a.k.a. `ffxi_id`) |
-| 4   |  2   | `worldContentId`  | world-specific id component |
-| 6   |  2   | `worldId`         | server / world ID |
-| 8   |  2   | `status`          | character status at lobby select |
-| 10  |  1   | flags             | bit 0 = pending rename; bit 1 = pending race change; bits 2–7 reserved |
-| 11  |  1   | `worldTableIndex` | |
-| 12  | 16   | `characterName`   | NUL-terminated, max 15 chars |
-| 28  | 16   | `worldName`       | NUL-terminated, max 15 chars |
+| Off | Size | Field | Notes |
+|----:|-----:|-------|-------|
+| 0 | 8 | `magic` | `89 58 43 50 0D 0A 1A 0A`, see below |
+| 8 | 1 | `versionMajor` | `3` |
+| 9 | 1 | `versionMinor` | `0` |
+| 10 | 2 | `headerSize` | `384` in 3.0. Readers accept any value from 384 to 4096 and skip to it |
+| 12 | 4 | `extensionCount` | number of extension blocks after the header |
+| 16 | 8 | `requiredFeatures` | see [Required features](#required-features) |
+| 24 | 16 | `captureId` | 16 random bytes, never all zero |
+| 40 | 16 | `previousCaptureId` | the capture this one continues, or all zero |
+| 56 | 8 | `startTimestamp` | the first packet's timestamp; `0` if the capture holds no packet |
+| 64 | 2 | `startZoneId` | zone at the first packet; `0` if unknown |
+| 66 | 1 | `startWeather` | weather id at the first packet |
+| 67 | 1 | `clockSource` | `0` unknown, `1` live, `2` converted with an inferred offset |
+| 68 | 1 | `origin` | `0` unknown, `1` recorded live, `2` converted from another format |
+| 69 | 1 | `network` | `0` unknown, `1` retail, `2` private server |
+| 70 | 1 | `startContext` | `0` unknown, `1` starts at a login, `2` starts mid-session |
+| 71 | 1 | `reserved` | |
+| 72 | 4 | `dictionaryId` | id of the zstd dictionary the frames use; `0` for none. See [Dictionary](#dictionary) |
+| 76 | 4 | `reserved` | |
+| 80 | 32 | `signingKey` | the recorder's Ed25519 public key |
+| 112 | 32 | `captureAgent` | text: the program that recorded the capture, with its version |
+| 144 | 32 | `clientVersion` | text: the game client's build |
+| 176 | 32 | `serverName` | text: the server, such as `retail` or a private server's name |
+| 208 | 44 | `lobby` | `LobbyIdentity`: the capture's character |
+| 252 | 128 | `reserved` | |
+| 380 | 4 | `headerCrc` | CRC-32 of bytes `0` to `headerSize - 4` |
 
-The flags byte at offset 10 packs LSB-first: bit 0 is the lowest-order bit of
-the byte. (xicap's C++ struct uses C++ bitfields; the on-disk layout is what
-this table specifies, regardless of language ABI.)
-
-The runtime `TC_OPERATION_MAKE` blob (job levels, fame, gil, etc.) that POL
-also delivers in the lobby packet is written as an `EXT_LOBBY_SNAPSHOT`
-extension block, not in the Header.
-
-## Extension block
+The magic follows PNG's pattern:
 
 ```
-+--------+---------+-----------------------+
-| type:4 | length:4|   payload (length B)  |
-+--------+---------+-----------------------+
+89 58 43 50 0D 0A 1A 0A
+    X  C  P \r \n ^Z \n
 ```
 
-Payload layout is defined by the capture agent, not this library. Verify
-`Header.clientVersion` before memcpy'ing a snapshot back into client memory.
+The high first byte fails 7-bit transfers. `\r\n` fails transfers that turn
+`\r\n` into `\n`, the last `\n` fails those that turn `\n` into `\r\n`, and `^Z`
+stops DOS `type`. 2.x files start with `XCAP`, so a 3.x reader refuses them as a
+bad magic.
 
-### Type id ranges
+`headerCrc` is always the last 4 bytes of the header. A later minor version may
+grow the header: it adds fields after offset 252, moves the CRC to the new end,
+and raises `headerSize`.
 
-| Range                    | Use |
-|--------------------------|-----|
-| `0x0000_0000`–`0x0000_7FFF` | Reserved for this repository (well-known ids below). |
-| `0x0000_8000`–`0xFFFF_FFFE` | Vendor namespace. Allocate via the registry below or fork-prefix. |
-| `0xFFFF_FFFF`              | Reserved (must not be used). |
+A reader refuses the file if the magic differs, `versionMajor` is not 3,
+`headerSize` is out of range, or `headerCrc` fails.
 
-### Well-known type ids
+### `LobbyIdentity` (44 bytes)
 
-| Id     | Conventional payload |
-|-------:|----------------------|
-| 0x0001 | FFXI client player struct |
-| 0x0002 | FFXI client inventory struct |
-| 0x0003 | FFXI client entity struct (one block per populated entity) |
-| 0x0004 | FFXI client `g_MissionData` region |
-| 0x0005 | Known-spell bitmask (bit N = spell id N is known) |
-| 0x0006 | Known-ability bitmask (`GP_SERV_COMMAND_DATA` layout) |
-| 0x0007 | POL `TC_OPERATION_MAKE` lobby snapshot |
-| 0x0008 | `EXT_ZSTD_DICT` — the zstd dictionary this capture was compressed with |
+| Off | Size | Field | Notes |
+|----:|-----:|-------|-------|
+| 0 | 4 | `contentId` | POL character id (`ffxi_id`) |
+| 4 | 2 | `worldContentId` | |
+| 6 | 2 | `worldId` | |
+| 8 | 2 | `status` | character status at character select |
+| 10 | 1 | `flags` | bit 0 pending rename, bit 1 pending race change, others reserved |
+| 11 | 1 | `worldTableIndex` | |
+| 12 | 16 | `characterName` | text |
+| 28 | 16 | `worldName` | text |
 
-Unknown type ids are preserved verbatim and surfaced via `Reader::extensions()`.
+Bit 0 is the lowest bit of the byte.
 
-`EXT_ZSTD_DICT` is the one exception: it is format-level rather than agent data,
-so the reader consumes it and does **not** return it from `extensions()`. It is
-still counted in `Header.extensionCount`, so a reader that does not know the id
-skips it like any other unknown block.
+A capture holds one character's session. The character in `lobby` must be the
+one the capture's zone-in packets name; a reader reports a capture where they
+differ.
+
+### Required features
+
+Each set bit of `requiredFeatures` names a feature a reader must understand to
+read the file. A reader refuses a file with a bit it does not know. Format 3.0
+defines no bits, so a 3.0 writer writes `0`. A minor version that adds a feature
+old readers would misread also adds a bit for it.
+
+## Extension blocks
+
+| Off | Size | Field |
+|----:|-----:|-------|
+| 0 | 4 | `type` |
+| 4 | 4 | `length`: payload size, at most 16 MiB |
+| 8 | `length` | payload |
+| 8 + `length` | 4 | `crc`: CRC-32 of the type, length, and payload |
+
+A reader refuses a block whose CRC fails or whose length is over 16 MiB.
+
+| Type | Name | Required | Payload |
+|-----:|------|----------|---------|
+| `0x0008` | `ZSTD_DICT` | when `dictionaryId` is not 0; first block | [Dictionary](#dictionary) |
+| `0x0009` | `EXCLUSION_POLICY` | always, exactly once | [Exclusion](#exclusion) |
+| `0x000A` | `SOURCE` | when `origin` is 2 | [Source](#source) |
+
+Ids `0x0001` to `0x0007` held client memory copies in 2.x and are retired:
+never reuse them. A capture's context is its packets, never a copy of client
+state.
+
+| Range | Use |
+|-------|-----|
+| `0x0000_0001` to `0x0000_7FFF` | this document |
+| `0x0000_8000` to `0xFFFF_FFFE` | other programs' metadata |
+| `0x0000_0000`, `0xFFFF_FFFF` | never used |
+
+Readers skip blocks of types they do not know and return them to the caller
+unchanged.
+
+### Source
+
+Carried by converted captures (`origin` 2).
+
+| Off | Size | Field | Notes |
+|----:|-----:|-------|-------|
+| 0 | 16 | `format` | text: the source format, such as `captain` |
+| 16 | 16 | `formatVersion` | text: the source program's version |
+| 32 | 4 | `skippedRecords` | source records not converted |
+| 36 | 4 | `utcOffsetSeconds` | `i32`: offset added to the source's times to get UTC |
+| 40 | 64 | `sourceHash` | SHA-512 of the source file as uploaded |
+| 104 | 4 | `metadataLength` | |
+| 108 | `metadataLength` | `metadata` | the source's metadata as found, such as captain's `manifest.txt` |
 
 ## Dictionary
 
-Frames are compressed with a zstd dictionary. Writers embed a copy of that
-dictionary in the capture as an `EXT_ZSTD_DICT` block, written before any other
-extension so a streaming consumer can decode frames as they arrive. A reader
-therefore never depends on having been built with a matching dictionary, and
-retraining the dictionary never invalidates existing captures.
+Packet frames may be compressed with a zstd dictionary. When `dictionaryId` is
+not 0, the first extension block must be `ZSTD_DICT`, holding the dictionary in
+RFC 8878 section 5 format, whose `Dictionary_ID` equals `dictionaryId`. A reader
+refuses the file otherwise. A reader decodes only with the dictionary in the
+file, never with one of its own.
 
-Resolution order when opening a capture:
-
-1. If an `EXT_ZSTD_DICT` block is present, use its bytes.
-2. Otherwise, if `Header.dictionaryId` is non-zero (a 2.0 capture, which
-   recorded only the id), use the reader's built-in dictionary.
-3. Otherwise the capture uses no dictionary.
-
-In cases 1 and 2 the resolved dictionary's id must equal `Header.dictionaryId`,
-or the reader fails with `xicap::ErrorCode::DictionaryMismatch`.
-
-Retrain with zstd's own trainer and hand the result to the writer via
-`FramePolicy::dictionary`:
+Writers train dictionaries with zstd's trainer:
 
 ```
 zstd --train samples/* -o ffxi.dict --maxdict=65536
 ```
 
-## Frame
+## Frames
+
+Every frame starts with the same 28-byte header and ends with a CRC.
+
+| Off | Size | Field | Notes |
+|----:|-----:|-------|-------|
+| 0 | 4 | `magic` | ASCII `XCFR` |
+| 4 | 1 | `kind` | see below |
+| 5 | 1 | `reserved` | |
+| 6 | 2 | `markerCount` | markers in the payload; `0` for other kinds |
+| 8 | 4 | `payloadSize` | bytes between this header and the CRC |
+| 12 | 4 | `packetCount` | packets in the payload, at most 65535; `0` for other kinds |
+| 16 | 8 | `baseTimestamp` | first packet's timestamp; for other kinds, the last packet's timestamp before the frame |
+| 24 | 2 | `zoneId` | zone at the frame's first packet; for other kinds, the zone in effect |
+| 26 | 2 | `reserved` | |
+| 28 | `payloadSize` | payload | |
+| 28 + `payloadSize` | 4 | `crc` | CRC-32 of bytes `0` to `28 + payloadSize` of the frame |
+
+| Kind | Name | Readers that do not know it |
+|-----:|------|-----------------------------|
+| `0x01` | checkpoint | skip it |
+| `0x80` | packets | refuse the file |
+
+Kinds below `0x80` may be skipped, after checking the CRC, by a reader that does
+not know them. Kinds from `0x80` must be understood: a reader refuses a file
+holding one it does not know.
+
+### Packet frames
+
+The payload is exactly one zstd frame (RFC 8878) with `Frame_Content_Size`
+present and `Content_Checksum_flag` set, compressed with the capture's
+dictionary if it has one. No skippable zstd frames.
+
+The content size must not exceed 16 MiB, nor
+`packetCount * (12 + 65535) + markerCount * (6 + 65535)` when every packet is
+on the game channel. A reader checks the content size against 16 MiB before
+allocating.
+
+Decompressed, the payload is:
 
 ```
-+----------+--------------+--------+--------+--------+
-| compSize | packetCount  | baseTs | zoneId | mkrCnt |
-|    4 B   |     4 B      |  8 B   |  2 B   |  2 B   |
-+----------+--------------+--------+--------+--------+
-|       zstd-compressed payload (compSize bytes)     |
-+----------------------------------------------------+
-|       crc32 (4 B)                                  |
-+----------------------------------------------------+
+PacketEntry, packet bytes      x packetCount
+FrameMarker, marker text       x markerCount
 ```
 
-Frame header is 20 bytes. The compressed payload is a single raw zstd frame
-produced with `ZSTD_compress2`, with `ZSTD_c_checksumFlag` enabled (zstd embeds
-its own 4-byte XXH64 trailer inside the compressed frame and verifies on
-decode) and the dictionary described under [Dictionary](#dictionary) loaded via
-`ZSTD_CCtx_loadDictionary`.
+#### `PacketEntry` (12 bytes)
 
-Readers must reject a frame whose zstd content-size field exceeds what the
-frame's own `packetCount` and `markerCount` could account for
-(`packetCount * (8 + 65535) + markerCount * (4 + 65535)`), or 16 MiB, whichever
-is smaller. The field is attacker-controlled and otherwise sizes an allocation.
+| Off | Size | Field | Notes |
+|----:|-----:|-------|-------|
+| 0 | 2 | `deltaMs` | milliseconds since the previous packet in this frame; `0` for the first |
+| 2 | 2 | `flags` | see below |
+| 4 | 1 | `channel` | see [Channels](#channels) |
+| 5 | 1 | `reserved` | |
+| 6 | 2 | `opcode` | meaning set by the channel |
+| 8 | 4 | `length` | bytes of packet data that follow |
 
-After the compressed payload, an additional 4-byte CRC-32/IEEE checksum covers
-the 20-byte `FrameHeader` plus the `compressedSize` bytes of compressed
-payload (not including the CRC itself). Polynomial `0xEDB88320`, initial value
-`0xFFFFFFFF`, output XOR `0xFFFFFFFF`. Readers reject the frame on mismatch
-(`xicap::ErrorCode::FrameChecksumMismatch`).
+A packet's timestamp is the frame's `baseTimestamp` plus the `deltaMs` of every
+entry up to and including its own.
 
-The decompressed payload is laid out as:
+| Bit | Flag | Group |
+|----:|------|-------|
+| 0 | direction: `0` to the client, `1` from the client | core |
+| 1 | injected by an addon | may ignore |
+| 2 | blocked by an addon | may ignore |
+| 3 | modified by an addon | may ignore |
+| 4 | first packet of its datagram | may ignore |
+| 5 to 7 | reserved | may ignore |
+| 8 | excluded: a stub, see [Exclusion](#exclusion) | must understand |
+| 9 | redacted: byte ranges zeroed | must understand |
+| 10 to 15 | reserved | must understand |
+
+A reader refuses a file holding a set bit from 10 to 15. Packet bytes are the
+packet as the client's hook delivered it, decrypted and decompressed, before any
+addon changed it.
+
+#### `FrameMarker` (6 bytes)
+
+| Off | Size | Field | Notes |
+|----:|-----:|-------|-------|
+| 0 | 2 | `packetIndex` | the packet in this frame the marker attaches to, from 0 |
+| 2 | 1 | `kind` | `0` note, `1` login, `2` logout; readers treat unknown kinds as notes |
+| 3 | 1 | `reserved` | |
+| 4 | 2 | `textLength` | |
+| 6 | `textLength` | text | UTF-8, no terminator |
+
+### Checkpoint frames
+
+The payload is 128 bytes, not compressed:
+
+| Off | Size | Field |
+|----:|-----:|-------|
+| 0 | 64 | `chain`: the chain value before this frame |
+| 64 | 64 | `signature` |
+
+See [Signatures](#signatures).
+
+## Channels
+
+| Channel | Name | Packet bytes | `opcode` | A stub keeps |
+|--------:|------|--------------|----------|--------------|
+| 0 | game | the FFXI packet, from its 4-byte header | the header's 9-bit id | the 4-byte header |
+| 1 | search | defined when the plugin's hooks are (task 3.6) | | |
+| 2 to 255 | reserved: lobby, IRC, and profile traffic come later | | | |
+
+A reader passes on packets of a channel it does not know, with the channel's
+number, and does not refuse the file. A new channel is a minor version.
+
+### Game channel
+
+The first 4 bytes of a game packet are its FFXI header:
 
 ```
-PacketEntry[0]  (8 B)  data (length B)
-PacketEntry[1]  (8 B)  data (length B)
-...
-PacketEntry[N-1] data
-FrameMarker[0]  (4 B)  text (textLength B)   # only if mkrCnt > 0
-FrameMarker[1]  (4 B)  text (textLength B)
-...
+byte 0     byte 1             byte 2     byte 3
+[id_lo:8]  [size:7 | id_hi:1] [sync_lo:8] [sync_hi:8]
 ```
 
-### `PacketEntry` — 8 bytes
+- `id` = `u16(bytes 0..2) & 0x01FF`, 9 bits
+- `size` = `(u16(bytes 0..2) >> 9) & 0x7F`, in 4-byte words
+- `sync` = `u16(bytes 2..4)`, a sequence counter per direction
 
-| Off | Size | Field      | Notes |
-|----:|-----:|------------|-------|
-| 0   | 2    | `deltaMs`  | delta from previous packet timestamp; writers force a frame boundary before this would clip |
-| 2   | 2    | `length`   | packet payload length (includes the 4-byte FFXI header); writers reject anything over 65535 rather than truncate |
-| 4   | 2    | `opcode`   | FFXI 9-bit opcode |
-| 6   | 2    | `flags`    | bit 0 = direction (`0` server→client, `1` client→server); bits 1–15 reserved |
-
-### `FrameMarker` — 4 bytes
-
-| Off | Size | Field         |
-|----:|-----:|---------------|
-| 0   | 2    | `packetIndex` |
-| 2   | 2    | `textLength`  |
-
-Markers are followed by `textLength` bytes of UTF-8 text (no NUL terminator).
-A reader associates each marker with the packet whose 0-based index equals
-`packetIndex` within the same frame.
-
-### Frame flush conditions
-
-A frame is closed and a new one started when any of these is true:
-
-* `framePacketCount >= maxPacketsPerFrame` (default 1000)
-* `frameBuffer size >= maxFrameSize` (default 64 KiB)
-* time from frame's first packet `>= maxFrameTimeMs` (default 5000 ms)
-* the next packet's `deltaMs` from the current would exceed `UINT16_MAX`
-
-The first frame's `baseTimestamp` is back-patched into the Header's
-`startTimestamp` field via a one-time seek.
-
-## FFXI packet header layout
-
-The first 4 bytes of every packet payload are the FFXI wire header:
-
-```
-byte 0     byte 1     byte 2     byte 3
-[id_lo:8] [size:7|id_hi:1] [sync_lo:8] [sync_hi:8]
-```
-
-In integer terms:
-
-* `opcode` = `(read_le_u16(bytes 0..2)) & 0x01FF`           — 9 bits
-* `size`   = `(read_le_u16(bytes 0..2) >> 9) & 0x007F`      — 7 bits, in 4-byte words
-* `sync`   = `read_le_u16(bytes 2..4)`                       — 16 bits
+A writer refuses a game packet shorter than 4 bytes and sets `opcode` to its
+`id`. A reader treats a game packet whose `opcode` differs from its `id` as a
+corrupt frame.
 
 ## Footer
 
-When the writer closes cleanly it appends a frame index and a trailer:
+A clean close writes the footer index, then the trailer.
 
-```
-FooterIndexEntry[0]  (24 B)
-FooterIndexEntry[1]  (24 B)
-...
-FooterIndexEntry[N-1]
-FooterTrailer        (24 B)   # last 24 bytes of file
-```
+### `FooterIndexEntry` (24 bytes)
 
-`FooterIndexEntry`:
+One per packet frame, in file order. Checkpoint frames have no entry.
 
-| Off | Size | Field         |
-|----:|-----:|---------------|
-| 0   | 8    | `timestamp`   |
-| 8   | 8    | `fileOffset`  |
-| 16  | 2    | `zoneId`      |
-| 18  | 6    | `reserved`    |
+| Off | Size | Field |
+|----:|-----:|-------|
+| 0 | 8 | `timestamp`: the frame's `baseTimestamp` |
+| 8 | 8 | `fileOffset`: the frame's first byte |
+| 16 | 2 | `zoneId` |
+| 18 | 6 | `reserved` |
 
-`FooterTrailer`:
+### `FooterTrailer` (112 bytes, the last bytes of the file)
 
-| Off | Size | Field         | Notes |
-|----:|-----:|---------------|-------|
-| 0   | 4    | `magic`       | `'XCPF'` little-endian = `0x46504358` |
-| 4   | 4    | `entryCount`  | number of preceding `FooterIndexEntry` records |
-| 8   | 8    | `indexOffset` | file offset of `FooterIndexEntry[0]` |
-| 16  | 8    | `reserved`    | zeroed |
+| Off | Size | Field | Notes |
+|----:|-----:|-------|-------|
+| 0 | 8 | `endTimestamp` | the last packet's timestamp; `0` if none |
+| 8 | 8 | `totalPacketCount` | |
+| 16 | 2 | `endZoneId` | |
+| 18 | 2 | `reserved` | |
+| 20 | 4 | `entryCount` | footer index entries |
+| 24 | 8 | `indexOffset` | file offset of the first index entry |
+| 32 | 4 | `indexCrc` | CRC-32 of the whole index |
+| 36 | 4 | `frameCount` | frames of every kind |
+| 40 | 64 | `signature` | see [Signatures](#signatures) |
+| 104 | 4 | `trailerCrc` | CRC-32 of trailer bytes `0` to `104` |
+| 108 | 4 | `magic` | ASCII `XCPF` |
 
-The trailer is recognised when:
+The footer is valid when all of these hold:
 
-* the file is at least `dataStartOffset + sizeof(FooterTrailer)` bytes long, and
-* `magic == 0x46504358`, and
-* `indexOffset >= dataStartOffset`, and
-* `indexOffset + entryCount * 24 + 24 == fileSize`.
+- the file is at least `dataStart + 112` bytes long, where `dataStart` is the
+  end of the extension blocks;
+- the last 4 bytes are `XCPF` and `trailerCrc` is correct;
+- `indexOffset >= dataStart` and `indexOffset + 24 * entryCount + 112` equals
+  the file size;
+- `indexCrc` is correct.
 
-If any check fails the reader rebuilds the index by reading frame headers
-sequentially and stopping at the last whose compressed payload + CRC fits in
-the file.
+A file whose footer is not valid is read as cut off. If its last 4 bytes are
+`XCPF` anyway, the reader also reports a damaged footer.
+
+## Signatures
+
+Every capture is signed with the key in `signingKey`. Signatures sign a SHA-512
+hash chain over the file:
+
+1. `h = SHA-512(header)`, over all `headerSize` bytes.
+2. For each extension block, in order: `h = SHA-512(h || block)`, over the
+   block from `type` to `crc`.
+3. For each frame, of every kind, in order: `h = SHA-512(h || frame)`, over the
+   frame from `magic` to `crc`.
+4. At close: `h = SHA-512(h || index || trailer[0..40])`, over every index
+   entry and the first 40 bytes of the trailer.
+
+A checkpoint frame stores the chain value `h` from before the frame, and
+`signature = Ed25519(key, "xicap/3 checkpoint" || h)`. The footer's
+`signature = Ed25519(key, "xicap/3 footer" || h)`, with `h` from step 4. The
+prefixes are ASCII, with no terminator.
+
+A reader recomputes the chain and reports:
+
+- the signing key;
+- **complete** if the footer's signature verifies;
+- otherwise the last checkpoint whose stored chain value matches and whose
+  signature verifies, and how many packets come before it;
+- the file offset of the first frame where a stored chain value or signature
+  fails, if any.
+
+A failed signature never stops a reader from reading packets.
+
+## Exclusion
+
+Every capture carries the exclusion policy its writer applied, in an
+`EXCLUSION_POLICY` block. The writer applies it to each packet before the packet
+is compressed, so excluded bytes never reach the file.
+
+| Off | Size | Field |
+|----:|-----:|-------|
+| 0 | 32 | `name`: text |
+| 32 | 4 | `version` |
+| 36 | 2 | `ruleCount` |
+| 38 | 2 | `reserved` |
+| 40 | | `ruleCount` rules |
+
+Each rule:
+
+| Off | Size | Field | Notes |
+|----:|-----:|-------|-------|
+| 0 | 1 | `channel` | |
+| 1 | 1 | `direction` | `0` to the client, `1` from the client, `2` both |
+| 2 | 1 | `action` | `1` stub, `2` zero byte ranges |
+| 3 | 1 | `reserved` | |
+| 4 | 2 | `opcode` | |
+| 6 | 2 | `rangeCount` | `0` for a stub |
+| 8 | | `rangeCount` ranges of `u32 offset, u32 length` | a length of `0xFFFFFFFF` runs to the packet's end |
+
+The first rule that matches a packet's channel, direction, and opcode applies.
+
+- **Stub:** the entry keeps its timestamp, channel, direction, provenance flags,
+  and opcode, sets the excluded flag, and keeps only what its channel's row in
+  [Channels](#channels) says a stub keeps. On the game channel that is the
+  4-byte header, whose `size` still gives the original length.
+- **Zero byte ranges:** the entry keeps its length, sets the redacted flag, and
+  has each range zeroed. Ranges past the packet's end are cut at the end.
+
+The library's default policy, `xicap-default`, stubs every chat packet on the
+game channel in both directions. Its opcodes are checked against the client's
+resources and listed here by task 5.2.
+
+## Reading
+
+A reader:
+
+1. checks the header, its CRC, `requiredFeatures`, and every extension block's
+   CRC and length, and the dictionary and policy rules above, and refuses the
+   file if any fails;
+2. checks the footer;
+3. reads frames from the end of the extension blocks.
+
+In a complete file, frames run up to `indexOffset`. A frame that is cut short,
+lacks the `XCFR` magic, or fails its CRC there is an error.
+
+In a cut-off file, frames run up to the first frame that is cut short, lacks the
+magic, or fails its CRC. The capture ends there, and the reader reports how many
+bytes it did not read.
+
+In **recovery mode**, a reader that meets a bad frame searches forward, byte by
+byte, for the next `XCFR` whose frame passes its CRC, and carries on from there.
+It reports each skipped region. Recovery mode is for salvage; Mogsafe and other
+archive checks read in the normal mode.
+
+## Writer rules
+
+These rules are part of the format: a capture that breaks them is wrong even if
+it parses.
+
+- **Timestamps never go backwards** in file order, across every channel. Equal
+  timestamps are allowed. Given an earlier time than the last, a writer records
+  the last again. Live recorders read the wall clock once and add a monotonic
+  clock after.
+- **Frame boundaries.** A writer ends the packet frame being built before adding
+  a packet that would push its `deltaMs` past 65535, its `packetCount` past
+  65535, or its decompressed size past 16 MiB, and when the server sends a
+  zone-in, so a frame never spans two zones. It also ends frames by its own
+  size and time settings (by default 1000 packets, 64 KiB, or 5 seconds) and
+  when the host asks for a flush.
+- **Checkpoints.** A writer writes a checkpoint, covering every frame so far, at
+  the first frame boundary after 60 seconds of frames without one, when a flush
+  finds the capture idle with frames since the last checkpoint, and before a
+  login or logout marker. It never writes one when no frame was written since
+  the last.
+- **Captures start at a login.** A recorder starts a new capture when a
+  character logs in and the current capture holds another character or none.
+  When the same character logs out and back in, the capture continues, with a
+  logout and a login marker. A recorder that starts after a login, or after a
+  crash, sets `startContext` to mid-session and `previousCaptureId` to the
+  capture it continues. No timer ends a capture.
+- **Durability.** A writer hands each frame to the operating system as soon as
+  it is written, and reports any write error.
+- **Empty captures** still get a header, extension blocks, and a footer with no
+  index entries.
+
+## Conformance
+
+`tests/vectors/` holds test files, each with a JSON file of its expected
+reading. Every binding reads all of them in CI, and `tests/spec_reader.py`, a
+reader written from this document alone, reads them too.
 
 ## Worked example
 
-A minimal capture with one extension and one packet, hex-dumped:
+Replaced in task 1.2 by an annotated dump of a conformance file.
 
-```
-00000000  58 43 41 50 02 00 4d 65 6d 6f 72 69 61 00 00 00   XCAP..Memoria...
-00000010  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
-00000020  00 00 00 00 00 00 00 00 01 00 33 30 32 35 31 31   ..........302511
-00000030  30 31 5f 32 00 00 00 00 00 00 00 00 00 00 00 00   01_2............
-00000040  00 00 00 00 00 00 00 00 64 00 00 00 00 00 00 00   ........d.......
-00000050  00 00 00 00 ef be ad de ...                       ...........
-                      ^^^^^^^^^^^ contentId = 0xDEADBEEF (LobbyIdentity start)
-... (remainder of LobbyIdentity, startWeather, padding, dictionaryId, ...)
-00000100  01 00 00 00 04 00 00 00 de ad be ef               (extension type=1, length=4, payload=DEADBEEF)
-0000010c  XX XX XX XX YY YY YY YY ...                        (FrameHeader: compressedSize, packetCount, ...)
-... compressed zstd frame ...
-... 4-byte CRC32 ...
-```
+## Versioning
 
-The `EXT_ZSTD_DICT` block is omitted from this example for brevity; a real
-capture carries it as the first extension block.
+| Change | Version |
+|--------|---------|
+| Layout of an existing structure changes | major |
+| A new required feature bit, frame kind, channel, extension type, marker kind, or field in reserved bytes | minor |
+| A new check readers make | none |
 
-## Versioning policy
+A reader refuses a different major version. It reads a newer minor version,
+skipping what it does not know, unless a required feature bit or a
+must-understand frame kind or flag tells it to refuse.
 
-| Change                                              | Bump     |
-|-----------------------------------------------------|----------|
-| layout-breaking: field added/removed/resized        | major    |
-| new well-known extension type                       | minor    |
-| new reader-side validation rule                     | none     |
-| documentation, comment, or non-format-breaking code | none     |
+Before production, a draft may change anything. From production on, readers
+keep reading every released version.
 
-Major-version mismatch is a hard read error. Minor mismatches are accepted —
-unknown extension types are returned as opaque blobs.
+## Dependencies
+
+The C++ library vendors Monocypher 4.0.3 (`monocypher.c` and
+`optional/monocypher-ed25519.c`) for Ed25519 and SHA-512. Renovate cannot update
+a vendored file; check Monocypher's releases when making a release of xicap.
