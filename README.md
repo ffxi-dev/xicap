@@ -51,6 +51,9 @@ via FetchContent). Run via `ctest` or the produced `xicap_tests` executable.
 * **Python** — see [`python/`](python/). pybind11 module; `pip install ./python`.
 * **JavaScript / TypeScript** — see [`js/`](js/). C++ reader compiled to
   WebAssembly via Emscripten + Embind. Works in browsers and Node.
+* **Go** — see [`go/`](go/). cgo wrapper that builds the C++ reader in place;
+  needs a C++20 compiler and libzstd (`apt install libzstd-dev`). Import
+  `github.com/ffxi-dev/xicap/go`.
 
 ## License
 

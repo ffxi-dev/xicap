@@ -17,12 +17,13 @@ Bindings, each with its own CI workflow:
 ```bash
 pip install ./python[test] && pytest python/tests      # Python; needs the fixture from xicap_make_fixture
 cd js && node ./scripts/build-wasm.mjs                 # JavaScript and Wasm; needs Emscripten
+go test ./go/                                          # Go via cgo; needs g++ and libzstd-dev, so Linux (MSVC can't build cgo)
 ```
 
 ## Rules
 
 - A change to the on-disk format updates `FORMAT.md`, bumps the version in the header constants, and adds reader and writer tests, including reading captures written by the previous version. Captures are archived for the long term, so readers keep reading every released version.
-- The C++ library, the Python bindings, and the JavaScript bindings change together.
+- The C++ library and the Python, JavaScript, and Go bindings change together. Bindings wrap the C++ library; none reimplements the format.
 
 ## Part of Vault
 
