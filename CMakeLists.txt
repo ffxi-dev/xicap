@@ -46,6 +46,7 @@ endif()
 set(XICAP_SOURCES
     src/writer.cpp
     src/reader.cpp
+    src/dictionary.cpp
 )
 
 set(XICAP_HEADERS
@@ -54,6 +55,7 @@ set(XICAP_HEADERS
     include/xicap/constants.h
     include/xicap/writer.h
     include/xicap/reader.h
+    include/xicap/dictionary.h
 )
 
 add_library(xicap STATIC ${XICAP_SOURCES} ${XICAP_HEADERS})
@@ -129,6 +131,8 @@ if(XICAP_BUILD_TESTS)
 
     add_executable(xicap_tests tests/xicap_tests.cpp)
     target_link_libraries(xicap_tests PRIVATE xicap Catch2::Catch2WithMain)
+    # Tests reach into src/internal to rebuild frame CRCs when crafting bad files.
+    target_include_directories(xicap_tests PRIVATE src)
 
     list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
     include(Catch)

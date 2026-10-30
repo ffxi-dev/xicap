@@ -14,13 +14,17 @@ inline constexpr uint32_t MAGIC        = 0x50414358; // 'XCAP' little-endian
 inline constexpr uint32_t FOOTER_MAGIC = 0x46504358; // 'XCPF' little-endian; absent on truncated captures
 
 inline constexpr uint8_t VERSION_MAJOR = 2;
-inline constexpr uint8_t VERSION_MINOR = 0;
+inline constexpr uint8_t VERSION_MINOR = 1;
 
 namespace FrameLimits
 {
 inline constexpr size_t   MAX_COMPRESSED_SIZE = 64 * 1024;
 inline constexpr uint32_t MAX_PACKET_COUNT    = 1000;
 inline constexpr uint64_t MAX_TIME_WINDOW_MS  = 5000;
+// Hard cap on a frame's decompressed size. Legitimate frames sit around
+// MAX_COMPRESSED_SIZE; this only exists so a crafted content-size field cannot
+// make the reader allocate arbitrarily.
+inline constexpr uint64_t MAX_CONTENT_SIZE = 16 * 1024 * 1024;
 } // namespace FrameLimits
 
 namespace FFXIPacket

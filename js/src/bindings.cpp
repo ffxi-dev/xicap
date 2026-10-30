@@ -298,5 +298,7 @@ EMSCRIPTEN_BINDINGS(xicap_module)
         .value("ZstdContextFailed", xicap::ErrorCode::ZstdContextFailed)
         .value("WriterClosed", xicap::ErrorCode::WriterClosed)
         .value("AddExtensionAfterPackets", xicap::ErrorCode::AddExtensionAfterPackets)
-        .value("AddMarkerWithoutPacket", xicap::ErrorCode::AddMarkerWithoutPacket);
+        .value("AddMarkerWithoutPacket", xicap::ErrorCode::AddMarkerWithoutPacket)
+        .value("PacketTooLarge", xicap::ErrorCode::PacketTooLarge)
+        .value("CompressFailed", xicap::ErrorCode::CompressFailed);
 }

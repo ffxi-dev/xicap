@@ -1,5 +1,7 @@
 #include <xicap/xicap.h>
 
+#include "internal/crc32.h"
+
 #include <catch2/catch_test_macros.hpp>
 
 #include <atomic>
@@ -87,6 +89,51 @@ auto writeNPackets(xicap::Writer& w, int n, uint64_t startTs = 1'700'000'000'000
                 (i % 2) ? xicap::PacketDirection::ClientToServer : xicap::PacketDirection::ServerToClient,
                 pkt);
     }
+}
+
+// Frames start after the header and every extension block — including the
+// EXT_ZSTD_DICT block the writer emits. Tests that poke at raw frame bytes must
+// walk the blocks rather than assume sizeof(Header).
+auto firstFrameOffset(const fs::path& path) -> uint64_t
+{
+    std::ifstream f(path, std::ios::binary);
+    xicap::Header h{};
+    f.read(reinterpret_cast<char*>(&h), sizeof(h));
+    uint64_t off = sizeof(xicap::Header);
+    for (uint16_t i = 0; i < h.extensionCount; ++i)
+    {
+        xicap::ExtensionBlockHeader eh{};
+        f.seekg(static_cast<std::streamoff>(off));
+        f.read(reinterpret_cast<char*>(&eh), sizeof(eh));
+        off += sizeof(eh) + eh.length;
+    }
+    return off;
+}
+
+// Rewrites a frame header in place and refreshes the frame CRC so the frame
+// stays well-formed apart from the field under test.
+template <typename Fn>
+auto patchFrameHeader(const fs::path& path, uint64_t frameOffset, Fn mutate) -> void
+{
+    std::fstream f(path, std::ios::binary | std::ios::in | std::ios::out);
+    f.seekg(static_cast<std::streamoff>(frameOffset));
+    xicap::FrameHeader fh{};
+    f.read(reinterpret_cast<char*>(&fh), sizeof(fh));
+
+    std::vector<uint8_t> payload(fh.compressedSize);
+    f.read(reinterpret_cast<char*>(payload.data()), static_cast<std::streamsize>(payload.size()));
+
+    mutate(fh);
+
+    xicap::internal::Crc32 crc;
+    crc.update({ reinterpret_cast<const uint8_t*>(&fh), sizeof(fh) });
+    crc.update(payload);
+    const uint32_t value = crc.value();
+
+    f.seekp(static_cast<std::streamoff>(frameOffset));
+    f.write(reinterpret_cast<const char*>(&fh), sizeof(fh));
+    f.seekp(static_cast<std::streamoff>(frameOffset + sizeof(fh) + payload.size()));
+    f.write(reinterpret_cast<const char*>(&value), sizeof(value));
 }
 
 auto readAllOwned(xicap::Reader& r) -> std::vector<OwnedPacket>
@@ -450,7 +497,7 @@ TEST_CASE("end-of-capture metadata is back-patched on clean close", "[end-meta]"
     xicap::Reader r(tmp.path);
     CHECK(r.endTimestamp() == expected);
     CHECK(r.totalPacketCount() == N);
-    CHECK(r.endZoneId() == 0); // no LOGIN_ZONE packet was sent
+    CHECK(r.endZoneId() == 100); // no zone change, so still the configured start zone
 }
 
 TEST_CASE("frame CRC mismatch is detected", "[crc]")
@@ -463,12 +510,12 @@ TEST_CASE("frame CRC mismatch is detected", "[crc]")
     }
 
     // Flip a bit in the first frame's compressed payload.
+    const auto   frameOffset = firstFrameOffset(tmp.path);
     std::fstream f(tmp.path, std::ios::binary | std::ios::in | std::ios::out);
-    // First frame begins right after Header + extensions (no extensions in this test).
-    f.seekp(sizeof(xicap::Header) + sizeof(xicap::FrameHeader) + 4);
+    f.seekg(static_cast<std::streamoff>(frameOffset + sizeof(xicap::FrameHeader) + 4));
     char b = 0;
     f.read(&b, 1);
-    f.seekp(sizeof(xicap::Header) + sizeof(xicap::FrameHeader) + 4);
+    f.seekp(static_cast<std::streamoff>(frameOffset + sizeof(xicap::FrameHeader) + 4));
     char flipped = b ^ 0x01;
     f.write(&flipped, 1);
     f.close();
@@ -500,16 +547,17 @@ TEST_CASE("skipCurrentFrame recovers iteration past a corrupt frame", "[recovery
 
     // Corrupt the first frame's CRC by flipping its trailer bytes.
     {
+        const auto   frameOffset = firstFrameOffset(tmp.path);
         std::fstream f(tmp.path, std::ios::binary | std::ios::in | std::ios::out);
         f.seekg(0, std::ios::end);
         const auto size = f.tellg();
-        REQUIRE(size > sizeof(xicap::Header) + sizeof(xicap::FrameHeader) + 4);
+        REQUIRE(static_cast<uint64_t>(size) > frameOffset + sizeof(xicap::FrameHeader) + 4);
         // Read first frame's compressedSize.
-        f.seekg(sizeof(xicap::Header));
+        f.seekg(static_cast<std::streamoff>(frameOffset));
         xicap::FrameHeader fh{};
         f.read(reinterpret_cast<char*>(&fh), sizeof(fh));
         // Position of CRC = after frame header + compressed payload.
-        const auto crcPos = static_cast<std::streampos>(sizeof(xicap::Header) + sizeof(xicap::FrameHeader) + fh.compressedSize);
+        const auto crcPos = static_cast<std::streampos>(frameOffset + sizeof(xicap::FrameHeader) + fh.compressedSize);
         f.seekp(crcPos);
         const uint32_t bogus = 0xBADDCAFE;
         f.write(reinterpret_cast<const char*>(&bogus), sizeof(bogus));
@@ -579,4 +627,177 @@ TEST_CASE("packets larger than one frame's uncompressed budget split cleanly", "
     CHECK(r.totalFrames() > 1);
     const auto pkts = readAllOwned(r);
     CHECK(pkts.size() == 500);
+}
+
+TEST_CASE("frames before any LOGIN_ZONE carry the configured start zone", "[zone]")
+{
+    TempCapture tmp;
+    {
+        xicap::Writer w(tmp.path, baseConfig()); // startZoneId = 100
+        writeNPackets(w, 10);
+        w.close();
+    }
+
+    xicap::Reader r(tmp.path);
+    const auto    zones = r.listZones();
+    REQUIRE(zones.size() == 1);
+    CHECK(zones[0].zoneId == 100);
+    CHECK(r.seekToZone(100) == xicap::SeekResult::Ok);
+}
+
+TEST_CASE("the capture's dictionary is embedded and not surfaced as agent data", "[dict]")
+{
+    TempCapture tmp;
+    {
+        xicap::Writer w(tmp.path, baseConfig());
+        const uint8_t payload[] = { 1, 2, 3 };
+        w.addExtension(xicap::EXT_PLAYER, std::as_bytes(std::span{ payload }));
+        writeNPackets(w, 10);
+        w.close();
+    }
+
+    // Header counts the dictionary block; Reader::extensions() does not expose it.
+    xicap::Header h{};
+    {
+        std::ifstream f(tmp.path, std::ios::binary);
+        f.read(reinterpret_cast<char*>(&h), sizeof(h));
+    }
+    CHECK(h.extensionCount == 2);
+
+    xicap::Reader r(tmp.path);
+    CHECK(r.extensions().size() == 1);
+    CHECK(r.extensions()[0].type == xicap::EXT_PLAYER);
+    CHECK(r.getExtension(xicap::EXT_ZSTD_DICT) == nullptr);
+    CHECK(readAllOwned(r).size() == 10);
+}
+
+TEST_CASE("a capture written with a foreign dictionary still reads", "[dict]")
+{
+    // Stands in for a capture produced by a build with a different builtin
+    // dictionary: the reader must use the bytes in the file, not its own.
+    std::vector<uint8_t> foreign(4096);
+    for (size_t i = 0; i < foreign.size(); ++i)
+    {
+        foreign[i] = static_cast<uint8_t>((i * 7) & 0xFF);
+    }
+
+    TempCapture tmp;
+    {
+        xicap::FramePolicy pol{};
+        pol.dictionary = foreign;
+        xicap::Writer w(tmp.path, baseConfig(), pol);
+        writeNPackets(w, 25);
+        w.close();
+    }
+
+    xicap::Reader r(tmp.path);
+    CHECK(readAllOwned(r).size() == 25);
+}
+
+TEST_CASE("a capture written without a dictionary still reads", "[dict]")
+{
+    TempCapture tmp;
+    {
+        xicap::FramePolicy pol{};
+        pol.dictionary = {};
+        xicap::Writer w(tmp.path, baseConfig(), pol);
+        writeNPackets(w, 25);
+        w.close();
+    }
+
+    xicap::Reader r(tmp.path);
+    CHECK(readAllOwned(r).size() == 25);
+}
+
+TEST_CASE("a packet too large for PacketEntry::length is rejected", "[validation]")
+{
+    TempCapture   tmp;
+    xicap::Writer w(tmp.path, baseConfig());
+
+    const std::vector<std::byte> oversized(UINT16_MAX + 1);
+    try
+    {
+        w.write(1'700'000'000'000ULL, xicap::PacketDirection::ServerToClient, oversized);
+        FAIL("expected throw");
+    }
+    catch (const xicap::Error& e)
+    {
+        CHECK(e.code() == xicap::ErrorCode::PacketTooLarge);
+    }
+    CHECK(w.packetsWritten() == 0);
+}
+
+TEST_CASE("a frame claiming more content than its entries allow is rejected", "[validation]")
+{
+    TempCapture tmp;
+    {
+        xicap::Writer w(tmp.path, baseConfig());
+        writeNPackets(w, 10);
+        w.close();
+    }
+
+    // packetCount 0 means no entry can account for the decompressed payload, so
+    // the reader must refuse to size a buffer from the zstd content-size field.
+    patchFrameHeader(tmp.path, firstFrameOffset(tmp.path), [](xicap::FrameHeader& fh)
+                     {
+                         fh.packetCount = 0;
+                     });
+
+    xicap::Reader     r(tmp.path);
+    xicap::ReadPacket pkt;
+    try
+    {
+        r.next(pkt);
+        FAIL("expected throw");
+    }
+    catch (const xicap::Error& e)
+    {
+        CHECK(e.code() == xicap::ErrorCode::CorruptFrame);
+    }
+}
+
+TEST_CASE("a pre-2.1 capture with no embedded dictionary falls back to the build's", "[dict]")
+{
+    TempCapture tmp;
+    {
+        xicap::Writer w(tmp.path, baseConfig());
+        writeNPackets(w, 25);
+        w.close();
+    }
+
+    // Rewrite the capture without its EXT_ZSTD_DICT block — what a 2.0 writer,
+    // which only recorded a dictionary id, produced.
+    std::vector<uint8_t> raw;
+    {
+        std::ifstream f(tmp.path, std::ios::binary);
+        raw.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+    }
+
+    xicap::Header h{};
+    std::memcpy(&h, raw.data(), sizeof(h));
+    REQUIRE(h.extensionCount == 1);
+
+    xicap::ExtensionBlockHeader eh{};
+    std::memcpy(&eh, raw.data() + sizeof(h), sizeof(eh));
+    REQUIRE(eh.type == xicap::EXT_ZSTD_DICT);
+
+    h.extensionCount = 0;
+    h.versionMinor   = 0;
+    std::memcpy(raw.data(), &h, sizeof(h));
+    raw.erase(raw.begin() + sizeof(h), raw.begin() + sizeof(h) + sizeof(eh) + eh.length);
+
+    // The footer's recorded frame offsets shift with the removed block, so this
+    // stands in for a truncated 2.0 capture: the reader rebuilds by scanning.
+    raw.resize(raw.size() - sizeof(xicap::FooterTrailer));
+
+    TempCapture legacy;
+    {
+        std::ofstream f(legacy.path, std::ios::binary);
+        f.write(reinterpret_cast<const char*>(raw.data()), static_cast<std::streamsize>(raw.size()));
+    }
+
+    xicap::Reader r(legacy.path);
+    CHECK(r.versionMinor() == 0);
+    CHECK(r.extensions().empty());
+    CHECK(readAllOwned(r).size() == 25);
 }

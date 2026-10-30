@@ -163,6 +163,7 @@ public:
 private:
     auto readHeader() -> void;
     auto readExtensions() -> void;
+    auto loadDictionary() -> void;
     auto loadIndex() -> void;
     auto tryReadFooter() -> bool;
     auto scanFramesForIndex() -> void;

@@ -157,9 +157,9 @@ public:
         out["pendingRaceChange"] = static_cast<bool>(l.pendingRaceChange);
         out["worldTableIndex"]   = l.worldTableIndex;
         out["characterName"]     = std::string(l.characterName.data(),
-                                           ::strnlen(l.characterName.data(), l.characterName.size()));
+                                               ::strnlen(l.characterName.data(), l.characterName.size()));
         out["worldName"]         = std::string(l.worldName.data(),
-                                       ::strnlen(l.worldName.data(), l.worldName.size()));
+                                               ::strnlen(l.worldName.data(), l.worldName.size()));
         return out;
     }
 
@@ -233,7 +233,9 @@ PYBIND11_MODULE(_xicap, m)
         .value("ZstdContextFailed", xicap::ErrorCode::ZstdContextFailed)
         .value("WriterClosed", xicap::ErrorCode::WriterClosed)
         .value("AddExtensionAfterPackets", xicap::ErrorCode::AddExtensionAfterPackets)
-        .value("AddMarkerWithoutPacket", xicap::ErrorCode::AddMarkerWithoutPacket);
+        .value("AddMarkerWithoutPacket", xicap::ErrorCode::AddMarkerWithoutPacket)
+        .value("PacketTooLarge", xicap::ErrorCode::PacketTooLarge)
+        .value("CompressFailed", xicap::ErrorCode::CompressFailed);
 
     // Map xicap::Error onto a Python exception with a .code attribute.
     static py::exception<xicap::Error> errExc(m, "Error");

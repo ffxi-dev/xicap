@@ -1,6 +1,5 @@
 #include "xicap/writer.h"
 #include "internal/crc32.h"
-#include "xicap/dictionary.h"
 
 #include <algorithm>
 #include <cstring>
@@ -77,6 +76,7 @@ Writer::Writer(const std::filesystem::path& path, WriterConfig config, FramePoli
 : writeBuf_(WRITE_BUFFER_BYTES)
 , config_(std::move(config))
 , policy_(policy)
+, currentZoneId_(config_.startZoneId)
 , cctx_(ZSTD_createCCtx(), [](ZSTD_CCtx* c) noexcept
         {
             ZSTD_freeCCtx(c);
@@ -97,7 +97,19 @@ Writer::Writer(const std::filesystem::path& path, WriterConfig config, FramePoli
 
     ZSTD_CCtx_setParameter(cctx_.get(), ZSTD_c_compressionLevel, policy_.compressionLevel);
     ZSTD_CCtx_setParameter(cctx_.get(), ZSTD_c_checksumFlag, 1);
-    ZSTD_CCtx_loadDictionary(cctx_.get(), EMBEDDED_DICTIONARY.data(), EMBEDDED_DICTIONARY.size());
+
+    if (!policy_.dictionary.empty())
+    {
+        dictionary_.assign(policy_.dictionary.begin(), policy_.dictionary.end());
+        dictionaryId_ = ZSTD_getDictID_fromDict(dictionary_.data(), dictionary_.size());
+
+        const size_t rc = ZSTD_CCtx_loadDictionary(cctx_.get(), dictionary_.data(), dictionary_.size());
+        if (ZSTD_isError(rc))
+        {
+            throw Error(ErrorCode::ZstdContextFailed,
+                        std::string("xicap: zstd load dictionary: ") + ZSTD_getErrorName(rc));
+        }
+    }
 
     frameBuffer_.reserve(policy_.maxFrameSize);
     compressedBuffer_.reserve(ZSTD_compressBound(policy_.maxFrameSize));
@@ -155,6 +167,13 @@ auto Writer::write(uint64_t timestamp, PacketDirection direction, std::span<cons
     if (closed_)
     {
         throw Error(ErrorCode::WriterClosed, "xicap: writer is closed");
+    }
+    if (data.size() > UINT16_MAX)
+    {
+        // PacketEntry::length is 16-bit; a silent truncation here would corrupt
+        // every following packet in the frame.
+        throw Error(ErrorCode::PacketTooLarge,
+                    std::format("xicap: packet of {} bytes exceeds the {} byte limit", data.size(), UINT16_MAX));
     }
 
     uint16_t opcode = 0;
@@ -255,6 +274,11 @@ auto Writer::bytesWritten() -> uint64_t
     return static_cast<uint64_t>(file_.tellp());
 }
 
+auto Writer::extensionCount() const noexcept -> uint16_t
+{
+    return static_cast<uint16_t>(extensions_.size() + (dictionary_.empty() ? 0U : 1U));
+}
+
 auto Writer::writeHeader() -> void
 {
     Header header{
@@ -262,14 +286,14 @@ auto Writer::writeHeader() -> void
         .versionMajor     = VERSION_MAJOR,
         .versionMinor     = VERSION_MINOR,
         .captureAgent     = {},
-        .extensionCount   = static_cast<uint16_t>(extensions_.size()),
+        .extensionCount   = extensionCount(),
         .clientVersion    = {},
         .startZoneId      = config_.startZoneId,
         .startTimestamp   = 0,
         .lobby            = config_.lobby,
         .startWeather     = config_.startWeather,
         .padding0         = 0,
-        .dictionaryId     = ZSTD_getDictID_fromDict(EMBEDDED_DICTIONARY.data(), EMBEDDED_DICTIONARY.size()),
+        .dictionaryId     = dictionaryId_,
         .endTimestamp     = 0,
         .totalPacketCount = 0,
         .endZoneId        = 0,
@@ -287,6 +311,17 @@ auto Writer::writeExtensions() -> void
     if (!headerWritten_)
     {
         writeHeader();
+    }
+
+    if (!dictionary_.empty())
+    {
+        // Written first so a streaming consumer can decode frames as they arrive.
+        const ExtensionBlockHeader hdr{
+            .type   = EXT_ZSTD_DICT,
+            .length = static_cast<uint32_t>(dictionary_.size()),
+        };
+        writePod(file_, hdr);
+        writeBytes(file_, dictionary_);
     }
 
     for (const auto& ext : extensions_)
@@ -344,7 +379,7 @@ auto Writer::flushFrame() -> void
     const size_t compressedSize = ZSTD_compress2(cctx_.get(), compressedBuffer_.data(), compressedBuffer_.size(), frameBuffer_.data(), frameBuffer_.size());
     if (ZSTD_isError(compressedSize))
     {
-        throw Error(ErrorCode::DecompressFailed,
+        throw Error(ErrorCode::CompressFailed,
                     std::string("xicap: zstd compress: ") + ZSTD_getErrorName(compressedSize));
     }
 

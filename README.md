@@ -5,6 +5,8 @@ Binary capture format and C++20 library for Final Fantasy XI network packets.
 A capture is a fixed header + optional extension blocks (memory snapshots,
 character info) + zstd-compressed packet frames + an optional footer index.
 Truncated captures remain readable; the reader rebuilds the index by scanning.
+Each capture embeds the zstd dictionary it was compressed with, so it stays
+readable on any build.
 
 See [FORMAT.md](FORMAT.md) for the on-disk specification.
 

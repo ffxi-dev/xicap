@@ -166,6 +166,9 @@ enum ExtensionType : uint32_t
     EXT_SPELLS         = 0x0005,
     EXT_ABILITIES      = 0x0006,
     EXT_LOBBY_SNAPSHOT = 0x0007,
+    // Format-level, not agent data: the zstd dictionary the capture was written
+    // with. The Reader consumes it and does not surface it in extensions().
+    EXT_ZSTD_DICT = 0x0008,
 };
 
 enum class ErrorCode
@@ -184,6 +187,9 @@ enum class ErrorCode
     WriterClosed,
     AddExtensionAfterPackets,
     AddMarkerWithoutPacket,
+    // Appended only — the bindings mirror this enum by ordinal.
+    PacketTooLarge,
+    CompressFailed,
 };
 
 class Error : public std::runtime_error

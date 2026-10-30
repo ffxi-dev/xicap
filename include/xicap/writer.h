@@ -1,6 +1,7 @@
 #pragma once
 
 #include "constants.h"
+#include "dictionary.h"
 #include "types.h"
 
 #include <filesystem>
@@ -32,6 +33,10 @@ struct FramePolicy
     uint32_t maxPacketsPerFrame = FrameLimits::MAX_PACKET_COUNT;
     uint64_t maxFrameTimeMs     = FrameLimits::MAX_TIME_WINDOW_MS;
     int      compressionLevel   = 12;
+
+    // Dictionary used to compress frames. A copy is embedded in the capture so
+    // readers never need a matching build. Empty disables dictionary use.
+    std::span<const uint8_t> dictionary = builtinDictionary();
 };
 
 // Hook for extracting the current zone id from a server-to-client packet body.
@@ -82,6 +87,7 @@ public:
     [[nodiscard]] auto bytesWritten() -> uint64_t;
 
 private:
+    [[nodiscard]] auto extensionCount() const noexcept -> uint16_t;
     auto               writeHeader() -> void;
     auto               writeExtensions() -> void;
     auto               writeFooter() -> void;
@@ -97,13 +103,15 @@ private:
     bool              closed_{ false };
 
     std::vector<ExtensionBlock> extensions_;
+    std::vector<uint8_t>        dictionary_;
+    uint32_t                    dictionaryId_{ 0 };
 
     std::vector<uint8_t> frameBuffer_;
     std::vector<uint8_t> compressedBuffer_;
     uint64_t             frameBaseTimestamp_ = 0;
     uint64_t             frameLastTimestamp_ = 0;
     uint32_t             framePacketCount_   = 0;
-    uint16_t             currentZoneId_      = 0;
+    uint16_t             currentZoneId_;
 
     struct PendingMarker
     {

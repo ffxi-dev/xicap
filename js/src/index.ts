@@ -41,6 +41,8 @@ export const enum ErrorCode {
     WriterClosed = 11,
     AddExtensionAfterPackets = 12,
     AddMarkerWithoutPacket = 13,
+    PacketTooLarge = 14,
+    CompressFailed = 15,
 }
 
 export class XicapError extends Error {

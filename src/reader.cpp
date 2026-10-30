@@ -52,8 +52,6 @@ Reader::Reader(const std::filesystem::path& path)
         throw Error(ErrorCode::ZstdContextFailed, "xicap: ZSTD_createDCtx failed");
     }
 
-    ZSTD_DCtx_loadDictionary(dctx_.get(), EMBEDDED_DICTIONARY.data(), EMBEDDED_DICTIONARY.size());
-
     file_.open(path, std::ios::binary);
     if (!file_)
     {
@@ -66,6 +64,7 @@ Reader::Reader(const std::filesystem::path& path)
 
     readHeader();
     readExtensions();
+    loadDictionary();
     dataStartOffset_ = static_cast<uint64_t>(file_.tellg());
 
     loadIndex();
@@ -127,7 +126,7 @@ auto Reader::next(ReadPacket& packet) -> bool
     packet.direction = (entry.flags & PACKET_FLAG_DIRECTION_BIT) ? PacketDirection::ClientToServer
                                                                  : PacketDirection::ServerToClient;
     packet.data      = std::span{ reinterpret_cast<const std::byte*>(frameData_.data() + frameReadPos_),
-                             entry.length };
+                                  entry.length };
 
     if (framePacketIndex_ < framePacketMarkers_.size())
     {
@@ -303,13 +302,51 @@ auto Reader::readHeader() -> void
                                 header_.versionMajor,
                                 VERSION_MAJOR));
     }
-    const uint32_t buildDictId = ZSTD_getDictID_fromDict(EMBEDDED_DICTIONARY.data(), EMBEDDED_DICTIONARY.size());
-    if (header_.dictionaryId != buildDictId)
+}
+
+// Captures written by 2.1+ embed their dictionary in an EXT_ZSTD_DICT block, so
+// they decode on any build. Older captures carry only a dictionary id, which
+// must match what this build was compiled with.
+auto Reader::loadDictionary() -> void
+{
+    const auto it = std::find_if(extensions_.begin(), extensions_.end(), [](const ExtensionBlock& ext)
+                                 {
+                                     return ext.type == EXT_ZSTD_DICT;
+                                 });
+
+    std::span<const uint8_t> dict;
+    std::vector<uint8_t>     embedded;
+    if (it != extensions_.end())
+    {
+        embedded = std::move(it->data);
+        extensions_.erase(it); // format-level, not agent data
+        dict = embedded;
+    }
+    else if (header_.dictionaryId != 0)
+    {
+        dict = builtinDictionary();
+    }
+
+    if (dict.empty())
+    {
+        return;
+    }
+
+    const uint32_t dictId = ZSTD_getDictID_fromDict(dict.data(), dict.size());
+    if (dictId != header_.dictionaryId)
     {
         throw Error(ErrorCode::DictionaryMismatch,
-                    std::format("xicap: dictionary id mismatch (capture {:#010x}, build {:#010x})",
+                    std::format("xicap: dictionary id mismatch (capture {:#010x}, {} {:#010x})",
                                 header_.dictionaryId,
-                                buildDictId));
+                                embedded.empty() ? "build" : "embedded",
+                                dictId));
+    }
+
+    const size_t rc = ZSTD_DCtx_loadDictionary(dctx_.get(), dict.data(), dict.size());
+    if (ZSTD_isError(rc))
+    {
+        throw Error(ErrorCode::DictionaryMismatch,
+                    std::string("xicap: zstd load dictionary: ") + ZSTD_getErrorName(rc));
     }
 }
 
@@ -483,6 +520,16 @@ auto Reader::readNextFrame() -> bool
     if (rawSize == ZSTD_CONTENTSIZE_ERROR || rawSize == ZSTD_CONTENTSIZE_UNKNOWN)
     {
         throw Error(ErrorCode::CorruptFrame, "xicap: frame missing content size");
+    }
+
+    // The content size is attacker-controlled; without these it sizes an
+    // allocation. No frame can hold more than its own entries' worth of data.
+    const uint64_t entryBound = uint64_t{ frameHeader.packetCount } * (sizeof(PacketEntry) + UINT16_MAX) +
+                                uint64_t{ frameHeader.markerCount } * (sizeof(FrameMarker) + UINT16_MAX);
+    if (rawSize > FrameLimits::MAX_CONTENT_SIZE || rawSize > entryBound)
+    {
+        throw Error(ErrorCode::CorruptFrame,
+                    std::format("xicap: implausible frame content size {}", rawSize));
     }
     const size_t reportedSize = static_cast<size_t>(rawSize);
 
