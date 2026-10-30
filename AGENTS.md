@@ -26,7 +26,7 @@ cd js && node ./scripts/build-wasm.mjs                 # JavaScript and Wasm; ne
 
 ## Part of Vault
 
-This repository is one brick of Vault, the owner's platform for capturing retail FFXI and keeping the captures for the long term. The core repository is `sruon/vault`; the bricks are `vault-lens`, `vault-res`, `vault-xicap`, and `vault-pilot`. On the owner's PC they sit side by side in `C:/Users/sruon/Documents/GitHub/Vault/`.
+This repository is one brick of Vault, the owner's platform for capturing retail FFXI and keeping the captures for the long term. The core repository is `sruon/vault`; the bricks are `vault-lens`, `vault-res`, `vault-xicap`, `vault-pilot`, and `vault-patch`. On the owner's PC they sit side by side in `C:/Users/sruon/Documents/GitHub/Vault/`.
 
 - **CI** calls shared workflows from `sruon/vault` (`uses: sruon/vault/.github/workflows/<name>.yml@ci/v1`). Change CI logic there, not here.
 - **Contracts** come from `sruon/vault` at a tagged release. Pin a tag; never copy a schema in.
