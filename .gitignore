@@ -48,3 +48,6 @@ cmake-build-*/
 
 # debug information files
 *.dwo
+.claude/settings.local.json
+.claude/worktrees/
+ruvector.db
