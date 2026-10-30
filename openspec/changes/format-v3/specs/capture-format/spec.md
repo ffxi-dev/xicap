@@ -75,7 +75,11 @@ A reader SHALL read a file without a footer up to its last complete frame that p
 - **THEN** the reader yields every packet of the earlier frames and reports the capture as cut off
 
 ### Requirement: A conformance set defines correct reading
-The repository SHALL hold a set of test files, each with its expected reading, covering at least: a clean capture, an empty capture, a cut-off capture, a torn tail, a damaged middle frame with and without a footer, an unknown required feature, an unknown skippable frame kind, a missing dictionary, excluded and redacted packets, and a capture with a bad signature. Every binding SHALL read the whole set in CI, and a test-only reader written from `FORMAT.md` alone SHALL read it too.
+The repository SHALL hold a set of test files, each with its expected reading, covering every rule in `FORMAT.md` that a reader enforces. Every binding SHALL read the whole set in CI, and a test-only reader written from `FORMAT.md` alone SHALL read it too.
+
+#### Scenario: Coverage
+- **WHEN** the conformance set is listed
+- **THEN** it holds at least a clean capture, an empty capture, a cut-off capture, a torn tail, a damaged middle frame with and without a footer, an unknown required feature, an unknown skippable frame kind, a missing dictionary, excluded and redacted packets, packets on every registered channel and on an unknown one, and a capture with a bad signature
 
 #### Scenario: Spec alone is enough
 - **WHEN** the test-only reader, which uses only `FORMAT.md`, zstd, and a signature library, reads the conformance set

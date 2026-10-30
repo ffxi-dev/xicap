@@ -6,6 +6,8 @@ Format 2.1 was built for replay. Mogsafe now makes it an archive format: every u
 
 - Compatibility may break until the owner declares production. Nothing is archived yet; the one 1.x Memoria file on the owner's PC does not need to stay readable.
 - Recorders start a new file when the character changes, not at every logout. Twenty relogs on one character in an hour would otherwise make twenty files, each carrying a 64 KiB dictionary.
+- Two hard constraints: a capture is pinned to one character, for linking to Vault accounts later; and a custom client must be able to replay it, so the file holds all the context it needs as packets. Client memory snapshots go.
+- The format records more than the game connection: the shipped plugin hooks the search server, which serves `/search` and the auction house, and IRC and profile traffic come later.
 - The header says whether a capture is retail or private-server traffic. Both go in the same archive eventually.
 - Packets injected or blocked by addons are recorded, with flags.
 - Recorders sign captures, so every capture traces to one key and a bad actor's uploads can be found and dropped by key.
@@ -25,6 +27,8 @@ Format 2.1 was built for replay. Mogsafe now makes it an archive format: every u
 - Hiding identity inside the file. Packets carry character names and ids; privacy beyond chat exclusion comes from access control, to be designed when it matters.
 - Reading 1.x or 2.x files.
 - Recording the 28-byte datagram header and its sequence numbers. Ashita does not expose them as far as the review could tell; the FFXI packet header's own sequence is kept.
+- Replaying a capture that starts mid-session on its own. Replay walks back through `previousCaptureId` to the capture that starts at the login.
+- Defining the IRC, profile, and lobby channels' contents. Each gets its registry entry when its hooks exist.
 
 ## Decisions
 
@@ -55,8 +59,25 @@ The dictionary is required as the first extension block whenever `dictionaryId` 
 ### Timestamps
 Live recorders read the wall clock once at the start and add a monotonic clock after, so timestamps never go backwards. The writer clamps an earlier time to the last one instead of letting the delta wrap. A header byte names the clock source: live, converted with an inferred offset, or unknown. Memoria's habit of adding 1 ms per tied packet goes: equal timestamps are allowed.
 
+### Packets are the whole context
+The 2.1 extensions 0x0001 to 0x0007 copied client memory (player, inventory, entities, missions, spells, abilities) and the lobby's character blob. They are tied to one client build, cannot be checked against anything, and a custom client decades from now cannot load them. The server resends a character's whole state on the zone-in after a login, so a capture that starts at a login has it all as packets. The ids go; extensions remain for format-level data (dictionary, exclusion policy, import source) and metadata, never for state.
+
+### Channels
+Each packet entry gains a channel byte, numbered from a registry in `FORMAT.md`: 0 game server and 1 search server in 3.0. Search traffic (`/search`, the auction house) runs over its own connection, so it cannot share the game channel's opcode space or its 4-byte header; lobby, IRC, and profile traffic will be the same. One clock orders all channels.
+- A new channel is a minor version: a reader passes on packets of an unknown channel with their number, so a viewer still shows the game channel of a file that also carries one it does not know.
+- Each registry entry defines the channel's packet header, what the opcode field holds, and what a stub keeps.
+- The packet length grows to 32 bits. FFXI packets fit in 16, but nothing says profile or IRC payloads will, and the cost after compression is close to nothing.
+- Rejected: one frame per channel. Search traffic is sparse and interleaves with game traffic, so frames would split at every search.
+
 ### Identity, rotation, and links
-`captureId` is 16 random bytes; `previousCaptureId` is the capture this one continues, or zeros. A same-character relog continues the file with a marker, so the header's character is right for the whole file. The 24-hour cap keeps any one file bounded. Mogsafe groups linked captures into runs for search.
+`captureId` is 16 random bytes; `previousCaptureId` is the capture this one continues, or zeros. Files start only at a login, so each one replays on its own:
+- A login of another character starts a new file; the same character relogging continues the file with a marker, so the header's character is right for the whole file.
+- No timer cuts a session. A week-long session is one file of about 180 MB, which the uploader and Mogsafe handle like any other.
+- A recorder that starts after a crash or a late load marks its capture as starting mid-session and links it to the one before. Replay walks back to the capture that starts at the login.
+- The header's character is the recorder's claim. Readers report a capture whose zone-in packets name another character, and Mogsafe refuses it.
+- Rejected: a 24-hour cap. It would cut a session mid-way and make files a replay cannot use alone.
+
+Mogsafe groups linked captures into runs for search.
 
 ### Signing
 - Ed25519 (RFC 8032) over a SHA-512 chain. `h0 = SHA-512(header)`, then `h = SHA-512(h || block)` for every extension block and frame in file order. SHA-512 because Ed25519 already needs it, so one implementation serves both (owner, 2026-10-30).
@@ -74,9 +95,9 @@ Live recorders read the wall clock once at the start and add a monotonic clock a
 - Rejected: signing only at close. A cut-off capture, the common case after a crash, would carry no proof at all.
 
 ### Exclusion
-- A policy is an extension block: a name, a version, and rules `(direction, opcode, action)`, where the action is a stub or a list of byte ranges to zero. The writer applies it before compressing, so excluded bytes never exist on disk.
+- A policy is an extension block: a name, a version, and rules `(channel, direction, opcode, action)`, where the action is a stub or a list of byte ranges to zero. The writer applies it before compressing, so excluded bytes never exist on disk.
 - Byte ranges keep the library free of packet meanings; the policy carries the knowledge.
-- A stub keeps the 4-byte FFXI header, which holds the original size and the sequence counter, so nothing about timing or order is lost.
+- A stub keeps its channel's packet header (on the game channel, the 4-byte FFXI header, which holds the original size and the sequence counter), so nothing about timing or order is lost.
 - The library ships a default policy that stubs chat in both directions. The exact chat opcodes are checked against the client's resources during implementation.
 - Rejected: dropping packets with no trace. A reader could not tell "the server never sent it" from "it was left out".
 

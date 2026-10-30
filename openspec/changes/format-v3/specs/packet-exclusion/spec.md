@@ -7,14 +7,14 @@ Keeps private traffic such as chat out of captures before it reaches disk, while
 ## ADDED Requirements
 
 ### Requirement: The writer applies an exclusion policy
-A writer SHALL apply its exclusion policy to every packet before the packet reaches disk. A policy rule names a direction and an opcode, and either stubs the packet or zeroes byte ranges in it.
+A writer SHALL apply its exclusion policy to every packet before the packet reaches disk. A policy rule names a channel, a direction, and an opcode, and either stubs the packet or zeroes byte ranges in it.
 
 #### Scenario: Chat never touches disk
 - **WHEN** a chat packet arrives under a policy that stubs chat
 - **THEN** no byte of the chat text is written to the file at any time
 
 ### Requirement: Stubs keep the packet's header
-A stubbed packet SHALL keep its timestamp, direction, provenance flags, and its 4-byte FFXI header (opcode, size, and sequence), and SHALL drop the rest. A redacted packet SHALL keep its length with the named ranges zeroed.
+A stubbed packet SHALL keep its timestamp, channel, direction, provenance flags, and its channel's packet header as `FORMAT.md` defines it (for game packets the 4-byte FFXI header: opcode, size, and sequence), and SHALL drop the rest. A redacted packet SHALL keep its length with the named ranges zeroed.
 
 #### Scenario: Stubbed chat packet
 - **WHEN** a reader reads a stubbed chat packet
@@ -32,7 +32,7 @@ The file SHALL record the policy it was written with, including its name and ver
 - **THEN** it refuses the file rather than read a stub as a whole packet
 
 ### Requirement: Chat is stubbed by default
-The library's default policy SHALL stub every chat packet in both directions. A recorder MAY add rules; leaving chat in takes an explicit choice.
+The library's default policy SHALL stub every chat packet on the game channel in both directions. A recorder MAY add rules; leaving chat in takes an explicit choice.
 
 #### Scenario: Default writer
 - **WHEN** a writer is opened without naming a policy
