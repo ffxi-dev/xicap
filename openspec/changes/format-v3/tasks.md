@@ -44,7 +44,7 @@
 ## 7. Bindings and release
 
 - [x] 7.1 Expose the new writer options and reader results in the C API and the Go, Python, and JavaScript bindings: extensions, provenance flags, origin fields, capture ids, signing key, exclusion policy, recovery mode, verification result; verify each binding's tests
-- [ ] 7.2 Tag `v3.0.0`, the version Mogsafe pins; verify a clean module fetch of the tag builds the Go binding
+- [x] 7.2 Tag `v3.0.0`, the version Mogsafe pins; verify a clean module fetch of the tag builds the Go binding (done as `v3.0.1`; see Implementation Notes)
 
 ## Follow-up outside this repository
 
