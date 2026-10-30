@@ -131,6 +131,12 @@ public:
     {
         return unreadBytes_;
     }
+    // A zone-in read so far names a character other than the header's. Known
+    // for the whole capture once every packet has been read.
+    [[nodiscard]] auto characterMismatch() const noexcept -> bool
+    {
+        return characterMismatch_;
+    }
     // In recovery mode: damaged regions skipped so far.
     [[nodiscard]] auto skippedRegions() const -> std::vector<SkippedRegion>;
 
@@ -251,6 +257,7 @@ private:
     auto resync(uint64_t from, uint64_t limit) -> std::optional<uint64_t>;
     auto advance() -> bool;
     auto decodeFrame(const RawFrame& frame) -> void;
+    auto checkCharacter(const PacketEntry& entry, std::span<const uint8_t> data) -> void;
 
     std::ifstream        file_;
     ReaderOptions        options_;
@@ -269,6 +276,7 @@ private:
     FooterTrailer                 trailer_{};
     std::vector<FooterIndexEntry> indexEntries_;
     uint64_t                      unreadBytes_{ 0 };
+    bool                          characterMismatch_{ false };
     std::map<uint64_t, uint64_t>  skipped_;
 
     RawFrame                   raw_;

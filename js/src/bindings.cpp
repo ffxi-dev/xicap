@@ -155,6 +155,10 @@ public:
     {
         return reader_->footerDamaged();
     }
+    [[nodiscard]] auto characterMismatch() const -> bool
+    {
+        return reader_->characterMismatch();
+    }
     [[nodiscard]] auto unreadBytes() const -> double
     {
         return static_cast<double>(reader_->unreadBytes());
@@ -165,7 +169,7 @@ public:
         const auto& c = reader_->character();
         em::val     o = em::val::object();
         o.set("contentId", static_cast<double>(c.contentId));
-        o.set("worldContentId", static_cast<double>(c.worldContentId));
+        o.set("characterId", static_cast<double>(c.characterId));
         o.set("worldId", c.worldId);
         o.set("characterName", text(c.characterName));
         o.set("worldName", text(c.worldName));
@@ -367,6 +371,7 @@ EMSCRIPTEN_BINDINGS(xicap_module)
         .function("totalPacketCount", &JsReader::totalPacketCount)
         .function("complete", &JsReader::complete)
         .function("footerDamaged", &JsReader::footerDamaged)
+        .function("characterMismatch", &JsReader::characterMismatch)
         .function("unreadBytes", &JsReader::unreadBytes)
         .function("character", &JsReader::character)
         .function("policy", &JsReader::policy)

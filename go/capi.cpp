@@ -113,7 +113,7 @@ extern "C" int xicap_read(const char* path, xicap_summary* out, char* err, size_
                        std::ranges::copy(reader.previousCaptureId(), out->previous_capture_id);
                        const auto& character = reader.character();
                        out->content_id       = character.contentId;
-                       out->world_content_id = character.worldContentId;
+                       out->character_id     = character.characterId;
                        out->world_id         = character.worldId;
                        copyString(out->character_name, character.characterName);
                        copyString(out->world_name, character.worldName);
@@ -144,10 +144,11 @@ extern "C" int xicap_read(const char* path, xicap_summary* out, char* err, size_
                            out->start_zone_id = reader.frameZone(0);
                            out->end_zone_id   = reader.frameZone(reader.totalFrames() - 1);
                        }
-                       out->frames         = reader.totalFrames();
-                       out->complete       = reader.complete() ? 1 : 0;
-                       out->footer_damaged = reader.footerDamaged() ? 1 : 0;
-                       out->unread_bytes   = reader.unreadBytes();
+                       out->frames             = reader.totalFrames();
+                       out->complete           = reader.complete() ? 1 : 0;
+                       out->footer_damaged     = reader.footerDamaged() ? 1 : 0;
+                       out->unread_bytes       = reader.unreadBytes();
+                       out->character_mismatch = reader.characterMismatch() ? 1 : 0;
 
                        const auto verification = reader.verify();
                        std::ranges::copy(verification.key, out->signing_key);
@@ -167,11 +168,11 @@ extern "C" xicap_writer* xicap_writer_open(const char* path, const xicap_writer_
     const int     rc = guarded(err, errlen, [&]
                                {
                                xicap::WriterConfig config{};
-                               config.captureAgent             = info->capture_agent ? info->capture_agent : "";
-                               config.clientVersion            = info->client_version ? info->client_version : "";
-                               config.character.contentId      = info->content_id;
-                               config.character.worldContentId = info->world_content_id;
-                               config.character.worldId        = info->world_id;
+                               config.captureAgent          = info->capture_agent ? info->capture_agent : "";
+                               config.clientVersion         = info->client_version ? info->client_version : "";
+                               config.character.contentId   = info->content_id;
+                               config.character.characterId = info->character_id;
+                               config.character.worldId     = info->world_id;
                                copyName(config.character.characterName, info->character_name);
                                copyName(config.character.worldName, info->world_name);
                                config.clockSource  = static_cast<xicap::ClockSource>(info->clock_source);

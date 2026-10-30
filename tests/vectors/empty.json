@@ -10,6 +10,7 @@
   "totalPacketCount": 0,
   "packets": [
   ],
+  "characterMismatch": false,
   "unreadBytes": 0,
   "verify": [true, 0, 0, false],
   "recovery": [0, []]

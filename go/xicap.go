@@ -64,11 +64,11 @@ const (
 
 // Character is the capture's character, from its header.
 type Character struct {
-	ContentID      uint32
-	WorldContentID uint32
-	WorldID        uint16
-	Name           string
-	World          string
+	ContentID   uint32
+	CharacterID uint32
+	WorldID     uint16
+	Name        string
+	World       string
 }
 
 // SourceSummary describes what a converted capture was converted from.
@@ -101,6 +101,7 @@ type Summary struct {
 	Closed            bool   // a valid footer ends the file
 	FooterDamaged     bool
 	UnreadBytes       uint64 // after the last intact frame of a cut-off capture
+	CharacterMismatch bool   // a zone-in names a character other than the header's
 	PolicyName        string
 	PolicyVersion     uint32
 	Source            *SourceSummary // set on converted captures
@@ -142,30 +143,31 @@ func Read(path string) (Summary, error) {
 		CaptureID:         *(*[16]byte)(unsafe.Pointer(&s.capture_id[0])),
 		PreviousCaptureID: *(*[16]byte)(unsafe.Pointer(&s.previous_capture_id[0])),
 		Character: Character{
-			ContentID:      uint32(s.content_id),
-			WorldContentID: uint32(s.world_content_id),
-			WorldID:        uint16(s.world_id),
-			Name:           C.GoString(&s.character_name[0]),
-			World:          C.GoString(&s.world_name[0]),
+			ContentID:   uint32(s.content_id),
+			CharacterID: uint32(s.character_id),
+			WorldID:     uint16(s.world_id),
+			Name:        C.GoString(&s.character_name[0]),
+			World:       C.GoString(&s.world_name[0]),
 		},
-		ClockSource:     ClockSource(s.clock_source),
-		Origin:          Origin(s.origin),
-		Network:         Network(s.network),
-		StartContext:    StartContext(s.start_context),
-		StartZoneID:     uint16(s.start_zone_id),
-		EndZoneID:       uint16(s.end_zone_id),
-		StartTimestamp:  uint64(s.start_timestamp),
-		EndTimestamp:    uint64(s.end_timestamp),
-		Packets:         uint64(s.packets),
-		Frames:          uint64(s.frames),
-		Closed:          s.complete != 0,
-		FooterDamaged:   s.footer_damaged != 0,
-		UnreadBytes:     uint64(s.unread_bytes),
-		PolicyName:      C.GoString(&s.policy_name[0]),
-		PolicyVersion:   uint32(s.policy_version),
-		SigningKey:      *(*[32]byte)(unsafe.Pointer(&s.signing_key[0])),
-		SignedToEnd:     s.signed_to_end != 0,
-		VerifiedPackets: uint64(s.verified_packets),
+		ClockSource:       ClockSource(s.clock_source),
+		Origin:            Origin(s.origin),
+		Network:           Network(s.network),
+		StartContext:      StartContext(s.start_context),
+		StartZoneID:       uint16(s.start_zone_id),
+		EndZoneID:         uint16(s.end_zone_id),
+		StartTimestamp:    uint64(s.start_timestamp),
+		EndTimestamp:      uint64(s.end_timestamp),
+		Packets:           uint64(s.packets),
+		Frames:            uint64(s.frames),
+		Closed:            s.complete != 0,
+		FooterDamaged:     s.footer_damaged != 0,
+		UnreadBytes:       uint64(s.unread_bytes),
+		CharacterMismatch: s.character_mismatch != 0,
+		PolicyName:        C.GoString(&s.policy_name[0]),
+		PolicyVersion:     uint32(s.policy_version),
+		SigningKey:        *(*[32]byte)(unsafe.Pointer(&s.signing_key[0])),
+		SignedToEnd:       s.signed_to_end != 0,
+		VerifiedPackets:   uint64(s.verified_packets),
 	}
 	if s.has_source != 0 {
 		out.Source = &SourceSummary{
@@ -219,17 +221,17 @@ func Create(path string, info WriterInfo) (*Writer, error) {
 		return c
 	}
 	ci := C.xicap_writer_info{
-		capture_agent:    cstr(info.CaptureAgent),
-		client_version:   cstr(info.ClientVersion),
-		content_id:       C.uint32_t(info.Character.ContentID),
-		world_content_id: C.uint32_t(info.Character.WorldContentID),
-		world_id:         C.uint16_t(info.Character.WorldID),
-		character_name:   cstr(info.Character.Name),
-		world_name:       cstr(info.Character.World),
-		clock_source:     C.uint8_t(info.ClockSource),
-		origin:           C.uint8_t(info.Origin),
-		network:          C.uint8_t(info.Network),
-		start_context:    C.uint8_t(info.StartContext),
+		capture_agent:  cstr(info.CaptureAgent),
+		client_version: cstr(info.ClientVersion),
+		content_id:     C.uint32_t(info.Character.ContentID),
+		character_id:   C.uint32_t(info.Character.CharacterID),
+		world_id:       C.uint16_t(info.Character.WorldID),
+		character_name: cstr(info.Character.Name),
+		world_name:     cstr(info.Character.World),
+		clock_source:   C.uint8_t(info.ClockSource),
+		origin:         C.uint8_t(info.Origin),
+		network:        C.uint8_t(info.Network),
+		start_context:  C.uint8_t(info.StartContext),
 	}
 	if !info.NoDictionary {
 		ci.dictionary = 1

@@ -80,11 +80,11 @@ public:
     {
         const auto& c = reader_->character();
         py::dict    out;
-        out["contentId"]      = c.contentId;
-        out["worldContentId"] = c.worldContentId;
-        out["worldId"]        = c.worldId;
-        out["characterName"]  = text(c.characterName);
-        out["worldName"]      = text(c.worldName);
+        out["contentId"]     = c.contentId;
+        out["characterId"]   = c.characterId;
+        out["worldId"]       = c.worldId;
+        out["characterName"] = text(c.characterName);
+        out["worldName"]     = text(c.worldName);
         return out;
     }
 
@@ -393,6 +393,10 @@ PYBIND11_MODULE(_xicap, m)
                                                    {
                                                        return x.footerDamaged();
                                                    }))
+        .def_property_readonly("character_mismatch", r([](xicap::Reader& x)
+                                                       {
+                                                           return x.characterMismatch();
+                                                       }))
         .def_property_readonly("unread_bytes", r([](xicap::Reader& x)
                                                  {
                                                      return x.unreadBytes();

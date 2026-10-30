@@ -37,11 +37,11 @@ auto expect(bool ok, const std::string& what) -> void
 auto config() -> WriterConfig
 {
     WriterConfig cfg{};
-    cfg.clientVersion            = "vectors-1.0";
-    cfg.captureAgent             = "xicap_make_vectors";
-    cfg.character.contentId      = 0x01020304;
-    cfg.character.worldContentId = 0x0A0B0C0D;
-    cfg.character.worldId        = 42;
+    cfg.clientVersion         = "vectors-1.0";
+    cfg.captureAgent          = "xicap_make_vectors";
+    cfg.character.contentId   = 0x01020304;
+    cfg.character.characterId = 0x0A0B0C0D;
+    cfg.character.worldId     = 42;
     std::memcpy(cfg.character.characterName.data(), "Nouurs", 6);
     std::memcpy(cfg.character.worldName.data(), "Asura", 5);
     cfg.network = Network::Retail;
@@ -69,6 +69,16 @@ auto game(uint16_t opcode, size_t size, uint8_t fill) -> std::vector<std::byte>
     p[1]                       = std::byte(hdr >> 8);
     p[2]                       = std::byte{ 0x01 };
     p[3]                       = std::byte{ 0x00 };
+    return p;
+}
+
+// A zone-in naming the vectors' character, or another one.
+auto zoneIn(uint8_t zone, const char* name = "Nouurs", uint32_t id = 0x0A0B0C0D) -> std::vector<std::byte>
+{
+    auto p                              = game(FFXIPacket::LOGIN_ZONE, 160, 0);
+    p[FFXIPacket::LOGIN_ZONE_NO_OFFSET] = std::byte{ zone };
+    std::memcpy(p.data() + FFXIPacket::LOGIN_UNIQUE_NO_OFFSET, &id, sizeof(id));
+    std::memcpy(p.data() + FFXIPacket::LOGIN_NAME_OFFSET, name, std::strlen(name));
     return p;
 }
 
@@ -255,8 +265,7 @@ int main(int argc, char* argv[])
               const std::vector<std::byte> hello{ std::byte{ 'h' }, std::byte{ 'i' } };
               w.addExtension(0x8000, hello);
               w.mark(MarkerKind::Login, "start");
-              auto zone = game(FFXIPacket::LOGIN_ZONE, 64, 0);
-              zone[48]  = std::byte{ 230 };
+              const auto zone = zoneIn(230);
               w.write(T0, PacketDirection::ServerToClient, zone);
               w.write({ .timestamp = T0 + 1, .direction = PacketDirection::ClientToServer, .data = game(0x015, 32, 7), .provenance = PacketFlag::Injected | PacketFlag::FirstInChunk });
               w.write(T0 + 2, PacketDirection::ServerToClient, game(0x017, 64, 'x'));  // chat: stubbed
@@ -284,6 +293,25 @@ int main(int argc, char* argv[])
               Reader r(p);
               expect(r.complete() && r.verify().signedToEnd, "clean is complete and signed");
               expect(count(p) == 21, "clean holds 21 packets");
+              Reader     all(p);
+              ReadPacket pk{};
+              while (all.next(pk))
+              {
+              }
+              expect(!all.characterMismatch(), "clean's zone-ins name its character");
+          } },
+        { "character-mismatch", [](const fs::path& p)
+          {
+              Writer w(p, config(), policy(true));
+              w.write(T0, PacketDirection::ServerToClient, zoneIn(230));
+              w.write(T0 + 1000, PacketDirection::ServerToClient, zoneIn(231, "Someoneelse", 0x00ABCDEF));
+              w.close();
+              Reader     r(p);
+              ReadPacket pk{};
+              while (r.next(pk))
+              {
+              }
+              expect(r.characterMismatch(), "a zone-in naming another character is reported");
           } },
         { "empty", [](const fs::path& p)
           {

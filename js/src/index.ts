@@ -124,7 +124,7 @@ function rethrowXicapError<T>(module: any, fn: () => T): T {
 
 export interface CharacterIdentity {
     contentId: number;
-    worldContentId: number;
+    characterId: number;
     worldId: number;
     characterName: string;
     worldName: string;
@@ -255,6 +255,8 @@ export class Reader {
     get complete(): boolean { return this.native.complete(); }
     get footerDamaged(): boolean { return this.native.footerDamaged(); }
     get unreadBytes(): number { return this.native.unreadBytes(); }
+    // Known for the whole capture once every packet has been read.
+    get characterMismatch(): boolean { return this.native.characterMismatch(); }
     get character(): CharacterIdentity { return this.native.character(); }
     get policy(): ExclusionPolicy { return this.native.policy(); }
     get source(): SourceInfo | null { return this.native.source(); }

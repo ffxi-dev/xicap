@@ -63,6 +63,7 @@ class Capture:
         self.read_footer()
         self.skipped: dict[int, int] = {}
         self.unread = 0
+        self.mismatch = False
         if self.complete:
             self.end = self.index_offset
         else:
@@ -93,8 +94,8 @@ class Capture:
         self.signing_key = d[80:112]
         self.capture_agent = text(d[112:144])
         self.client_version = text(d[144:176])
-        content_id, world_content_id, world_id = struct.unpack_from("<IIH", d, 176)
-        self.character = [content_id, world_content_id, world_id, text(d[188:204]), text(d[204:220])]
+        content_id, character_id, world_id = struct.unpack_from("<IIH", d, 176)
+        self.character = [content_id, character_id, world_id, text(d[188:204]), text(d[204:220])]
 
     # Extension blocks -------------------------------------------------------
     def read_extensions(self) -> None:
@@ -265,6 +266,10 @@ class Capture:
             if channel == GAME and (length < 4 or (struct.unpack_from("<H", data, 0)[0] & 0x1FF) != opcode):
                 raise BadFrame("game packet header")
             ts += delta
+            # A zone-in names the character: UniqueNo at byte 4, name at 132.
+            if channel == GAME and opcode == 0x00A and not flags & 0x0301 and length >= 148:
+                if struct.unpack_from("<I", data, 4)[0] != self.character[1] or text(data[132:148]) != self.character[3]:
+                    self.mismatch = True
             packets.append([ts, channel, opcode, flags, data.hex(), []])
             pos += length
         for _ in range(marker_count):
@@ -390,6 +395,7 @@ def reading(path: Path) -> dict:
         out["endTimestamp"] = c.end_timestamp if c.complete else 0
         out["totalPacketCount"] = c.total_packets if c.complete else 0
         out["packets"] = list(c.packets())
+        out["characterMismatch"] = c.mismatch
         out["unreadBytes"] = c.unread
         out["verify"] = c.verify()
     except Refused as e:

@@ -17,8 +17,6 @@ namespace
 inline constexpr size_t MARKER_TEXT_MAX = 1024;
 // The game channel's stub keeps the 4-byte FFXI header.
 inline constexpr size_t GAME_STUB_BYTES = sizeof(FFXIPacketHeader);
-// GP_SERV_LOGIN (0x000A) carries the zone as a u32 at offset 48.
-inline constexpr size_t LOGIN_ZONE_OFFSET = 48;
 
 template <typename T>
 auto appendPod(std::vector<uint8_t>& dst, const T& value) -> void
@@ -382,10 +380,10 @@ auto Writer::write(const OutPacket& packet) -> void
     {
         endFrame();
     }
-    if (zoneIn && packet.data.size() >= LOGIN_ZONE_OFFSET + 4)
+    if (zoneIn && packet.data.size() >= FFXIPacket::LOGIN_ZONE_NO_OFFSET + 4)
     {
         uint32_t zone = 0;
-        std::memcpy(&zone, packet.data.data() + LOGIN_ZONE_OFFSET, sizeof(zone));
+        std::memcpy(&zone, packet.data.data() + FFXIPacket::LOGIN_ZONE_NO_OFFSET, sizeof(zone));
         currentZoneId_ = static_cast<uint16_t>(zone);
     }
 

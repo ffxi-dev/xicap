@@ -40,6 +40,13 @@ namespace FFXIPacket
 {
 inline constexpr uint16_t LOGIN_ZONE = 0x000A;
 inline constexpr uint16_t LOGOUT     = 0x000B;
+// Fields of the zone-in (0x00A, server to client), from LandSandBoat's
+// GP_SERV_COMMAND_LOGIN after atom0s's XiPackets. Offsets count the 4-byte
+// packet header.
+inline constexpr size_t LOGIN_UNIQUE_NO_OFFSET = 4;   // u32: the character's id
+inline constexpr size_t LOGIN_ZONE_NO_OFFSET   = 48;  // u32: the zone
+inline constexpr size_t LOGIN_NAME_OFFSET      = 132; // char[16]: the character's name
+inline constexpr size_t LOGIN_NAME_SIZE        = 16;
 } // namespace FFXIPacket
 
 #pragma pack(push, 1)

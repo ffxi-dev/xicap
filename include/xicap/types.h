@@ -97,7 +97,7 @@ inline constexpr uint16_t Required       = 0xFF00; // bits 8 to 15
 struct CharacterIdentity
 {
     uint32_t                                 contentId;
-    uint32_t                                 worldContentId;
+    uint32_t                                 characterId;
     uint16_t                                 worldId;
     uint16_t                                 reserved;
     std::array<char, CHARACTER_NAME_MAX_LEN> characterName;

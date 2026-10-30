@@ -107,7 +107,7 @@ A reader refuses the file if the magic differs, `versionMajor` is not 3,
 | Off | Size | Field | Notes |
 |----:|-----:|-------|-------|
 | 0 | 4 | `contentId` | POL character id (`ffxi_id`), unique to the character |
-| 4 | 4 | `worldContentId` | the character's id on its world (`ffxi_id_world`) |
+| 4 | 4 | `characterId` | the character's id on its world, as the zone-in's `UniqueNo` carries it; the lobby splits it into `ffxi_id_world` (bits 0 to 15) and `ffxi_id_world_tbl` (bits 16 to 23) |
 | 8 | 2 | `worldId` | |
 | 10 | 2 | `reserved` | |
 | 12 | 16 | `characterName` | text |
@@ -301,6 +301,12 @@ byte 0     byte 1             byte 2     byte 3
 - `id` = `u16(bytes 0..2) & 0x01FF`, 9 bits
 - `size` = `(u16(bytes 0..2) >> 9) & 0x7F`, in 4-byte words
 - `sync` = `u16(bytes 2..4)`, a sequence counter per direction
+
+A zone-in (`0x00A`, to the client) names the character: a u32 `UniqueNo` at
+byte 4 and a 16-byte name at byte 132, counting the 4-byte header; its zone is
+the u32 at byte 48. A reader compares every zone-in it reads that is neither
+stubbed nor redacted with the header's `characterId` and `characterName`, and
+reports a capture where any differs. Field offsets follow atom0s's XiPackets.
 
 A writer refuses a game packet shorter than 4 bytes and sets `opcode` to its
 `id`. A frame holding a game packet whose `opcode` differs from its `id` is a

@@ -17,7 +17,7 @@ func info() WriterInfo {
 	return WriterInfo{
 		CaptureAgent:  "test",
 		ClientVersion: "v1",
-		Character:     Character{ContentID: 0x01020304, WorldContentID: 7, WorldID: 42, Name: "Nouurs", World: "Asura"},
+		Character:     Character{ContentID: 0x01020304, CharacterID: 7, WorldID: 42, Name: "Nouurs", World: "Asura"},
 		ClockSource:   ClockLive,
 		Origin:        OriginLive,
 		Network:       NetworkRetail,

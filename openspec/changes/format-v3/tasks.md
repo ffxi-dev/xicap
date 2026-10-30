@@ -20,7 +20,7 @@
 - [ ] 3.1 Clamp backwards timestamps, add the clock-source, origin, retail or private, and server-name fields, and start a new frame on a zone change; verify tests for a clock step back, equal timestamps, and a frame spanning a zone change
 - [ ] 3.2 Add the channel, the 32-bit length, and the provenance flags (injected, blocked, modified, first in datagram) to the writer's packet call, and remove the client memory snapshot extensions; verify a round-trip test with game and search packets interleaved and a packet over 64 KiB on a non-game channel
 - [ ] 3.3 Add `captureId`, `previousCaptureId`, the start-context field, and a login marker call; verify a test that two writers get different ids and a continued capture names its predecessor
-- [ ] 3.5 Report a capture whose zone-in packets name a character other than the header's, with the identifying zone-in fields checked against the client's resources, and `worldContentId`'s meaning and width confirmed; verify tests for a match and a mismatch
+- [ ] 3.5 Report a capture whose zone-in packets name a character other than the header's, with the identifying zone-in fields checked against the client's resources, and the character id's meaning and width confirmed; verify tests for a match and a mismatch
 - [ ] 3.6 Define the search channel in `FORMAT.md` (its packet header, opcode field, and stub) from the plugin's hooks and real search traffic; verify a round-trip test on recorded search packets
 - [ ] 3.4 Add the source extension for converted captures; verify a round-trip test with a captain manifest
 

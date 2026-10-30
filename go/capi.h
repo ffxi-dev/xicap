@@ -17,7 +17,7 @@ extern "C"
         uint8_t  capture_id[16];
         uint8_t  previous_capture_id[16];
         uint32_t content_id;
-        uint32_t world_content_id;
+        uint32_t character_id;
         uint16_t world_id;
         char     character_name[16];
         char     world_name[16];
@@ -33,6 +33,7 @@ extern "C"
         uint64_t frames; // packet frames
         int      complete;
         int      footer_damaged;
+        int      character_mismatch;
         uint64_t unread_bytes;
         char     policy_name[32];
         uint32_t policy_version;
@@ -59,7 +60,7 @@ extern "C"
         const char* capture_agent;
         const char* client_version;
         uint32_t    content_id;
-        uint32_t    world_content_id;
+        uint32_t    character_id;
         uint16_t    world_id;
         const char* character_name;
         const char* world_name;

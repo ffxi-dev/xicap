@@ -155,7 +155,7 @@ inline auto normalReading(const std::filesystem::path& path) -> std::string
                        str(r.captureAgent()),
                        str(r.clientVersion()),
                        c.contentId,
-                       c.worldContentId,
+                       c.characterId,
                        c.worldId,
                        str(text(c.characterName)),
                        str(text(c.worldName)));
@@ -192,6 +192,7 @@ inline auto normalReading(const std::filesystem::path& path) -> std::string
     std::string packets;
     readPackets(r, packets);
     out += "  " + packets + ",\n";
+    out += std::format("  \"characterMismatch\": {},\n", r.characterMismatch());
     out += std::format("  \"unreadBytes\": {},\n", r.unreadBytes());
     const auto v = r.verify();
     out += std::format("  \"verify\": [{}, {}, {}, {}]", v.signedToEnd, v.verifiedPackets, v.goodCheckpoints, v.firstFailureOffset.has_value());

@@ -48,11 +48,11 @@ auto seed(uint8_t fill = 7) -> SecretSeed
 auto config() -> WriterConfig
 {
     WriterConfig cfg{};
-    cfg.clientVersion            = "test-client";
-    cfg.captureAgent             = "xicap tests";
-    cfg.character.contentId      = 0x01020304;
-    cfg.character.worldId        = 42;
-    cfg.character.worldContentId = 0x0A0B0C0D;
+    cfg.clientVersion         = "test-client";
+    cfg.captureAgent          = "xicap tests";
+    cfg.character.contentId   = 0x01020304;
+    cfg.character.worldId     = 42;
+    cfg.character.characterId = 0x0A0B0C0D;
     std::memcpy(cfg.character.characterName.data(), "Nouurs", 6);
     std::memcpy(cfg.character.worldName.data(), "Asura", 5);
     cfg.network     = Network::Retail;
@@ -80,10 +80,12 @@ auto gamePacket(uint16_t opcode, size_t size, uint8_t fill = 0xAB) -> std::vecto
     return p;
 }
 
-auto zoneIn(uint16_t zone) -> std::vector<std::byte>
+auto zoneIn(uint16_t zone, const char* name = "Nouurs", uint32_t id = 0x0A0B0C0D) -> std::vector<std::byte>
 {
-    auto p = gamePacket(FFXIPacket::LOGIN_ZONE, 64, 0);
-    std::memcpy(p.data() + 48, &zone, sizeof(zone));
+    auto p = gamePacket(FFXIPacket::LOGIN_ZONE, 160, 0);
+    std::memcpy(p.data() + FFXIPacket::LOGIN_ZONE_NO_OFFSET, &zone, sizeof(zone));
+    std::memcpy(p.data() + FFXIPacket::LOGIN_UNIQUE_NO_OFFSET, &id, sizeof(id));
+    std::memcpy(p.data() + FFXIPacket::LOGIN_NAME_OFFSET, name, std::strlen(name));
     return p;
 }
 
@@ -262,7 +264,7 @@ TEST_CASE("round trip keeps header, packets, channels, flags, and markers")
     CHECK(r.totalPacketCount() == 3);
     CHECK(r.clientVersion() == "test-client");
     CHECK(r.character().contentId == 0x01020304);
-    CHECK(r.character().worldContentId == 0x0A0B0C0D);
+    CHECK(r.character().characterId == 0x0A0B0C0D);
     CHECK(std::string(r.character().characterName.data()) == "Nouurs");
     CHECK(r.network() == Network::Retail);
     CHECK(r.startContext() == StartContext::Login);
@@ -373,6 +375,26 @@ TEST_CASE("a zone-in starts a frame carrying the new zone")
     ReadPacket p{};
     REQUIRE(r.next(p));
     CHECK(p.opcode == FFXIPacket::LOGIN_ZONE);
+}
+
+TEST_CASE("zone-ins are checked against the header's character")
+{
+    TempCapture tmp;
+    const auto  mismatch = [&](const std::vector<std::byte>& zone)
+    {
+        {
+            Writer w(tmp.path, config());
+            w.write(T0, PacketDirection::ServerToClient, zoneIn(230));
+            w.write(T0 + 1, PacketDirection::ServerToClient, zone);
+            w.close();
+        }
+        Reader r(tmp.path);
+        readAll(r);
+        return r.characterMismatch();
+    };
+    CHECK_FALSE(mismatch(zoneIn(231)));
+    CHECK(mismatch(zoneIn(231, "Mule")));
+    CHECK(mismatch(zoneIn(231, "Nouurs", 0x00000001)));
 }
 
 TEST_CASE("chat is stubbed before it reaches disk")

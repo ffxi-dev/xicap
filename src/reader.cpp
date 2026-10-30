@@ -7,6 +7,7 @@
 #include <cstring>
 #include <format>
 #include <span>
+#include <string_view>
 #include <zstd.h>
 
 namespace xicap
@@ -548,6 +549,7 @@ auto Reader::decodeFrame(const RawFrame& frame) -> void
             {
                 throw Error(ErrorCode::CorruptFrame, "xicap: game packet opcode differs from its header");
             }
+            checkCharacter(entry, { frameData_.data() + pos, entry.length });
         }
         timestamp += entry.deltaMs;
         packets_.push_back({ .entry = entry, .timestamp = timestamp, .dataOffset = pos, .firstMarker = 0, .markerCount = 0 });
@@ -579,6 +581,25 @@ auto Reader::decodeFrame(const RawFrame& frame) -> void
         }
         packet.markerCount++;
         markers_.push_back(std::move(marker));
+    }
+}
+
+auto Reader::checkCharacter(const PacketEntry& entry, std::span<const uint8_t> data) -> void
+{
+    using namespace FFXIPacket;
+    if (entry.opcode != LOGIN_ZONE || (entry.flags & (PacketFlag::ClientToServer | PacketFlag::Excluded | PacketFlag::Redacted)) != 0 ||
+        data.size() < LOGIN_NAME_OFFSET + LOGIN_NAME_SIZE)
+    {
+        return;
+    }
+    uint32_t uniqueNo = 0;
+    std::memcpy(&uniqueNo, data.data() + LOGIN_UNIQUE_NO_OFFSET, sizeof(uniqueNo));
+    const auto* name = reinterpret_cast<const char*>(data.data() + LOGIN_NAME_OFFSET);
+    const auto& c    = header_.character;
+    if (uniqueNo != c.characterId ||
+        std::string_view(name, strnlen(name, LOGIN_NAME_SIZE)) != std::string_view(c.characterName.data(), strnlen(c.characterName.data(), c.characterName.size())))
+    {
+        characterMismatch_ = true;
     }
 }
 
