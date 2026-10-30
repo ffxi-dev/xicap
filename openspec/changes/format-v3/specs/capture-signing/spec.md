@@ -14,14 +14,22 @@ A writer SHALL sign every capture with an Ed25519 key belonging to one recorder 
 - **THEN** each capture names the public key of the install that recorded it
 
 ### Requirement: A hash chain covers the whole file
-The writer SHALL keep a SHA-256 hash chain over the header, every extension block, and every frame in file order, and every signature SHALL sign the chain's value at its place in the file.
+The writer SHALL keep a SHA-512 hash chain over the header, every extension block, and every frame in file order, and every signature SHALL sign the chain's value at its place in the file.
 
 #### Scenario: Frame swapped
 - **WHEN** two frames of a signed capture are swapped
 - **THEN** the signature check fails from the first swapped frame on
 
 ### Requirement: Checkpoints sign a capture as it records
-While recording, the writer SHALL write a signed checkpoint at least once a minute while packets arrive, and SHALL sign the chain's final value in the footer on close.
+While recording, the writer SHALL write a signed checkpoint covering every frame written so far at the first frame boundary after 60 seconds of unsigned frames, when a flush finds the capture idle with unsigned frames, and before a login or logout marker. It SHALL not write a checkpoint when no frame was written since the last one, and SHALL sign the chain's final value in the footer on close.
+
+#### Scenario: Busy session
+- **WHEN** packets arrive steadily for ten minutes
+- **THEN** the capture holds about ten checkpoints, and no stretch of more than 60 seconds of frames is unsigned
+
+#### Scenario: Idle at the auction house
+- **WHEN** a session goes quiet after a burst of packets
+- **THEN** the next timed flush signs the burst, and no further checkpoints are written until packets arrive again
 
 #### Scenario: Cut-off capture
 - **WHEN** a signed capture is cut off by a crash

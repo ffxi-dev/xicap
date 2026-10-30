@@ -59,12 +59,18 @@ Live recorders read the wall clock once at the start and add a monotonic clock a
 `captureId` is 16 random bytes; `previousCaptureId` is the capture this one continues, or zeros. A same-character relog continues the file with a marker, so the header's character is right for the whole file. The 24-hour cap keeps any one file bounded. Mogsafe groups linked captures into runs for search.
 
 ### Signing
-- Ed25519 (RFC 8032) over a SHA-256 chain. `h0 = SHA-256(header)`, then `h = SHA-256(h || block)` for every extension block and frame in file order.
-- A checkpoint is a frame of kind 0x01 holding the chain value it signs and the signature. The writer writes one at the first frame boundary after 60 seconds without one. Cost: about 100 bytes a minute, about 50 KB for 8 hours.
+- Ed25519 (RFC 8032) over a SHA-512 chain. `h0 = SHA-512(header)`, then `h = SHA-512(h || block)` for every extension block and frame in file order. SHA-512 because Ed25519 already needs it, so one implementation serves both (owner, 2026-10-30).
+- A checkpoint is a frame of kind 0x01 holding the chain value it signs and the signature. Checkpoints follow activity, not the clock:
+  - at the first frame boundary after 60 seconds of unsigned frames, so a busy session never has more than a minute unsigned;
+  - when the host's timed flush finds the capture idle with unsigned frames, so a burst followed by quiet is signed at once;
+  - before a login or logout marker, so each session's end is signed even if the client dies at character select;
+  - never when nothing was written since the last one, so an idle client writes nothing.
+- Cost: at most about 100 bytes a minute of activity, about 50 KB for 8 busy hours.
 - The footer signs the final chain value together with the end fields.
 - The header carries the 32-byte public key. Mogsafe registers keys per uploader; the format only names the key.
 - Captain imports are signed by Mogsafe's converter key, so "converted by Mogsafe" is itself provable.
-- Rejected: signing every frame. That costs 64 bytes per frame (about 370 KB per 8 hours) for no more than a one-minute checkpoint gives.
+- Rejected: signing every frame. That costs 64 bytes per frame (about 370 KB per 8 hours) for little more than a one-minute checkpoint gives.
+- Rejected: a fixed 60-second timer. It signs nothing new while idle and leaves a burst before a quiet spell unsigned for up to a minute.
 - Rejected: signing only at close. A cut-off capture, the common case after a crash, would carry no proof at all.
 
 ### Exclusion
@@ -75,7 +81,7 @@ Live recorders read the wall clock once at the start and add a monotonic clock a
 - Rejected: dropping packets with no trace. A reader could not tell "the server never sent it" from "it was left out".
 
 ### Signing library
-Monocypher, vendored as one C file, gives Ed25519 under RFC 8032 and builds on MSVC x86 and x64, Linux, and Emscripten with no system package. SHA-256 is about 200 lines under `src/internal/` beside the CRC, or Monocypher's SHA-512 if the chain switches to it. Implementation checks this choice against libsodium first: libsodium is the more widely used library, but it needs a package on every platform and a Wasm build.
+Monocypher (owner, 2026-10-30): `monocypher.c` plus `optional/monocypher-ed25519.c`, vendored, give RFC 8032 Ed25519 and SHA-512, and build on MSVC x86 and x64, Linux, and Emscripten with no system package. It is maintained (4.0.3 in June 2026, commits in October 2026) and was audited by Cure53. Rejected: libsodium, which needs a package on every platform and its own Wasm build for the same two functions.
 
 ### Test-only reader
 `tests/spec_reader.py` reads format 3 from `FORMAT.md` alone, with `zstandard` and `cryptography`. It is not a binding and is never shipped; it exists to prove the spec is complete. `AGENTS.md`'s rule that bindings wrap the C++ library stays.
@@ -89,7 +95,7 @@ Monocypher, vendored as one C file, gives Ed25519 under RFC 8032 and builds on M
 
 - [Per-file overhead: dictionary, key, and checkpoints, about 65 KB plus 6 KB an hour] → Rotation only on character change keeps the file count low.
 - [A stolen or shared recorder key signs anything] → The signature proves which key, not which person. Mogsafe can revoke a key and find everything it signed.
-- [Vendored crypto] → Monocypher is small, audited, and maintained. Implementation tests it against RFC 8032 vectors in CI.
+- [Vendored crypto] → Monocypher is small, audited, and maintained. Implementation tests it against RFC 8032 vectors in CI, and Renovate cannot bump a vendored file, so the vendored version is named in `FORMAT.md`'s dependencies and checked by hand on each release.
 - [Chat opcodes missed by the default policy] → The conformance set includes every chat opcode found in the resources, and the policy's version is in each file, so a later fix shows which captures predate it.
 
 ## Migration Plan
@@ -98,8 +104,7 @@ None for data: nothing is archived. Mogsafe's change in `ffxi-dev/vault` lands a
 
 ## Open Questions
 
-- Checkpoint interval: 60 seconds is a guess. Shorter costs a little more space and loses less proof after a crash.
-- Whether the chain should use SHA-512, which Ed25519 already needs, to save one hash implementation.
+- The idle threshold for the timed-flush checkpoint: the recorder's flush timer decides it. The plugin's change picks the timer.
 
 ## Implementation Notes
 

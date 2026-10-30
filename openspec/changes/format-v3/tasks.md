@@ -24,8 +24,8 @@
 
 ## 4. Signing
 
-- [ ] 4.1 Vendor the signing library after checking it against libsodium on MSVC x86 and x64, Linux, and Emscripten; record the choice and why in Implementation Notes; verify RFC 8032 test vectors pass on every CI platform
-- [ ] 4.2 Keep the hash chain in the writer, write a checkpoint frame at the first frame boundary after 60 seconds without one, and sign the end in the footer; verify tests for a clean capture, a cut-off capture verified up to its last checkpoint, swapped frames, and an edited packet with a recomputed CRC
+- [ ] 4.1 Vendor Monocypher 4.0.3 (`monocypher.c` and `optional/monocypher-ed25519.c`) for Ed25519 and SHA-512; verify RFC 8032 and FIPS 180-4 SHA-512 test vectors pass on MSVC x86 and x64, Linux, and Emscripten
+- [ ] 4.2 Keep the hash chain in the writer, write checkpoints by the rules in the design (60 seconds of unsigned frames, idle flush, before login and logout markers, never with nothing new), and sign the end in the footer; verify tests for a busy session, an idle session, a clean capture, a cut-off capture verified up to its last checkpoint, swapped frames, and an edited packet with a recomputed CRC
 - [ ] 4.3 Report the key, the verification result, and the verified packet count from the reader, without stopping on a failure; verify against the tests in 4.2
 
 ## 5. Exclusion
