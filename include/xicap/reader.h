@@ -165,6 +165,10 @@ public:
         return currentFrameIndex_;
     }
     [[nodiscard]] auto frameTimestamp(uint64_t frameIndex) const -> uint64_t;
+    [[nodiscard]] auto frameZone(uint64_t frameIndex) const -> uint16_t
+    {
+        return frameIndex < indexEntries_.size() ? indexEntries_[frameIndex].zoneId : 0;
+    }
     [[nodiscard]] auto listZones() const -> std::vector<ZoneEntry>;
     [[nodiscard]] auto totalFrames() const noexcept -> uint64_t
     {

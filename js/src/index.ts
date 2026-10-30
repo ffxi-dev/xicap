@@ -4,6 +4,7 @@
 //   import { Reader } from "@xicap/wasm";
 //   const r = await Reader.open(bytes);
 //   for (const pkt of r) { ... }
+//   r.verify().signedToEnd;
 //   r.close();
 //
 // `bytes` accepts ArrayBuffer or any TypedArray. The whole buffer is copied
@@ -15,6 +16,51 @@ import createXicap from "../dist/xicap.js";
 export const enum PacketDirection {
     ServerToClient = 0,
     ClientToServer = 1,
+}
+
+export const enum Channel {
+    Game = 0,
+    Search = 1,
+}
+
+export const enum PacketFlag {
+    ClientToServer = 0x0001,
+    Injected = 0x0002,
+    Blocked = 0x0004,
+    Modified = 0x0008,
+    FirstInChunk = 0x0010,
+    Excluded = 0x0100,
+    Redacted = 0x0200,
+}
+
+export const enum MarkerKind {
+    Note = 0,
+    Login = 1,
+    Logout = 2,
+}
+
+export const enum ClockSource {
+    Unknown = 0,
+    Live = 1,
+    Converted = 2,
+}
+
+export const enum Origin {
+    Unknown = 0,
+    Live = 1,
+    Converted = 2,
+}
+
+export const enum Network {
+    Unknown = 0,
+    Retail = 1,
+    Private = 2,
+}
+
+export const enum StartContext {
+    Unknown = 0,
+    Login = 1,
+    MidSession = 2,
 }
 
 export const enum SeekResult {
@@ -43,6 +89,16 @@ export const enum ErrorCode {
     AddMarkerWithoutPacket = 13,
     PacketTooLarge = 14,
     CompressFailed = 15,
+    HeaderChecksumMismatch = 16,
+    ExtensionChecksumMismatch = 17,
+    MissingDictionary = 18,
+    MissingPolicy = 19,
+    UnknownFrameKind = 20,
+    UnknownPacketFlag = 21,
+    InvalidPolicy = 22,
+    InvalidExtension = 23,
+    WriteFailed = 24,
+    PacketTooShort = 25,
 }
 
 export class XicapError extends Error {
@@ -66,16 +122,41 @@ function rethrowXicapError<T>(module: any, fn: () => T): T {
     }
 }
 
-export interface LobbyIdentity {
+export interface CharacterIdentity {
     contentId: number;
     worldContentId: number;
     worldId: number;
-    status: number;
-    pendingRename: boolean;
-    pendingRaceChange: boolean;
-    worldTableIndex: number;
     characterName: string;
     worldName: string;
+}
+
+export interface ExclusionPolicy {
+    name: string;
+    version: number;
+    rules: {
+        channel: number;
+        direction: number;
+        action: number;
+        opcode: number;
+        ranges: { offset: number; length: number }[];
+    }[];
+}
+
+export interface SourceInfo {
+    format: string;
+    formatVersion: string;
+    skippedRecords: number;
+    utcOffsetSeconds: number;
+    sourceHash: Uint8Array;
+    metadata: Uint8Array;
+}
+
+export interface Verification {
+    key: Uint8Array;
+    signedToEnd: boolean;
+    verifiedPackets: number;
+    goodCheckpoints: number;
+    firstFailureOffset: number | null;
 }
 
 export interface ZoneEntry {
@@ -84,12 +165,25 @@ export interface ZoneEntry {
     fileOffset: number;
 }
 
+export interface Marker {
+    kind: MarkerKind;
+    text: string;
+}
+
 export interface Packet {
     timestampMs: number;
+    channel: number;
     opcode: number;
+    flags: number;
     direction: PacketDirection;
     data: Uint8Array;
-    markers: string[];
+    markers: Marker[];
+}
+
+export interface OpenOptions {
+    // Skip damaged frames instead of refusing a complete file or ending a
+    // cut-off one. For salvage only.
+    recovery?: boolean;
 }
 
 let modulePromise: Promise<any> | null = null;
@@ -103,7 +197,7 @@ async function getModule(): Promise<any> {
 let nextHandle = 0;
 
 export class Reader {
-    static async open(bytes: ArrayBuffer | ArrayBufferView): Promise<Reader> {
+    static async open(bytes: ArrayBuffer | ArrayBufferView, options: OpenOptions = {}): Promise<Reader> {
         const module = await getModule();
         const u8 =
             bytes instanceof Uint8Array
@@ -114,7 +208,7 @@ export class Reader {
         const path = `/xicap-${nextHandle++}-${Date.now()}.xicap`;
         module.FS.writeFile(path, u8);
         try {
-            const native = rethrowXicapError(module, () => new module.Reader(path));
+            const native = rethrowXicapError(module, () => new module.Reader(path, options.recovery ?? false));
             return new Reader(native, module, path);
         } catch (e) {
             module.FS.unlink(path);
@@ -141,34 +235,46 @@ export class Reader {
         }
     }
 
-    // Header accessors -------------------------------------------------------
+    // Header and footer ------------------------------------------------------
     get versionMajor(): number { return this.native.versionMajor(); }
     get versionMinor(): number { return this.native.versionMinor(); }
     get clientVersion(): string { return this.native.clientVersion(); }
     get captureAgent(): string { return this.native.captureAgent(); }
-    get startZoneId(): number { return this.native.startZoneId(); }
-    get endZoneId(): number { return this.native.endZoneId(); }
-    get startWeather(): number { return this.native.startWeather(); }
+    get captureId(): Uint8Array { return this.native.captureId(); }
+    get previousCaptureId(): Uint8Array { return this.native.previousCaptureId(); }
+    get signingKey(): Uint8Array { return this.native.signingKey(); }
+    get clockSource(): ClockSource { return this.native.clockSource(); }
+    get origin(): Origin { return this.native.origin(); }
+    get network(): Network { return this.native.network(); }
+    get startContext(): StartContext { return this.native.startContext(); }
     get startTimestampMs(): number { return this.native.startTimestampMs(); }
     get endTimestampMs(): number { return this.native.endTimestampMs(); }
     get durationMs(): number { return this.native.durationMs(); }
     get totalFrames(): number { return this.native.totalFrames(); }
     get totalPacketCount(): number { return this.native.totalPacketCount(); }
-    get hasFooter(): boolean { return this.native.hasFooter(); }
+    get complete(): boolean { return this.native.complete(); }
+    get footerDamaged(): boolean { return this.native.footerDamaged(); }
+    get unreadBytes(): number { return this.native.unreadBytes(); }
+    get character(): CharacterIdentity { return this.native.character(); }
+    get policy(): ExclusionPolicy { return this.native.policy(); }
+    get source(): SourceInfo | null { return this.native.source(); }
 
-    get lobby(): LobbyIdentity {
-        return this.native.lobby();
+    // Recomputes the hash chain and checks every signature.
+    verify(): Verification {
+        return rethrowXicapError(this.module, () => this.native.verify());
+    }
+
+    skippedRegions(): { offset: number; length: number }[] {
+        return this.native.skippedRegions();
     }
 
     extensionTypes(): number[] {
         return this.native.extensionTypes();
     }
 
-    // Returns null if the extension is not present. Otherwise a Uint8Array
-    // backed by the wasm heap; copy it before any subsequent wasm call.
+    // A copy of the extension's bytes, or null if not present.
     getExtension(type: number): Uint8Array | null {
-        const v = this.native.getExtension(type);
-        return v ?? null;
+        return this.native.getExtension(type) ?? null;
     }
 
     listZones(): ZoneEntry[] {
@@ -177,8 +283,7 @@ export class Reader {
 
     // Iteration --------------------------------------------------------------
 
-    // Yields packets sequentially. Packet.data is a fresh Uint8Array per call
-    // (safe to retain).
+    // Yields packets in order. Packet.data is a fresh Uint8Array (safe to keep).
     *[Symbol.iterator](): IterableIterator<Packet> {
         while (true) {
             const p = rethrowXicapError(this.module, () => this.native.next());
@@ -192,14 +297,14 @@ export class Reader {
     }
 
     seekToFrame(frameIndex: number): SeekResult {
-        return this.native.seekToFrame(frameIndex);
+        return rethrowXicapError(this.module, () => this.native.seekToFrame(frameIndex));
     }
 
     seekToTime(timestampMs: number): SeekResult {
-        return this.native.seekToTime(timestampMs);
+        return rethrowXicapError(this.module, () => this.native.seekToTime(timestampMs));
     }
 
     seekToZone(zoneId: number): SeekResult {
-        return this.native.seekToZone(zoneId);
+        return rethrowXicapError(this.module, () => this.native.seekToZone(zoneId));
     }
 }

@@ -4,6 +4,7 @@
 #include <emscripten/val.h>
 
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <string>
 #include <utility>
@@ -45,29 +46,42 @@ auto withJsErrors(F&& f) -> decltype(f())
     }
 }
 
+// A JS-owned copy: views into the wasm heap go stale on the next call.
+auto copyBytes(const void* data, size_t size) -> em::val
+{
+    em::val u8 = em::val::global("Uint8Array").new_(size);
+    u8.call<void>("set", em::val(em::typed_memory_view(size, static_cast<const uint8_t*>(data))));
+    return u8;
+}
+
+template <typename T>
+auto copyBytes(const T& bytes) -> em::val
+{
+    return copyBytes(bytes.data(), bytes.size());
+}
+
+template <size_t N>
+auto text(const std::array<char, N>& field) -> std::string
+{
+    return { field.data(), ::strnlen(field.data(), N) };
+}
+
 // Wraps xicap::Reader for Embind. Lifecycle: Reader.open writes the input bytes
 // to a MEMFS path and constructs the C++ Reader against that path. delete()
-// releases the C++ object and removes the MEMFS file.
+// releases the C++ object; the JS wrapper removes the MEMFS file.
 class JsReader
 {
 public:
-    explicit JsReader(std::string memPath)
+    JsReader(std::string memPath, bool recovery)
     : path_(std::move(memPath))
     {
         withJsErrors([&]() -> int
                      {
-                         reader_ = std::make_unique<xicap::Reader>(path_);
+                         reader_ = std::make_unique<xicap::Reader>(path_, xicap::ReaderOptions{ .recovery = recovery });
                          return 0;
                      });
     }
 
-    ~JsReader()
-    {
-        reader_.reset();
-        // MEMFS cleanup is handled in the JS wrapper (FS.unlink).
-    }
-
-    // Header accessors -------------------------------------------------------
     [[nodiscard]] auto versionMajor() const -> uint8_t
     {
         return reader_->versionMajor();
@@ -84,19 +98,35 @@ public:
     {
         return reader_->captureAgent();
     }
-    [[nodiscard]] auto startZoneId() const -> uint16_t
+    [[nodiscard]] auto captureId() const -> em::val
     {
-        return reader_->startZoneId();
+        return copyBytes(reader_->captureId());
     }
-    [[nodiscard]] auto endZoneId() const -> uint16_t
+    [[nodiscard]] auto previousCaptureId() const -> em::val
     {
-        return reader_->endZoneId();
+        return copyBytes(reader_->previousCaptureId());
     }
-    [[nodiscard]] auto startWeather() const -> uint8_t
+    [[nodiscard]] auto signingKey() const -> em::val
     {
-        return reader_->startWeather();
+        return copyBytes(reader_->signingKey());
     }
-    // JS numbers are doubles — safe up to 2^53. Unix-ms timestamps fit.
+    [[nodiscard]] auto clockSource() const -> int
+    {
+        return static_cast<int>(reader_->clockSource());
+    }
+    [[nodiscard]] auto origin() const -> int
+    {
+        return static_cast<int>(reader_->origin());
+    }
+    [[nodiscard]] auto network() const -> int
+    {
+        return static_cast<int>(reader_->network());
+    }
+    [[nodiscard]] auto startContext() const -> int
+    {
+        return static_cast<int>(reader_->startContext());
+    }
+    // JS numbers are doubles, safe up to 2^53. Unix-ms timestamps fit.
     [[nodiscard]] auto startTimestampMs() const -> double
     {
         return static_cast<double>(reader_->startTimestamp());
@@ -117,25 +147,105 @@ public:
     {
         return static_cast<double>(reader_->totalPacketCount());
     }
-    [[nodiscard]] auto hasFooter() const -> bool
+    [[nodiscard]] auto complete() const -> bool
     {
-        return reader_->hasFooter();
+        return reader_->complete();
+    }
+    [[nodiscard]] auto footerDamaged() const -> bool
+    {
+        return reader_->footerDamaged();
+    }
+    [[nodiscard]] auto unreadBytes() const -> double
+    {
+        return static_cast<double>(reader_->unreadBytes());
     }
 
-    [[nodiscard]] auto lobby() const -> em::val
+    [[nodiscard]] auto character() const -> em::val
     {
-        const auto& l = reader_->lobby();
+        const auto& c = reader_->character();
         em::val     o = em::val::object();
-        o.set("contentId", static_cast<double>(l.contentId));
-        o.set("worldContentId", l.worldContentId);
-        o.set("worldId", l.worldId);
-        o.set("status", l.status);
-        o.set("pendingRename", static_cast<bool>(l.pendingRename));
-        o.set("pendingRaceChange", static_cast<bool>(l.pendingRaceChange));
-        o.set("worldTableIndex", l.worldTableIndex);
-        o.set("characterName", std::string(l.characterName.data(), ::strnlen(l.characterName.data(), l.characterName.size())));
-        o.set("worldName", std::string(l.worldName.data(), ::strnlen(l.worldName.data(), l.worldName.size())));
+        o.set("contentId", static_cast<double>(c.contentId));
+        o.set("worldContentId", static_cast<double>(c.worldContentId));
+        o.set("worldId", c.worldId);
+        o.set("characterName", text(c.characterName));
+        o.set("worldName", text(c.worldName));
         return o;
+    }
+
+    [[nodiscard]] auto policy() const -> em::val
+    {
+        const auto& p     = reader_->policy();
+        em::val     rules = em::val::array();
+        for (size_t i = 0; i < p.rules.size(); ++i)
+        {
+            const auto& r      = p.rules[i];
+            em::val     ranges = em::val::array();
+            for (size_t j = 0; j < r.ranges.size(); ++j)
+            {
+                em::val range = em::val::object();
+                range.set("offset", static_cast<double>(r.ranges[j].offset));
+                range.set("length", static_cast<double>(r.ranges[j].length));
+                ranges.set(j, range);
+            }
+            em::val rule = em::val::object();
+            rule.set("channel", r.channel);
+            rule.set("direction", static_cast<int>(r.direction));
+            rule.set("action", static_cast<int>(r.action));
+            rule.set("opcode", r.opcode);
+            rule.set("ranges", ranges);
+            rules.set(i, rule);
+        }
+        em::val o = em::val::object();
+        o.set("name", p.name);
+        o.set("version", static_cast<double>(p.version));
+        o.set("rules", rules);
+        return o;
+    }
+
+    [[nodiscard]] auto source() const -> em::val
+    {
+        const auto& s = reader_->source();
+        if (!s)
+        {
+            return em::val::null();
+        }
+        em::val o = em::val::object();
+        o.set("format", s->format);
+        o.set("formatVersion", s->formatVersion);
+        o.set("skippedRecords", static_cast<double>(s->skippedRecords));
+        o.set("utcOffsetSeconds", s->utcOffsetSeconds);
+        o.set("sourceHash", copyBytes(s->sourceHash));
+        o.set("metadata", copyBytes(s->metadata));
+        return o;
+    }
+
+    auto verify() -> em::val
+    {
+        return withJsErrors([&]() -> em::val
+                            {
+                                const auto v = reader_->verify();
+                                em::val    o = em::val::object();
+                                o.set("key", copyBytes(v.key));
+                                o.set("signedToEnd", v.signedToEnd);
+                                o.set("verifiedPackets", static_cast<double>(v.verifiedPackets));
+                                o.set("goodCheckpoints", static_cast<double>(v.goodCheckpoints));
+                                o.set("firstFailureOffset", v.firstFailureOffset ? em::val(static_cast<double>(*v.firstFailureOffset)) : em::val::null());
+                                return o;
+                            });
+    }
+
+    [[nodiscard]] auto skippedRegions() const -> em::val
+    {
+        em::val arr = em::val::array();
+        size_t  i   = 0;
+        for (const auto& r : reader_->skippedRegions())
+        {
+            em::val o = em::val::object();
+            o.set("offset", static_cast<double>(r.offset));
+            o.set("length", static_cast<double>(r.length));
+            arr.set(i++, o);
+        }
+        return arr;
     }
 
     [[nodiscard]] auto extensionTypes() const -> em::val
@@ -143,20 +253,16 @@ public:
         em::val arr = em::val::array();
         for (size_t i = 0; i < reader_->extensions().size(); ++i)
         {
-            arr.set(i, reader_->extensions()[i].type);
+            arr.set(i, static_cast<double>(reader_->extensions()[i].type));
         }
         return arr;
     }
 
-    // Returns Uint8Array of the extension data, or null if not present.
+    // A Uint8Array copy of the extension's data, or null if not present.
     [[nodiscard]] auto getExtension(uint32_t type) const -> em::val
     {
         const auto* ext = reader_->getExtension(type);
-        if (ext == nullptr)
-        {
-            return em::val::null();
-        }
-        return em::val(em::typed_memory_view(ext->data.size(), ext->data.data()));
+        return ext ? copyBytes(ext->data) : em::val::null();
     }
 
     [[nodiscard]] auto listZones() const -> em::val
@@ -174,9 +280,7 @@ public:
         return arr;
     }
 
-    // Iteration --------------------------------------------------------------
-
-    // Returns the next packet as a JS object, or null at end-of-stream.
+    // The next packet as a JS object, or null at the end of the capture.
     auto next() -> em::val
     {
         return withJsErrors([&]() -> em::val
@@ -187,21 +291,20 @@ public:
                                 }
                                 em::val o = em::val::object();
                                 o.set("timestampMs", static_cast<double>(pkt_.timestamp));
+                                o.set("channel", pkt_.channel);
                                 o.set("opcode", pkt_.opcode);
+                                o.set("flags", pkt_.flags);
                                 o.set("direction", static_cast<int>(pkt_.direction));
-
-                                // Copy packet bytes into a JS-owned Uint8Array; the underlying span is
-                                // invalidated by the next call.
-                                const auto* bytes = reinterpret_cast<const uint8_t*>(pkt_.data.data());
-                                em::val     u8    = em::val::global("Uint8Array").new_(pkt_.data.size());
-                                u8.call<void>("set", em::val(em::typed_memory_view(pkt_.data.size(), bytes)));
-                                o.set("data", u8);
+                                o.set("data", copyBytes(pkt_.data.data(), pkt_.data.size()));
 
                                 em::val markers = em::val::array();
                                 size_t  mi      = 0;
                                 for (const auto& m : pkt_.markers)
                                 {
-                                    markers.set(mi++, m.text);
+                                    em::val marker = em::val::object();
+                                    marker.set("kind", static_cast<int>(m.kind));
+                                    marker.set("text", m.text);
+                                    markers.set(mi++, marker);
                                 }
                                 o.set("markers", markers);
                                 return o;
@@ -212,25 +315,32 @@ public:
     {
         reader_->skipCurrentFrame();
     }
-
-    // Seeking ----------------------------------------------------------------
     auto seekToFrame(double frameIndex) -> int
     {
-        return static_cast<int>(reader_->seekToFrame(static_cast<uint64_t>(frameIndex)));
+        return withJsErrors([&]
+                            {
+                                return static_cast<int>(reader_->seekToFrame(static_cast<uint64_t>(frameIndex)));
+                            });
     }
     auto seekToTime(double timestampMs) -> int
     {
-        return static_cast<int>(reader_->seekToTime(static_cast<uint64_t>(timestampMs)));
+        return withJsErrors([&]
+                            {
+                                return static_cast<int>(reader_->seekToTime(static_cast<uint64_t>(timestampMs)));
+                            });
     }
     auto seekToZone(uint16_t zoneId) -> int
     {
-        return static_cast<int>(reader_->seekToZone(zoneId));
+        return withJsErrors([&]
+                            {
+                                return static_cast<int>(reader_->seekToZone(zoneId));
+                            });
     }
 
 private:
     std::string                    path_;
     std::unique_ptr<xicap::Reader> reader_;
-    xicap::ReadPacket              pkt_;
+    xicap::ReadPacket              pkt_{};
 };
 
 } // namespace
@@ -238,21 +348,31 @@ private:
 EMSCRIPTEN_BINDINGS(xicap_module)
 {
     em::class_<JsReader>("Reader")
-        .constructor<std::string>()
+        .constructor<std::string, bool>()
         .function("versionMajor", &JsReader::versionMajor)
         .function("versionMinor", &JsReader::versionMinor)
         .function("clientVersion", &JsReader::clientVersion)
         .function("captureAgent", &JsReader::captureAgent)
-        .function("startZoneId", &JsReader::startZoneId)
-        .function("endZoneId", &JsReader::endZoneId)
-        .function("startWeather", &JsReader::startWeather)
+        .function("captureId", &JsReader::captureId)
+        .function("previousCaptureId", &JsReader::previousCaptureId)
+        .function("signingKey", &JsReader::signingKey)
+        .function("clockSource", &JsReader::clockSource)
+        .function("origin", &JsReader::origin)
+        .function("network", &JsReader::network)
+        .function("startContext", &JsReader::startContext)
         .function("startTimestampMs", &JsReader::startTimestampMs)
         .function("endTimestampMs", &JsReader::endTimestampMs)
         .function("durationMs", &JsReader::durationMs)
         .function("totalFrames", &JsReader::totalFrames)
         .function("totalPacketCount", &JsReader::totalPacketCount)
-        .function("hasFooter", &JsReader::hasFooter)
-        .function("lobby", &JsReader::lobby)
+        .function("complete", &JsReader::complete)
+        .function("footerDamaged", &JsReader::footerDamaged)
+        .function("unreadBytes", &JsReader::unreadBytes)
+        .function("character", &JsReader::character)
+        .function("policy", &JsReader::policy)
+        .function("source", &JsReader::source)
+        .function("verify", &JsReader::verify)
+        .function("skippedRegions", &JsReader::skippedRegions)
         .function("extensionTypes", &JsReader::extensionTypes)
         .function("getExtension", &JsReader::getExtension)
         .function("listZones", &JsReader::listZones)
@@ -261,16 +381,6 @@ EMSCRIPTEN_BINDINGS(xicap_module)
         .function("seekToFrame", &JsReader::seekToFrame)
         .function("seekToTime", &JsReader::seekToTime)
         .function("seekToZone", &JsReader::seekToZone);
-
-    em::enum_<xicap::PacketDirection>("PacketDirection")
-        .value("ServerToClient", xicap::PacketDirection::ServerToClient)
-        .value("ClientToServer", xicap::PacketDirection::ClientToServer);
-
-    em::enum_<xicap::SeekResult>("SeekResult")
-        .value("Ok", xicap::SeekResult::Ok)
-        .value("EmptyIndex", xicap::SeekResult::EmptyIndex)
-        .value("OutOfRange", xicap::SeekResult::OutOfRange)
-        .value("NotFound", xicap::SeekResult::NotFound);
 
     em::function("__takeLastError", +[]() -> em::val
                  {
@@ -283,22 +393,4 @@ EMSCRIPTEN_BINDINGS(xicap_module)
                      le = LastError{};
                      return o;
                  });
-
-    em::enum_<xicap::ErrorCode>("ErrorCode")
-        .value("OpenFailed", xicap::ErrorCode::OpenFailed)
-        .value("BadMagic", xicap::ErrorCode::BadMagic)
-        .value("UnsupportedVersion", xicap::ErrorCode::UnsupportedVersion)
-        .value("DictionaryMismatch", xicap::ErrorCode::DictionaryMismatch)
-        .value("ShortHeader", xicap::ErrorCode::ShortHeader)
-        .value("ShortExtension", xicap::ErrorCode::ShortExtension)
-        .value("ExtensionTooLarge", xicap::ErrorCode::ExtensionTooLarge)
-        .value("CorruptFrame", xicap::ErrorCode::CorruptFrame)
-        .value("FrameChecksumMismatch", xicap::ErrorCode::FrameChecksumMismatch)
-        .value("DecompressFailed", xicap::ErrorCode::DecompressFailed)
-        .value("ZstdContextFailed", xicap::ErrorCode::ZstdContextFailed)
-        .value("WriterClosed", xicap::ErrorCode::WriterClosed)
-        .value("AddExtensionAfterPackets", xicap::ErrorCode::AddExtensionAfterPackets)
-        .value("AddMarkerWithoutPacket", xicap::ErrorCode::AddMarkerWithoutPacket)
-        .value("PacketTooLarge", xicap::ErrorCode::PacketTooLarge)
-        .value("CompressFailed", xicap::ErrorCode::CompressFailed);
 }

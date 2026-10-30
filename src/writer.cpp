@@ -276,7 +276,7 @@ auto Writer::publicKey() const noexcept -> const PublicKey&
 
 auto Writer::addExtension(uint32_t type, std::span<const std::byte> data) -> void
 {
-    if (started_)
+    if (started_ || totalPackets_ > 0)
     {
         throw Error(ErrorCode::AddExtensionAfterPackets, "xicap: cannot add extensions after writing packets");
     }

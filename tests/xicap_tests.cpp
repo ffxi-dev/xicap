@@ -443,6 +443,8 @@ TEST_CASE("the writer refuses bad input")
         CHECK_THROWS_AS(w.addExtension(0x0001, data), Error);
         CHECK_THROWS_AS(w.addExtension(EXT_EXCLUSION_POLICY, data), Error);
         CHECK_NOTHROW(w.addExtension(0x8000, data));
+        w.write(T0, PacketDirection::ServerToClient, gamePacket(0x010, 8));
+        CHECK_THROWS_AS(w.addExtension(0x8001, data), Error); // after a packet
     }
     SECTION("a game packet under 4 bytes, and writes after close")
     {

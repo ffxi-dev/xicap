@@ -6,88 +6,75 @@ import path from "node:path";
 
 import { Reader, XicapError, ErrorCode } from "../dist/index.js";
 
+// Written by tools/xicap_make_fixture; see its comments for the contents.
 const here = path.dirname(fileURLToPath(import.meta.url));
 const fixturePath = path.resolve(here, "fixtures/sample.xicap");
 
 test("reads header and packets from the fixture", async () => {
-    const bytes = await readFile(fixturePath);
-    const r = await Reader.open(bytes);
-
+    const r = await Reader.open(await readFile(fixturePath));
     try {
-        assert.equal(r.versionMajor, 2);
+        assert.equal(r.versionMajor, 3);
         assert.equal(r.clientVersion, "fixture-1.0");
         assert.equal(r.captureAgent, "xicap_make_fixture");
-        assert.equal(r.startZoneId, 100);
+        assert.deepEqual(Array.from(r.captureId), new Array(16).fill(0x11));
         assert.equal(r.startTimestampMs, 1_700_000_000_000);
-        assert.equal(r.totalPacketCount, 50);
-        assert.equal(r.hasFooter, true);
+        assert.equal(r.endTimestampMs, 1_700_000_002_500);
+        assert.equal(r.totalPacketCount, 51);
+        assert.equal(r.complete, true);
+        assert.equal(r.network, 1); // retail
+        assert.equal(r.policy.name, "xicap-default");
 
-        const lobby = r.lobby;
-        assert.equal(lobby.contentId, 0xdeadbeef);
-        assert.equal(lobby.worldId, 42);
-        assert.equal(lobby.characterName, "Mehdi");
-        assert.equal(lobby.worldName, "Asura");
-        assert.equal(lobby.pendingRename, true);
+        const character = r.character;
+        assert.equal(character.contentId, 0xdeadbeef);
+        assert.equal(character.worldId, 42);
+        assert.equal(character.characterName, "Mehdi");
+        assert.equal(character.worldName, "Asura");
 
-        // Extensions
-        const types = r.extensionTypes();
-        assert.deepEqual(types, [0x0001]);
-        const ext = r.getExtension(0x0001);
-        assert.ok(ext instanceof Uint8Array);
-        assert.deepEqual(Array.from(ext), [1, 2, 3, 4, 5]);
+        assert.deepEqual(r.extensionTypes(), [0x8000]);
+        assert.deepEqual(Array.from(r.getExtension(0x8000)), [1, 2, 3, 4, 5]);
+        assert.equal(r.getExtension(0xbadbad), null);
 
-        // Iterate every packet
-        let count = 0;
-        let markerCount = 0;
-        let opcodes = [];
-        for (const pkt of r) {
-            opcodes.push(pkt.opcode);
+        const packets = [...r];
+        assert.equal(packets.length, 51);
+        packets.slice(0, 50).forEach((pkt, i) => {
+            assert.equal(pkt.channel, 0);
+            assert.equal(pkt.opcode, 0x100 + (i % 4));
             assert.equal(pkt.data.length, 32);
-            // Direction alternates: even=S2C(0), odd=C2S(1)
-            assert.equal(pkt.direction, count % 2);
-            if (count === 9) {
-                assert.deepEqual(pkt.markers, ["after-tenth"]);
-                markerCount++;
-            } else {
-                assert.equal(pkt.markers.length, 0);
-            }
-            count++;
-        }
-        assert.equal(count, 50);
-        assert.equal(markerCount, 1);
+            assert.equal(pkt.direction, i % 2);
+            assert.deepEqual(pkt.markers, i === 10 ? [{ kind: 0, text: "tenth" }] : []);
+        });
+        const search = packets[50];
+        assert.deepEqual([search.channel, search.opcode, search.data.length], [1, 5, 40]);
 
-        // Opcodes cycle through 0x100-0x103
-        for (let i = 0; i < 50; i++) {
-            assert.equal(opcodes[i], 0x100 + (i % 4));
-        }
+        const v = r.verify();
+        assert.equal(v.signedToEnd, true);
+        assert.equal(v.verifiedPackets, 51);
+        assert.equal(v.firstFailureOffset, null);
+    } finally {
+        r.close();
+    }
+});
+
+test("a cut-off copy reads every frame and is not signed to the end", async () => {
+    const bytes = new Uint8Array(await readFile(fixturePath));
+    const r = await Reader.open(bytes.subarray(0, bytes.length - 50));
+    try {
+        assert.equal(r.complete, false);
+        assert.equal([...r].length, 51);
+        assert.equal(r.verify().signedToEnd, false);
     } finally {
         r.close();
     }
 });
 
 test("bad magic raises XicapError with ErrorCode.BadMagic", async () => {
-    const bogus = new Uint8Array(256);
+    const bogus = new Uint8Array(512);
     bogus.set(new TextEncoder().encode("NOPE"), 0);
-    try {
-        await Reader.open(bogus);
-        assert.fail("expected throw");
-    } catch (e) {
-        assert.ok(e instanceof XicapError, `expected XicapError, got ${e?.constructor?.name}`);
-        assert.equal(e.name, "XicapError");
-        assert.equal(e.code, ErrorCode.BadMagic);
-    }
+    await assert.rejects(Reader.open(bogus), (e) => e instanceof XicapError && e.code === ErrorCode.BadMagic);
 });
 
-test("dictionary id mismatch raises XicapError with ErrorCode.DictionaryMismatch", async () => {
-    const bytes = await readFile(fixturePath);
-    const u8 = new Uint8Array(bytes);
-    // Header.dictionaryId offset = 128.
-    u8.set([0xef, 0xbe, 0xad, 0xde], 128);
-    try {
-        await Reader.open(u8);
-        assert.fail("expected throw");
-    } catch (e) {
-        assert.ok(e instanceof XicapError);
-        assert.equal(e.code, ErrorCode.DictionaryMismatch);
-    }
+test("a damaged header raises HeaderChecksumMismatch", async () => {
+    const bytes = new Uint8Array(await readFile(fixturePath));
+    bytes[200] ^= 1;
+    await assert.rejects(Reader.open(bytes), (e) => e instanceof XicapError && e.code === ErrorCode.HeaderChecksumMismatch);
 });

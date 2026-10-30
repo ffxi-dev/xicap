@@ -3,6 +3,7 @@
 #include "internal/crc32.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <cstring>
 #include <format>
 #include <span>
@@ -247,7 +248,7 @@ auto Reader::readExtensions() -> void
         }
         uint32_t stored = 0;
         std::memcpy(&stored, block.data() + blockSize - sizeof(stored), sizeof(stored));
-        if (crcOf({ block.data(), blockSize - sizeof(stored) }) != stored)
+        if (crcOf({ block.data(), static_cast<size_t>(blockSize) - sizeof(stored) }) != stored)
         {
             throw Error(ErrorCode::ExtensionChecksumMismatch, std::format("xicap: extension block {} crc mismatch", i));
         }
@@ -321,13 +322,15 @@ auto Reader::readFooter() -> void
         return;
     }
     const uint64_t indexBytes = uint64_t{ trailer_.entryCount } * sizeof(FooterIndexEntry);
-    if (trailer_.indexOffset < dataStart_ || trailer_.indexOffset + indexBytes + sizeof(FooterTrailer) != fileSize_)
+    if (trailer_.indexOffset < dataStart_ || trailer_.indexOffset + indexBytes + sizeof(FooterTrailer) != fileSize_ ||
+        indexBytes > SIZE_MAX)
     {
         return;
     }
+    const auto                    indexSize = static_cast<size_t>(indexBytes);
     std::vector<FooterIndexEntry> index(trailer_.entryCount);
-    if (!readAt(file_, trailer_.indexOffset, { reinterpret_cast<uint8_t*>(index.data()), indexBytes }) ||
-        crcOf({ reinterpret_cast<const uint8_t*>(index.data()), indexBytes }) != trailer_.indexCrc)
+    if (!readAt(file_, trailer_.indexOffset, { reinterpret_cast<uint8_t*>(index.data()), indexSize }) ||
+        crcOf({ reinterpret_cast<const uint8_t*>(index.data()), indexSize }) != trailer_.indexCrc)
     {
         return;
     }
