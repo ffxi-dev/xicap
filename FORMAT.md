@@ -415,9 +415,19 @@ A writer refuses a policy that stubs packets on a channel whose row in
   and the writer zeroes each range. A range that runs past the packet's end
   stops at the end.
 
-The library's default policy, `xicap-default`, stubs every chat packet on the
-game channel in both directions. Task 5.2 checks its opcodes against the
-client's resources and lists them here.
+The library's default policy, `xicap-default` version 1, stubs the game
+channel's packets that carry text players write to each other:
+
+| Opcode | Direction | Packet |
+|-------:|-----------|--------|
+| `0x017` | to the client | chat, in every channel (say, shout, party, linkshell, tell, yell, unity, assist) |
+| `0x0B5` | from the client | chat |
+| `0x0B6` | from the client | tell |
+| `0x0CC` | to the client | linkshell message board |
+| `0x0E2` | from the client | linkshell message board post |
+
+Opcodes and meanings follow atom0s's XiPackets. Public text, such as search and
+bazaar comments, is kept.
 
 ## Reading
 

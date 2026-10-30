@@ -395,6 +395,38 @@ TEST_CASE("chat is stubbed before it reaches disk")
     CHECK(((packets[0].data[1] >> 1) & 0x7F) == 16); // original size, in words
 }
 
+TEST_CASE("the default policy stubs every chat opcode")
+{
+    TempCapture                                             tmp;
+    const std::vector<std::pair<uint16_t, PacketDirection>> chat{
+        { 0x017, PacketDirection::ServerToClient },
+        { 0x0B5, PacketDirection::ClientToServer },
+        { 0x0B6, PacketDirection::ClientToServer },
+        { 0x0CC, PacketDirection::ServerToClient },
+        { 0x0E2, PacketDirection::ClientToServer },
+    };
+    {
+        Writer   w(tmp.path, config());
+        uint64_t t = T0;
+        for (const auto& [opcode, direction] : chat)
+        {
+            w.write(t++, direction, gamePacket(opcode, 64));
+        }
+        w.write(t, PacketDirection::ClientToServer, gamePacket(0x017, 64)); // 0x017 from the client is another packet: kept
+        w.write(t, PacketDirection::ClientToServer, gamePacket(0x0E0, 64)); // search comment: public, kept
+        w.close();
+    }
+    const auto packets = readAll(tmp.path);
+    REQUIRE(packets.size() == 7);
+    for (size_t i = 0; i < chat.size(); ++i)
+    {
+        CHECK(packets[i].flags & PacketFlag::Excluded);
+        CHECK(packets[i].data.size() == 4);
+    }
+    CHECK(packets[5].data.size() == 64);
+    CHECK(packets[6].data.size() == 64);
+}
+
 TEST_CASE("redaction zeroes byte ranges and keeps the length")
 {
     TempCapture tmp;

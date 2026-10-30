@@ -181,8 +181,10 @@ auto matches(const ExclusionRule& rule, uint8_t channel, PacketDirection directi
 
 auto defaultExclusionPolicy() -> const ExclusionPolicy&
 {
-    // Chat opcodes on the game channel. Task 5.2 checks them against the
-    // client's resources.
+    // Packets carrying text players write to each other, from LandSandBoat's
+    // definitions after atom0s's XiPackets: chat in every channel (0x017 in,
+    // 0x0B5 out), tells (0x0B6 out), and the linkshell message board (0x0CC in,
+    // 0x0E2 out).
     static const ExclusionPolicy policy{
         .name    = "xicap-default",
         .version = 1,
@@ -190,6 +192,8 @@ auto defaultExclusionPolicy() -> const ExclusionPolicy&
             { .channel = 0, .direction = ExclusionDirection::ServerToClient, .action = ExclusionAction::Stub, .opcode = 0x017, .ranges = {} },
             { .channel = 0, .direction = ExclusionDirection::ClientToServer, .action = ExclusionAction::Stub, .opcode = 0x0B5, .ranges = {} },
             { .channel = 0, .direction = ExclusionDirection::ClientToServer, .action = ExclusionAction::Stub, .opcode = 0x0B6, .ranges = {} },
+            { .channel = 0, .direction = ExclusionDirection::ServerToClient, .action = ExclusionAction::Stub, .opcode = 0x0CC, .ranges = {} },
+            { .channel = 0, .direction = ExclusionDirection::ClientToServer, .action = ExclusionAction::Stub, .opcode = 0x0E2, .ranges = {} },
         },
     };
     return policy;
