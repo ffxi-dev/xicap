@@ -75,6 +75,18 @@ extern "C"
     // A cut-off capture reads up to its last intact frame.
     int xicap_read(const char* path, xicap_summary* out, char* err, size_t errlen);
 
+    typedef struct
+    {
+        uint8_t  kind;      // 0 note, 1 login, 2 logout
+        char*    text;      // NUL-terminated
+        uint64_t packet;    // index of the packet the marker precedes
+        uint64_t timestamp; // that packet's, Unix ms
+    } xicap_marker;
+
+    // Reads every marker of a capture, in order; a cut-off capture up to its last intact frame. Free the result with xicap_free_markers.
+    int  xicap_markers(const char* path, xicap_marker** out, size_t* count, char* err, size_t errlen);
+    void xicap_free_markers(xicap_marker* markers, size_t count);
+
     typedef struct xicap_writer xicap_writer;
 
     typedef struct

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -279,5 +280,50 @@ func TestHeaderLength(t *testing.T) {
 	}
 	if _, err := HeaderLength([]byte("\x89PNG\r\n\x1a\n\x00\x00\x00\x00")); err == nil {
 		t.Fatal("PNG accepted")
+	}
+}
+
+func TestMarkers(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "m.xicap")
+	w, err := Create(p, info())
+	if err != nil {
+		t.Fatal(err)
+	}
+	step := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	step(w.Mark(MarkerLogin, ""))
+	step(w.Write(t0, false, pkt))
+	step(w.Mark(MarkerNote, "cap start quest"))
+	step(w.Write(t0+10, true, pkt))
+	step(w.Write(t0+20, false, pkt))
+	step(w.Flush())
+	step(w.Mark(MarkerNote, "cap stop quest"))
+	step(w.Mark(MarkerLogout, ""))
+	step(w.Write(t0+30, false, pkt))
+	step(w.Close())
+
+	got, err := Markers(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Marker{
+		{MarkerLogin, "", 0, t0},
+		{MarkerNote, "cap start quest", 1, t0 + 10},
+		{MarkerNote, "cap stop quest", 3, t0 + 30},
+		{MarkerLogout, "", 3, t0 + 30},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("markers:\n got %+v\nwant %+v", got, want)
+	}
+
+	if got, err := Markers(capture(t, 2, info())); err != nil || len(got) != 0 {
+		t.Fatalf("a capture with no markers: %v %v", got, err)
+	}
+	if _, err := Markers(filepath.Join(t.TempDir(), "missing.xicap")); err == nil {
+		t.Fatal("a missing file: no error")
 	}
 }

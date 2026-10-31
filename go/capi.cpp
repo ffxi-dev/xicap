@@ -111,6 +111,54 @@ extern "C" int xicap_check_header(const uint8_t* data, size_t size, char* err, s
     return 0;
 }
 
+extern "C" int xicap_markers(const char* path, xicap_marker** out, size_t* count, char* err, size_t errlen)
+{
+    *out   = nullptr;
+    *count = 0;
+    std::vector<xicap_marker> markers;
+    const auto                rc = guarded(err, errlen, [&]
+                                           {
+                                xicap::Reader     reader{ path };
+                                xicap::ReadPacket packet{};
+                                for (uint64_t index = 0; reader.next(packet); ++index)
+                                {
+                                    for (const auto& m : packet.markers)
+                                    {
+                                        auto* text = static_cast<char*>(std::malloc(m.text.size() + 1));
+                                        if (text == nullptr)
+                                        {
+                                            throw std::bad_alloc();
+                                        }
+                                        std::memcpy(text, m.text.c_str(), m.text.size() + 1);
+                                        markers.push_back({ .kind = static_cast<uint8_t>(m.kind), .text = text, .packet = index, .timestamp = packet.timestamp });
+                                    }
+                                }
+                                           });
+    if (rc != 0 || markers.empty())
+    {
+        xicap_free_markers(markers.data(), markers.size());
+        return rc;
+    }
+    *out = static_cast<xicap_marker*>(std::malloc(markers.size() * sizeof(xicap_marker)));
+    if (*out == nullptr)
+    {
+        xicap_free_markers(markers.data(), markers.size());
+        setError(err, errlen, "xicap: out of memory");
+        return -1;
+    }
+    std::memcpy(*out, markers.data(), markers.size() * sizeof(xicap_marker));
+    *count = markers.size();
+    return 0;
+}
+
+extern "C" void xicap_free_markers(xicap_marker* markers, size_t count)
+{
+    for (size_t i = 0; i < count; ++i)
+    {
+        std::free(markers[i].text);
+    }
+}
+
 extern "C" int xicap_read(const char* path, xicap_summary* out, char* err, size_t errlen)
 {
     return guarded(err, errlen, [&]

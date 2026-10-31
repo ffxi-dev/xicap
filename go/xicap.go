@@ -225,6 +225,36 @@ func Read(path string) (Summary, error) {
 	return out, nil
 }
 
+// Marker is a note, login, or logout, with the packet it comes just before.
+type Marker struct {
+	Kind      MarkerKind
+	Text      string
+	Packet    uint64 // the index of that packet
+	Timestamp uint64 // that packet's, Unix ms
+}
+
+// Markers reads every marker of a capture, in order; a cut-off capture up to its last intact frame.
+func Markers(path string) ([]Marker, error) {
+	p := C.CString(path)
+	defer C.free(unsafe.Pointer(p))
+	var list *C.xicap_marker
+	var n C.size_t
+	var msg [256]C.char
+	if C.xicap_markers(p, &list, &n, &msg[0], C.size_t(len(msg))) != 0 {
+		return nil, cerr(&msg)
+	}
+	if n == 0 {
+		return nil, nil
+	}
+	defer C.free(unsafe.Pointer(list))
+	defer C.xicap_free_markers(list, n)
+	out := make([]Marker, 0, int(n))
+	for _, m := range unsafe.Slice(list, int(n)) {
+		out = append(out, Marker{Kind: MarkerKind(m.kind), Text: C.GoString(m.text), Packet: uint64(m.packet), Timestamp: uint64(m.timestamp)})
+	}
+	return out, nil
+}
+
 // Source is what a converted capture records about its source.
 type Source struct {
 	Format           string
