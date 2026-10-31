@@ -284,11 +284,9 @@ See [Signatures](#signatures).
 |--------:|------|--------------|----------|--------------|
 | 0 | game | the FFXI packet, from its 4-byte header | the header's 9-bit id | the 4-byte header |
 | 1 | search | the plaintext request or reply, from its 4-byte size | byte `0x0B`, the request type | not defined |
-| 2 | PlayOnline IRC | one plaintext IRC line | 0 | not defined |
-| 3 | PlayOnline profile | one plaintext profile-server object | the object's kind: 1 request, 2 answer, 3 object, 4 checksum, 5 record, 6 file data, 7 file checksum | not defined |
-| 4 to 255 | reserved | | | |
+| 2 to 255 | reserved | | | |
 
-Channels 1 to 3 follow Memoria's hooks and wait for a check against real traffic.
+Channel 1 follows Memoria's hooks and waits for a check against real traffic.
 
 A reader passes on packets of a channel it does not know, with the channel's
 number, and does not refuse the file. Adding a channel is a minor version.
