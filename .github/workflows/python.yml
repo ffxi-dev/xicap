@@ -15,9 +15,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [[self-hosted, lsb], windows-latest]  # lsb is the org runner; macOS bills private minutes at ten times Linux
         python-version: ["3.11", "3.12", "3.13"]
-    runs-on: ${{ matrix.os }}
+    runs-on: [self-hosted, lsb]
     steps:
       - uses: actions/checkout@v4
 
@@ -25,15 +24,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install Ninja (Linux/macOS)
-        if: runner.os != 'Windows'
-        uses: seanmiddleditch/gha-setup-ninja@v5
-
-      - name: Configure MSVC (Windows)
-        if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
+      - uses: seanmiddleditch/gha-setup-ninja@v5
 
       - name: Build fixture
         run: |
