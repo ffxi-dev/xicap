@@ -8,14 +8,14 @@ on:
 
 jobs:
   build-and-test:
-    uses: ffxi-dev/vault/.github/workflows/cmake.yml@ci/v1.7
+    uses: ffxi-dev/vault/.github/workflows/cmake.yml@ci/v1.8
     with:
       configure-args: -DXICAP_BUILD_TESTS=ON
       targets: xicap_tests xicap_dump
 
   # Logbook, an Ashita plugin, links xicap into a 32-bit DLL.
   x86:
-    uses: ffxi-dev/vault/.github/workflows/cmake.yml@ci/v1.7
+    uses: ffxi-dev/vault/.github/workflows/cmake.yml@ci/v1.8
     with:
       os: '["windows-latest"]'
       arch: x86

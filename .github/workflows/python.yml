@@ -6,6 +6,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Self-hosted runners keep a home directory; packages there must not leak into the job.
+env:
+  PYTHONNOUSERSITE: "1"
+
 jobs:
   build-and-test:
     strategy:
@@ -47,7 +51,7 @@ jobs:
         run: pip install ./python[test]
 
       - name: Run pytest
-        run: pytest python/tests -v
+        run: python -m pytest python/tests -v
 
   spec-reader:
     # A reader written from FORMAT.md alone must read the conformance set as recorded.
