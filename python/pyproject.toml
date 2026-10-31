@@ -4,7 +4,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "xicap"
-version = "3.0.0"
+version = "3.3.1"
 description = "Python bindings for the xicap FFXI packet capture format."
 readme = "README.md"
 license = { text = "MIT" }

@@ -12,6 +12,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Versions agree
+        run: |
+          v=$(sed -n 's/^project(xicap VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
+          grep -q "^    \"version\": \"$v\"" js/package.json && grep -q "^version = \"$v\"" python/pyproject.toml || { echo "::error::CMakeLists.txt says $v; js/package.json and python/pyproject.toml must too"; exit 1; }
+
       - uses: actions/setup-node@v4
         with:
           node-version: "20"

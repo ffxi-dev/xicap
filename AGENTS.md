@@ -22,6 +22,7 @@ go test ./go/                                          # Go via cgo; needs g++ a
 
 ## Rules
 
+- A release sets its version in `CMakeLists.txt`, `js/package.json`, and `python/pyproject.toml`, then tags `v<version>`; CI fails when the three disagree.
 - A change to the on-disk format updates `FORMAT.md`, bumps the version in the header constants, and adds reader and writer tests. Captures are archived for the long term: from the day the owner declares the format in production, readers keep reading every released version, with tests that read captures written by each one. Until then a draft may break compatibility.
 - `tests/spec_reader.py` is a reader written from `FORMAT.md` alone, for tests only. It proves the spec is complete; it is not a binding and never ships.
 - The C++ library and the Python, JavaScript, and Go bindings change together. Bindings wrap the C++ library; none reimplements the format.
