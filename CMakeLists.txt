@@ -35,7 +35,7 @@ if(NOT zstd_FOUND AND NOT ZSTD_FOUND)
     FetchContent_Declare(
         zstd
         GIT_REPOSITORY https://github.com/facebook/zstd.git
-        GIT_TAG        v1.5.6
+        GIT_TAG        v1.5.7
         SOURCE_SUBDIR  build/cmake
     )
     FetchContent_MakeAvailable(zstd)

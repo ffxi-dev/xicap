@@ -7,17 +7,10 @@ on:
   workflow_dispatch:
 
 jobs:
+  # Logbook and Memoria, Ashita plugins, link xicap into 32-bit DLLs, so Windows builds both widths.
   build-and-test:
-    uses: ffxi-dev/vault/.github/workflows/cmake.yml@ci/v1.8
+    uses: ffxi-dev/vault/.github/workflows/cmake.yml@ci/v1.9
     with:
-      configure-args: -DXICAP_BUILD_TESTS=ON
-      targets: xicap_tests xicap_dump
-
-  # Logbook, an Ashita plugin, links xicap into a 32-bit DLL.
-  x86:
-    uses: ffxi-dev/vault/.github/workflows/cmake.yml@ci/v1.8
-    with:
-      os: '["windows-latest"]'
-      arch: x86
+      windows: '["x64", "x86"]'
       configure-args: -DXICAP_BUILD_TESTS=ON
       targets: xicap_tests xicap_dump
