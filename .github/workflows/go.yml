@@ -8,6 +8,6 @@ on:
 
 jobs:
   test:
-    uses: ffxi-dev/vault/.github/workflows/go.yml@ci/v1.3
+    uses: ffxi-dev/vault/.github/workflows/go.yml@ci/v1.7
     with:
       apt-packages: libzstd-dev
