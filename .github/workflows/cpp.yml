@@ -9,7 +9,7 @@ on:
 jobs:
   # Logbook and Memoria, Ashita plugins, link xicap into 32-bit DLLs, so Windows builds both widths.
   build-and-test:
-    uses: ffxi-dev/vault/.github/workflows/cmake.yml@ci/v1.10
+    uses: ffxi-dev/vault/.github/workflows/cmake.yml@ci/v1.12
     with:
       windows: '["x64", "x86"]'
       configure-args: -DXICAP_BUILD_TESTS=ON
