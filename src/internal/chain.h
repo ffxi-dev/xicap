@@ -86,7 +86,9 @@ public:
     }
 
     SigningKey(const SigningKey&)                    = delete;
+    SigningKey(SigningKey&&)                         = delete;
     auto operator=(const SigningKey&) -> SigningKey& = delete;
+    auto operator=(SigningKey&&) -> SigningKey&      = delete;
 
     [[nodiscard]] auto publicKey() const noexcept -> const PublicKey&
     {

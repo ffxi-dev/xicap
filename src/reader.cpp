@@ -19,13 +19,6 @@ inline constexpr uint64_t FRAME_OVERHEAD = sizeof(FrameHeader) + sizeof(uint32_t
 // zstd's output can exceed its input slightly; anything past this is garbage.
 inline constexpr uint64_t MAX_PAYLOAD_SIZE = FrameLimits::MAX_CONTENT_SIZE + 1024 * 1024;
 
-auto crcOf(std::span<const uint8_t> bytes) -> uint32_t
-{
-    internal::Crc32 crc;
-    crc.update(bytes);
-    return crc.value();
-}
-
 auto readAt(std::ifstream& file, uint64_t offset, std::span<uint8_t> out) -> bool
 {
     file.clear();
@@ -213,7 +206,7 @@ auto Reader::readHeader() -> void
     }
     uint32_t stored = 0;
     std::memcpy(&stored, headerBytes_.data() + size - sizeof(stored), sizeof(stored));
-    if (crcOf({ headerBytes_.data(), size - sizeof(stored) }) != stored)
+    if (internal::crc32({ headerBytes_.data(), size - sizeof(stored) }) != stored)
     {
         throw Error(ErrorCode::HeaderChecksumMismatch, "xicap: header crc mismatch");
     }
@@ -249,7 +242,7 @@ auto Reader::readExtensions() -> void
         }
         uint32_t stored = 0;
         std::memcpy(&stored, block.data() + blockSize - sizeof(stored), sizeof(stored));
-        if (crcOf({ block.data(), static_cast<size_t>(blockSize) - sizeof(stored) }) != stored)
+        if (internal::crc32({ block.data(), static_cast<size_t>(blockSize) - sizeof(stored) }) != stored)
         {
             throw Error(ErrorCode::ExtensionChecksumMismatch, std::format("xicap: extension block {} crc mismatch", i));
         }
@@ -318,7 +311,7 @@ auto Reader::readFooter() -> void
         return;
     }
     footerDamaged_ = true;
-    if (crcOf({ reinterpret_cast<const uint8_t*>(&trailer_), offsetof(FooterTrailer, trailerCrc) }) != trailer_.trailerCrc)
+    if (internal::crc32({ reinterpret_cast<const uint8_t*>(&trailer_), offsetof(FooterTrailer, trailerCrc) }) != trailer_.trailerCrc)
     {
         return;
     }
@@ -333,7 +326,7 @@ auto Reader::readFooter() -> void
     const auto                    indexSize = static_cast<size_t>(indexBytes);
     std::vector<FooterIndexEntry> index(trailer_.entryCount);
     if (!readAt(file_, trailer_.indexOffset, { reinterpret_cast<uint8_t*>(index.data()), indexSize }) ||
-        crcOf({ reinterpret_cast<const uint8_t*>(index.data()), indexSize }) != trailer_.indexCrc)
+        internal::crc32({ reinterpret_cast<const uint8_t*>(index.data()), indexSize }) != trailer_.indexCrc)
     {
         return;
     }

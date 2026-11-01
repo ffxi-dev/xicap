@@ -35,11 +35,9 @@ auto asBytes(std::string_view text) -> std::span<const uint8_t>
     return { reinterpret_cast<const uint8_t*>(text.data()), text.size() };
 }
 
-auto appendCrc(std::vector<uint8_t>& block, size_t from) -> void
+auto appendCrc(std::vector<uint8_t>& block) -> void
 {
-    internal::Crc32 crc;
-    crc.update({ block.data() + from, block.size() - from });
-    appendPod(block, crc.value());
+    appendPod(block, internal::crc32(block));
 }
 
 // Cuts text to at most maxBytes without splitting a UTF-8 character.
@@ -68,10 +66,7 @@ auto randomCaptureId() -> CaptureId
 {
     std::random_device rd;
     CaptureId          id{};
-    while (std::ranges::all_of(id, [](uint8_t b)
-                               {
-                                   return b == 0;
-                               }))
+    while (id == CaptureId{})
     {
         for (size_t i = 0; i < id.size(); i += 4)
         {
@@ -219,12 +214,11 @@ Writer::Writer(const std::filesystem::path& path, WriterConfig config, FramePoli
     policy_.maxPacketsPerFrame = std::min(policy_.maxPacketsPerFrame, FrameLimits::MAX_PACKETS);
     policy_.maxFrameSize       = std::min<size_t>(policy_.maxFrameSize, FrameLimits::MAX_CONTENT_SIZE);
 
-    captureId_ = std::ranges::all_of(config_.captureId, [](uint8_t b)
-                                     {
-                                         return b == 0;
-                                     })
-                     ? randomCaptureId()
-                     : config_.captureId;
+    captureId_ = config_.captureId;
+    if (captureId_ == CaptureId{})
+    {
+        captureId_ = randomCaptureId();
+    }
 
     file_.open(path, std::ios::binary | std::ios::trunc);
     if (!file_)
@@ -501,11 +495,7 @@ auto Writer::writeStart() -> void
     header.character.reserved = 0;
     copyText(config_.captureAgent, header.captureAgent);
     copyText(config_.clientVersion, header.clientVersion);
-    {
-        internal::Crc32 crc;
-        crc.update({ reinterpret_cast<const uint8_t*>(&header), offsetof(Header, headerCrc) });
-        header.headerCrc = crc.value();
-    }
+    header.headerCrc = internal::crc32({ reinterpret_cast<const uint8_t*>(&header), offsetof(Header, headerCrc) });
 
     blockBuffer_.clear();
     appendPod(blockBuffer_, header);
@@ -517,7 +507,7 @@ auto Writer::writeStart() -> void
         blockBuffer_.clear();
         appendPod(blockBuffer_, ExtensionBlockHeader{ .type = type, .length = static_cast<uint32_t>(payload.size()) });
         appendBytes(blockBuffer_, payload);
-        appendCrc(blockBuffer_, 0);
+        appendCrc(blockBuffer_);
         chain_->absorb(blockBuffer_);
         emit(blockBuffer_);
     };
@@ -584,7 +574,7 @@ auto Writer::endFrame() -> void
                                 .reserved1     = 0,
                             });
     appendBytes(blockBuffer_, { compressedBuffer_.data(), compressedSize });
-    appendCrc(blockBuffer_, 0);
+    appendCrc(blockBuffer_);
     chain_->absorb(blockBuffer_);
     emit(blockBuffer_);
 
@@ -631,7 +621,7 @@ auto Writer::checkpoint() -> void
                                 .reserved1     = 0,
                             });
     appendPod(blockBuffer_, payload);
-    appendCrc(blockBuffer_, 0);
+    appendCrc(blockBuffer_);
     chain_->absorb(blockBuffer_);
     emit(blockBuffer_);
     unsignedFrames_ = 0;
@@ -640,11 +630,9 @@ auto Writer::checkpoint() -> void
 
 auto Writer::writeFooter() -> void
 {
-    const uint64_t  indexOffset = offset_;
-    const auto      indexBytes  = std::span{ reinterpret_cast<const uint8_t*>(frameIndex_.data()),
-                                             frameIndex_.size() * sizeof(FooterIndexEntry) };
-    internal::Crc32 indexCrc;
-    indexCrc.update(indexBytes);
+    const uint64_t indexOffset = offset_;
+    const auto     indexBytes  = std::span{ reinterpret_cast<const uint8_t*>(frameIndex_.data()),
+                                            frameIndex_.size() * sizeof(FooterIndexEntry) };
 
     FooterTrailer trailer{
         .endTimestamp     = totalPackets_ > 0 ? lastTimestamp_ : 0,
@@ -652,7 +640,7 @@ auto Writer::writeFooter() -> void
         .reserved         = 0,
         .entryCount       = static_cast<uint32_t>(frameIndex_.size()),
         .indexOffset      = indexOffset,
-        .indexCrc         = indexCrc.value(),
+        .indexCrc         = internal::crc32(indexBytes),
         .frameCount       = totalFrames_,
         .signature        = {},
         .trailerCrc       = 0,
@@ -665,9 +653,7 @@ auto Writer::writeFooter() -> void
     chain_->end();
     trailer.signature = key_->sign(internal::FOOTER_PREFIX, chain_->value());
 
-    internal::Crc32 trailerCrc;
-    trailerCrc.update({ reinterpret_cast<const uint8_t*>(&trailer), offsetof(FooterTrailer, trailerCrc) });
-    trailer.trailerCrc = trailerCrc.value();
+    trailer.trailerCrc = internal::crc32({ reinterpret_cast<const uint8_t*>(&trailer), offsetof(FooterTrailer, trailerCrc) });
 
     blockBuffer_.assign(indexBytes.begin(), indexBytes.end());
     appendPod(blockBuffer_, trailer);
