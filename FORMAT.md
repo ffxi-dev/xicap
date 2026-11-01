@@ -3,8 +3,10 @@
 Version 3.0. This document is normative: a reader built from it alone, with the
 references below, must read every capture the library writes.
 
-**Status: draft.** Format 3 is not in production. Until the owner declares it
-is, a later draft may change any part of it and break compatibility.
+**Status: in production** since 2026-10-30, when real captures entered the
+archive. Captures are kept for the long term, so readers keep reading every
+released version of format 3, and a change that an older reader cannot follow
+needs a new major version.
 
 ## Conventions
 
