@@ -33,6 +33,9 @@ w.write({ .timestamp = t, .direction = dir, .data = searchBytes,
 w.flush();   // on a timer: ends the frame, signs an idle capture
 w.close();   // appends the signed footer
 
+// A packet as a writer with this policy stores it: opcode, flags, and bytes.
+const auto stored = xicap::applyPolicy(cfg.policy, packet);
+
 xicap::Reader r("session.xicap");
 for (const auto& pkt : r) {
     // pkt.timestamp, pkt.channel, pkt.opcode, pkt.flags, pkt.direction,

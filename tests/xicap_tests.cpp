@@ -473,6 +473,50 @@ TEST_CASE("redaction zeroes byte ranges and keeps the length")
     CHECK(p.data[39] == 0);
 }
 
+TEST_CASE("applyPolicy gives what the writer stores")
+{
+    TempCapture tmp;
+    auto        cfg = config();
+    cfg.policy.rules.push_back({ .channel = 0, .direction = ExclusionDirection::Both, .action = ExclusionAction::ZeroRange, .opcode = 0x020, .ranges = { { 8, 4 }, { 100, 4 } } });
+    const std::vector<std::byte> search(40, std::byte{ 0x5A });
+    const auto                   chat     = gamePacket(0x017, 64);
+    const auto                   redacted = gamePacket(0x020, 40, 0xFF);
+    const auto                   kept     = gamePacket(0x015, 32);
+    const std::vector<OutPacket> sent{
+        { .timestamp = T0, .direction = PacketDirection::ServerToClient, .data = chat, .provenance = 0xFFFF },
+        { .timestamp = T0 + 1, .direction = PacketDirection::ClientToServer, .data = redacted, .provenance = PacketFlag::Modified },
+        { .timestamp = T0 + 2, .direction = PacketDirection::ClientToServer, .data = kept, .opcode = 0x123 },
+        { .timestamp = T0 + 3, .direction = PacketDirection::ServerToClient, .data = search, .channel = 1, .opcode = 5 },
+    };
+    {
+        Writer w(tmp.path, cfg, plain());
+        for (const auto& packet : sent)
+        {
+            w.write(packet);
+        }
+        w.close();
+    }
+    const auto packets = readAll(tmp.path);
+    REQUIRE(packets.size() == sent.size());
+    for (size_t i = 0; i < sent.size(); ++i)
+    {
+        const auto stored = applyPolicy(cfg.policy, sent[i]);
+        CHECK(stored.opcode == packets[i].opcode);
+        CHECK(stored.flags == packets[i].flags);
+        CHECK(std::ranges::equal(stored.data, std::as_bytes(std::span{ packets[i].data })));
+    }
+    CHECK(packets[0].flags == (PacketFlag::Provenance | PacketFlag::Excluded));
+    CHECK(packets[0].data.size() == 4);
+    CHECK(packets[1].flags == (PacketFlag::ClientToServer | PacketFlag::Modified | PacketFlag::Redacted));
+    CHECK(packets[1].data[8] == 0);
+    CHECK(packets[2].opcode == 0x015);
+    CHECK(packets[3].opcode == 5);
+
+    const std::vector<std::byte> tooShort(3);
+    CHECK_THROWS_AS(applyPolicy(cfg.policy, { .data = tooShort }), Error);
+    CHECK(applyPolicy(cfg.policy, { .data = tooShort, .channel = 1 }).data.size() == 3);
+}
+
 TEST_CASE("the writer refuses bad input")
 {
     TempCapture tmp;

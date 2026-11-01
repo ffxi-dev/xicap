@@ -172,6 +172,56 @@ auto matches(const ExclusionRule& rule, uint8_t channel, PacketDirection directi
 
 } // namespace
 
+auto applyPolicy(const ExclusionPolicy& policy, const OutPacket& packet) -> StoredPacket
+{
+    const bool isGame = packet.channel == static_cast<uint8_t>(Channel::Game);
+    if (isGame && packet.data.size() < sizeof(FFXIPacketHeader))
+    {
+        throw Error(ErrorCode::PacketTooShort, "xicap: a game packet is at least 4 bytes");
+    }
+
+    StoredPacket stored{
+        .opcode = packet.opcode,
+        .flags  = static_cast<uint16_t>(packet.provenance & PacketFlag::Provenance),
+        .data   = { packet.data.begin(), packet.data.end() },
+    };
+    if (isGame)
+    {
+        uint16_t firstWord = 0;
+        std::memcpy(&firstWord, packet.data.data(), sizeof(firstWord));
+        stored.opcode = firstWord & 0x1FFU;
+    }
+    if (packet.direction == PacketDirection::ClientToServer)
+    {
+        stored.flags |= PacketFlag::ClientToServer;
+    }
+
+    const auto rule = std::ranges::find_if(policy.rules, [&](const ExclusionRule& r)
+                                           {
+                                               return matches(r, packet.channel, packet.direction, stored.opcode);
+                                           });
+    if (rule == policy.rules.end())
+    {
+        return stored;
+    }
+    if (rule->action == ExclusionAction::Stub)
+    {
+        stored.data.resize(std::min(stored.data.size(), GAME_STUB_BYTES));
+        stored.flags |= PacketFlag::Excluded;
+        return stored;
+    }
+    for (const auto& range : rule->ranges)
+    {
+        if (range.offset < stored.data.size())
+        {
+            const auto length = std::min<uint64_t>(range.length, stored.data.size() - range.offset);
+            std::fill_n(stored.data.begin() + range.offset, length, std::byte{ 0 });
+        }
+    }
+    stored.flags |= PacketFlag::Redacted;
+    return stored;
+}
+
 auto defaultExclusionPolicy() -> const ExclusionPolicy&
 {
     // Packets carrying text players write to each other, from LandSandBoat's
@@ -323,57 +373,11 @@ auto Writer::write(const OutPacket& packet) -> void
         throw Error(ErrorCode::PacketTooLarge, std::format("xicap: packet of {} bytes is over the frame limit", packet.data.size()));
     }
 
-    const bool isGame = packet.channel == static_cast<uint8_t>(Channel::Game);
-    uint16_t   opcode = packet.opcode;
-    if (isGame)
-    {
-        if (packet.data.size() < sizeof(FFXIPacketHeader))
-        {
-            throw Error(ErrorCode::PacketTooShort, "xicap: a game packet is at least 4 bytes");
-        }
-        uint16_t firstWord = 0;
-        std::memcpy(&firstWord, packet.data.data(), sizeof(firstWord));
-        opcode = firstWord & 0x1FFU;
-    }
+    const auto stored = applyPolicy(config_.policy, packet);
+    const auto data   = std::span{ reinterpret_cast<const uint8_t*>(stored.data.data()), stored.data.size() };
 
     // Timestamps never go backwards.
     const uint64_t timestamp = (totalPackets_ > 0) ? std::max(packet.timestamp, lastTimestamp_) : packet.timestamp;
-
-    uint16_t flags = packet.provenance & PacketFlag::Provenance;
-    if (packet.direction == PacketDirection::ClientToServer)
-    {
-        flags |= PacketFlag::ClientToServer;
-    }
-
-    std::span<const uint8_t> data{ reinterpret_cast<const uint8_t*>(packet.data.data()), packet.data.size() };
-    std::vector<uint8_t>     redacted;
-    const auto               rule = std::ranges::find_if(config_.policy.rules, [&](const ExclusionRule& r)
-                                                         {
-                                               return matches(r, packet.channel, packet.direction, opcode);
-                                                         });
-    if (rule != config_.policy.rules.end())
-    {
-        if (rule->action == ExclusionAction::Stub)
-        {
-            data = data.first(GAME_STUB_BYTES);
-            flags |= PacketFlag::Excluded;
-        }
-        else
-        {
-            redacted.assign(data.begin(), data.end());
-            for (const auto& range : rule->ranges)
-            {
-                if (range.offset >= redacted.size())
-                {
-                    continue;
-                }
-                const auto length = std::min<uint64_t>(range.length, redacted.size() - range.offset);
-                std::fill_n(redacted.begin() + range.offset, length, uint8_t{ 0 });
-            }
-            data = redacted;
-            flags |= PacketFlag::Redacted;
-        }
-    }
 
     // Even alone in a frame, the packet must fit with the markers placed before it.
     if (sizeof(PacketEntry) + data.size() + pendingMarkerBytes_ > FrameLimits::MAX_CONTENT_SIZE)
@@ -381,7 +385,8 @@ auto Writer::write(const OutPacket& packet) -> void
         throw Error(ErrorCode::PacketTooLarge, "xicap: packet and the markers before it are over the frame limit");
     }
 
-    const bool zoneIn = isGame && packet.direction == PacketDirection::ServerToClient && opcode == FFXIPacket::LOGIN_ZONE;
+    const bool zoneIn = packet.channel == static_cast<uint8_t>(Channel::Game) && packet.direction == PacketDirection::ServerToClient &&
+                        stored.opcode == FFXIPacket::LOGIN_ZONE;
     if (zoneIn || shouldEndFrame(timestamp, sizeof(PacketEntry) + data.size()))
     {
         endFrame();
@@ -414,10 +419,10 @@ auto Writer::write(const OutPacket& packet) -> void
 
     appendPod(frameBuffer_, PacketEntry{
                                 .deltaMs  = deltaMs,
-                                .flags    = flags,
+                                .flags    = stored.flags,
                                 .channel  = packet.channel,
                                 .reserved = 0,
-                                .opcode   = opcode,
+                                .opcode   = stored.opcode,
                                 .length   = static_cast<uint32_t>(data.size()),
                             });
     appendBytes(frameBuffer_, data);

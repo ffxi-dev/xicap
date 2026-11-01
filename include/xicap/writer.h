@@ -71,6 +71,17 @@ struct OutPacket
     uint16_t provenance{};
 };
 
+// A packet as the writer stores it.
+struct StoredPacket
+{
+    uint16_t               opcode{};
+    uint16_t               flags{};
+    std::vector<std::byte> data;
+};
+
+// Applies the first rule that matches and sets the flags, as Writer::write does. Throws PacketTooShort for a game packet under 4 bytes.
+[[nodiscard]] auto applyPolicy(const ExclusionPolicy& policy, const OutPacket& packet) -> StoredPacket;
+
 class Writer
 {
 public:
