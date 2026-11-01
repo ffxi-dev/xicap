@@ -297,6 +297,10 @@ extern "C" xicap_writer* xicap_writer_open(const char* path, const xicap_writer_
                                        }
                                        p.rules.push_back(std::move(rule));
                                    }
+                                   if (next != info->range_count)
+                                   {
+                                       throw xicap::Error(xicap::ErrorCode::InvalidPolicy, "xicap: rules take fewer ranges than given");
+                                   }
                                    config.policy = std::move(p);
                                }
                                xicap::FramePolicy policy{};

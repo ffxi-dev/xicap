@@ -13,6 +13,8 @@ import "C"
 
 import (
 	"errors"
+	"fmt"
+	"math"
 	"unsafe"
 )
 
@@ -343,6 +345,11 @@ func Create(path string, info WriterInfo) (*Writer, error) {
 		}
 	}
 	if pol := info.Policy; pol != nil {
+		for _, r := range pol.Rules {
+			if len(r.Ranges) > math.MaxUint16 {
+				return nil, fmt.Errorf("xicap: a rule has %d byte ranges, over %d", len(r.Ranges), math.MaxUint16)
+			}
+		}
 		ci.has_policy = 1
 		ci.policy_name = cstr(pol.Name)
 		ci.policy_version = C.uint32_t(pol.Version)

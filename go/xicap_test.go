@@ -3,6 +3,7 @@ package xicap
 import (
 	"bytes"
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -270,6 +271,27 @@ func TestCustomPolicy(t *testing.T) {
 	}
 	if s.Policy.Name != "mine" || s.Policy.Version != 7 || s.RuleCount != 1 || s.Policy.Rules[0].Opcode != 0x015 || s.Policy.Rules[0].Action != ActionZeroRange {
 		t.Fatalf("policy %+v", s.Policy)
+	}
+}
+
+func TestRangeCountLimit(t *testing.T) {
+	policy := func(n int) *Policy {
+		return &Policy{Name: "many", Version: 1, Rules: []Rule{
+			{Channel: ChannelGame, Direction: DirBoth, Action: ActionZeroRange, Opcode: 0x015, Ranges: make([][2]uint32, n)},
+		}}
+	}
+	many := policy(math.MaxUint16)
+	for i := range many.Rules[0].Ranges {
+		many.Rules[0].Ranges[i] = [2]uint32{8, 4}
+	}
+	wi := info()
+	wi.Policy = many
+	if _, err := Read(capture(t, 1, wi)); err != nil {
+		t.Fatalf("65,535 ranges: %v", err)
+	}
+	wi.Policy = policy(math.MaxUint16 + 1)
+	if _, err := Create(filepath.Join(t.TempDir(), "over.xicap"), wi); err == nil {
+		t.Fatal("65,536 ranges were accepted")
 	}
 }
 
