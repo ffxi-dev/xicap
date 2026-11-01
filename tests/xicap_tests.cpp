@@ -428,6 +428,43 @@ TEST_CASE("applyPolicy gives what the writer stores")
     CHECK(applyPolicy(cfg.policy, { .data = tooShort, .channel = 1 }).data.size() == 3);
 }
 
+TEST_CASE("redaction never reaches the game header, so the reader takes what the writer wrote")
+{
+    TempCapture tmp;
+    save(tmp.path, std::vector<uint8_t>{ 1, 2, 3 });
+    auto bad = config();
+    bad.policy.rules.insert(bad.policy.rules.begin(), { .channel = 0, .direction = ExclusionDirection::Both, .action = ExclusionAction::ZeroRange, .opcode = 0x017, .ranges = { { 0, 2 } } });
+    CHECK_THROWS_AS(Writer(tmp.path, bad), Error);
+    CHECK(bytesOf(tmp.path) == std::vector<uint8_t>{ 1, 2, 3 }); // refused before the file was opened
+    const auto chat = gamePacket(0x017, 64);
+    CHECK_THROWS_AS(applyPolicy(bad.policy, { .direction = PacketDirection::ServerToClient, .data = chat }), Error);
+
+    auto good                   = config();
+    good.policy.rules.front()   = bad.policy.rules.front();
+    good.policy.rules[0].ranges = { { 4, 0xFFFFFFFF } };
+    const std::vector<std::byte> search(8, std::byte{ 0x5A });
+    good.policy.rules.push_back({ .channel = 1, .direction = ExclusionDirection::Both, .action = ExclusionAction::ZeroRange, .opcode = 5, .ranges = { { 0, 2 } } });
+    {
+        Writer w(tmp.path, good, plain());
+        w.write(T0, PacketDirection::ServerToClient, chat);
+        w.write({ .timestamp = T0 + 1, .direction = PacketDirection::ServerToClient, .data = search, .channel = 1, .opcode = 5 });
+        w.close();
+    }
+    const auto packets = readAll(tmp.path);
+    REQUIRE(packets.size() == 2);
+    CHECK(packets[0].opcode == 0x017);
+    CHECK(packets[0].flags & PacketFlag::Redacted);
+    CHECK(std::ranges::equal(std::span{ packets[0].data }.first(4), std::as_bytes(std::span{ chat }.first(4)), [](uint8_t a, std::byte b)
+                             {
+                                 return a == std::to_integer<uint8_t>(b);
+                             }));
+    CHECK(std::ranges::all_of(std::span{ packets[0].data }.subspan(4), [](uint8_t b)
+                              {
+                                  return b == 0;
+                              }));
+    CHECK(packets[1].data[0] == 0); // other channels have no header to keep
+}
+
 TEST_CASE("the writer refuses bad input")
 {
     TempCapture tmp;

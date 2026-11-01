@@ -77,6 +77,36 @@ auto randomCaptureId() -> CaptureId
     return id;
 }
 
+auto validateRule(const ExclusionRule& rule) -> void
+{
+    const bool isGame = rule.channel == static_cast<uint8_t>(Channel::Game);
+    if (rule.action == ExclusionAction::Stub && !isGame)
+    {
+        throw Error(ErrorCode::InvalidPolicy,
+                    std::format("xicap: channel {} does not define what a stub keeps", rule.channel));
+    }
+    if (rule.action == ExclusionAction::Stub && !rule.ranges.empty())
+    {
+        throw Error(ErrorCode::InvalidPolicy, "xicap: a stub rule has no byte ranges");
+    }
+    if (rule.ranges.size() > UINT16_MAX)
+    {
+        throw Error(ErrorCode::InvalidPolicy, "xicap: too many byte ranges in a rule");
+    }
+    if (rule.action != ExclusionAction::Stub && rule.action != ExclusionAction::ZeroRange)
+    {
+        throw Error(ErrorCode::InvalidPolicy, "xicap: unknown exclusion action");
+    }
+    // The header holds the opcode the entry repeats and the size a reader checks it against.
+    if (isGame && std::ranges::any_of(rule.ranges, [](const ByteRange& range)
+                                      {
+                                          return range.offset < GAME_STUB_BYTES;
+                                      }))
+    {
+        throw Error(ErrorCode::InvalidPolicy, std::format("xicap: a range for game opcode {:#05x} starts inside the 4-byte header", rule.opcode));
+    }
+}
+
 auto validatePolicy(const ExclusionPolicy& policy) -> void
 {
     if (policy.name.size() >= 32)
@@ -87,26 +117,7 @@ auto validatePolicy(const ExclusionPolicy& policy) -> void
     {
         throw Error(ErrorCode::InvalidPolicy, "xicap: too many policy rules");
     }
-    for (const auto& rule : policy.rules)
-    {
-        if (rule.action == ExclusionAction::Stub && rule.channel != static_cast<uint8_t>(Channel::Game))
-        {
-            throw Error(ErrorCode::InvalidPolicy,
-                        std::format("xicap: channel {} does not define what a stub keeps", rule.channel));
-        }
-        if (rule.action == ExclusionAction::Stub && !rule.ranges.empty())
-        {
-            throw Error(ErrorCode::InvalidPolicy, "xicap: a stub rule has no byte ranges");
-        }
-        if (rule.ranges.size() > UINT16_MAX)
-        {
-            throw Error(ErrorCode::InvalidPolicy, "xicap: too many byte ranges in a rule");
-        }
-        if (rule.action != ExclusionAction::Stub && rule.action != ExclusionAction::ZeroRange)
-        {
-            throw Error(ErrorCode::InvalidPolicy, "xicap: unknown exclusion action");
-        }
-    }
+    std::ranges::for_each(policy.rules, validateRule);
 }
 
 auto encodePolicy(const ExclusionPolicy& policy) -> std::vector<uint8_t>
@@ -205,9 +216,10 @@ auto applyPolicy(const ExclusionPolicy& policy, const OutPacket& packet) -> Stor
     {
         return stored;
     }
+    validateRule(*rule);
     if (rule->action == ExclusionAction::Stub)
     {
-        stored.data.resize(std::min(stored.data.size(), GAME_STUB_BYTES));
+        stored.data.resize(GAME_STUB_BYTES);
         stored.flags |= PacketFlag::Excluded;
         return stored;
     }

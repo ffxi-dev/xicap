@@ -421,7 +421,9 @@ A writer refuses a policy that stubs packets on a channel whose row in
   4-byte header, whose `size` still gives the original length.
 - **Zero byte ranges:** the entry keeps its length and sets the redacted flag,
   and the writer zeroes each range. A range that runs past the packet's end
-  stops at the end.
+  stops at the end. On the game channel no range may start inside the 4-byte
+  header, which holds the opcode the entry repeats; a writer refuses such a
+  policy before it writes anything.
 
 The library's default policy, `xicap-default` version 1, stubs the game
 channel's packets that carry text players write to each other:
