@@ -45,6 +45,15 @@ auto pop(std::span<const uint8_t> buf, size_t& pos, T& out) -> bool
     return true;
 }
 
+// Kinds from 0x80 up must be understood; others are skipped.
+auto checkKind(FrameKind kind) -> void
+{
+    if (kind != FrameKind::Packets && kind != FrameKind::Checkpoint && static_cast<uint8_t>(kind) >= 0x80)
+    {
+        throw Error(ErrorCode::UnknownFrameKind, std::format("xicap: unknown frame kind {:#04x}", static_cast<uint8_t>(kind)));
+    }
+}
+
 auto textOf(std::span<const char> field) -> std::string
 {
     return { field.begin(), std::find(field.begin(), field.end(), '\0') };
@@ -399,8 +408,8 @@ auto Reader::scanCutOff() -> void
             offset           = next.value_or(fileSize_);
             continue;
         }
-        const auto kind = raw_.header.kind;
-        if (kind == FrameKind::Packets)
+        checkKind(raw_.header.kind);
+        if (raw_.header.kind == FrameKind::Packets)
         {
             indexEntries_.push_back({
                 .timestamp  = raw_.header.baseTimestamp,
@@ -408,10 +417,6 @@ auto Reader::scanCutOff() -> void
                 .zoneId     = raw_.header.zoneId,
                 .reserved   = {},
             });
-        }
-        else if (kind != FrameKind::Checkpoint && static_cast<uint8_t>(kind) >= 0x80)
-        {
-            throw Error(ErrorCode::UnknownFrameKind, std::format("xicap: unknown frame kind {:#04x}", static_cast<uint8_t>(kind)));
         }
         offset += FRAME_OVERHEAD + raw_.header.payloadSize;
     }
@@ -453,13 +458,9 @@ auto Reader::advance() -> bool
         const uint64_t size = FRAME_OVERHEAD + raw_.header.payloadSize;
         nextOffset_         = offset + size;
 
-        const auto kind = raw_.header.kind;
-        if (kind != FrameKind::Packets)
+        checkKind(raw_.header.kind);
+        if (raw_.header.kind != FrameKind::Packets)
         {
-            if (kind != FrameKind::Checkpoint && static_cast<uint8_t>(kind) >= 0x80)
-            {
-                throw Error(ErrorCode::UnknownFrameKind, std::format("xicap: unknown frame kind {:#04x}", static_cast<uint8_t>(kind)));
-            }
             continue;
         }
         try

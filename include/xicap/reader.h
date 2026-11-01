@@ -213,10 +213,6 @@ public:
         {
             return atEnd_ == other.atEnd_;
         }
-        auto operator!=(const Iterator& other) const noexcept -> bool
-        {
-            return !(*this == other);
-        }
 
     private:
         Reader*    reader_ = nullptr;
