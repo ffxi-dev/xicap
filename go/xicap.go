@@ -88,6 +88,19 @@ type Policy struct {
 	Rules   []Rule
 }
 
+// Action is what the writer does to a packet with this channel, direction (DirServerToClient or DirClientToServer), and opcode:
+// the action of the first rule that matches, or 0 when none does.
+func (p Policy) Action(channel, direction uint8, opcode uint16) uint8 {
+	if len(p.Rules) == 0 {
+		return 0
+	}
+	rules := make([]C.xicap_rule, len(p.Rules))
+	for i, r := range p.Rules {
+		rules[i] = C.xicap_rule{channel: C.uint8_t(r.Channel), direction: C.uint8_t(r.Direction), action: C.uint8_t(r.Action), opcode: C.uint16_t(r.Opcode)}
+	}
+	return uint8(C.xicap_policy_action(&rules[0], C.size_t(len(rules)), C.uint8_t(channel), C.uint8_t(direction), C.uint16_t(opcode)))
+}
+
 // Character is the capture's character, from its header.
 type Character struct {
 	ContentID   uint32

@@ -419,6 +419,10 @@ TEST_CASE("applyPolicy gives what the writer stores")
     CHECK(packets[2].opcode == 0x015);
     CHECK(packets[3].opcode == 5);
 
+    CHECK(ruleFor(cfg.policy, 0, PacketDirection::ServerToClient, 0x017)->action == ExclusionAction::Stub);
+    CHECK(ruleFor(cfg.policy, 0, PacketDirection::ClientToServer, 0x017) == nullptr);
+    CHECK(ruleFor(cfg.policy, 0, PacketDirection::ClientToServer, 0x020)->action == ExclusionAction::ZeroRange);
+
     const std::vector<std::byte> tooShort(3);
     CHECK_THROWS_AS(applyPolicy(cfg.policy, { .data = tooShort }), Error);
     CHECK(applyPolicy(cfg.policy, { .data = tooShort, .channel = 1 }).data.size() == 3);

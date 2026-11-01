@@ -160,17 +160,21 @@ auto encodeSource(const SourceInfo& source) -> std::vector<uint8_t>
     return out;
 }
 
-auto matches(const ExclusionRule& rule, uint8_t channel, PacketDirection direction, uint16_t opcode) -> bool
-{
-    if (rule.channel != channel || rule.opcode != opcode)
-    {
-        return false;
-    }
-    return rule.direction == ExclusionDirection::Both ||
-           static_cast<uint8_t>(rule.direction) == static_cast<uint8_t>(direction);
-}
-
 } // namespace
+
+auto ruleFor(const ExclusionPolicy& policy, uint8_t channel, PacketDirection direction, uint16_t opcode) -> const ExclusionRule*
+{
+    const auto rule = std::ranges::find_if(policy.rules, [&](const ExclusionRule& r)
+                                           {
+                                               return r.channel == channel && r.opcode == opcode &&
+                                                      (r.direction == ExclusionDirection::Both || static_cast<uint8_t>(r.direction) == static_cast<uint8_t>(direction));
+                                           });
+    if (rule == policy.rules.end())
+    {
+        return nullptr;
+    }
+    return &*rule;
+}
 
 auto applyPolicy(const ExclusionPolicy& policy, const OutPacket& packet) -> StoredPacket
 {
@@ -196,11 +200,8 @@ auto applyPolicy(const ExclusionPolicy& policy, const OutPacket& packet) -> Stor
         stored.flags |= PacketFlag::ClientToServer;
     }
 
-    const auto rule = std::ranges::find_if(policy.rules, [&](const ExclusionRule& r)
-                                           {
-                                               return matches(r, packet.channel, packet.direction, stored.opcode);
-                                           });
-    if (rule == policy.rules.end())
+    const auto* rule = ruleFor(policy, packet.channel, packet.direction, stored.opcode);
+    if (rule == nullptr)
     {
         return stored;
     }

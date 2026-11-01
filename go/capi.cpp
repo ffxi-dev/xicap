@@ -159,6 +159,17 @@ extern "C" void xicap_free_markers(xicap_marker* markers, size_t count)
     }
 }
 
+extern "C" uint8_t xicap_policy_action(const xicap_rule* rules, size_t rule_count, uint8_t channel, uint8_t direction, uint16_t opcode)
+{
+    xicap::ExclusionPolicy policy;
+    for (size_t i = 0; i < rule_count; ++i)
+    {
+        policy.rules.push_back({ .channel = rules[i].channel, .direction = static_cast<xicap::ExclusionDirection>(rules[i].direction), .action = static_cast<xicap::ExclusionAction>(rules[i].action), .opcode = rules[i].opcode, .ranges = {} });
+    }
+    const auto* rule = xicap::ruleFor(policy, channel, static_cast<xicap::PacketDirection>(direction), opcode);
+    return rule == nullptr ? 0 : static_cast<uint8_t>(rule->action);
+}
+
 extern "C" int xicap_read(const char* path, xicap_summary* out, char* err, size_t errlen)
 {
     return guarded(err, errlen, [&]

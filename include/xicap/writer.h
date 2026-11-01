@@ -79,6 +79,9 @@ struct StoredPacket
     std::vector<std::byte> data;
 };
 
+// The rule the writer applies to such a packet: the first that matches, or none.
+[[nodiscard]] auto ruleFor(const ExclusionPolicy& policy, uint8_t channel, PacketDirection direction, uint16_t opcode) -> const ExclusionRule*;
+
 // Applies the first rule that matches and sets the flags, as Writer::write does. Throws PacketTooShort for a game packet under 4 bytes.
 [[nodiscard]] auto applyPolicy(const ExclusionPolicy& policy, const OutPacket& packet) -> StoredPacket;
 

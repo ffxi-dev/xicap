@@ -273,6 +273,29 @@ func TestCustomPolicy(t *testing.T) {
 	}
 }
 
+func TestPolicyAction(t *testing.T) {
+	s, err := Read(capture(t, 1, info()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a := s.Policy.Action(ChannelGame, DirServerToClient, 0x017); a != ActionStub {
+		t.Fatalf("chat to the client: action %d", a)
+	}
+	if a := s.Policy.Action(ChannelGame, DirClientToServer, 0x017); a != 0 {
+		t.Fatalf("0x017 from the client: action %d", a)
+	}
+	first := Policy{Rules: []Rule{
+		{Channel: ChannelGame, Direction: DirBoth, Action: ActionZeroRange, Opcode: 0x0B5},
+		{Channel: ChannelGame, Direction: DirClientToServer, Action: ActionStub, Opcode: 0x0B5},
+	}}
+	if a := first.Action(ChannelGame, DirClientToServer, 0x0B5); a != ActionZeroRange {
+		t.Fatalf("the first matching rule decides: action %d", a)
+	}
+	if a := (Policy{}).Action(ChannelGame, DirServerToClient, 0x017); a != 0 {
+		t.Fatalf("no rules: action %d", a)
+	}
+}
+
 func TestHeaderLength(t *testing.T) {
 	b := load(t, capture(t, 1, info()))
 	if n, err := HeaderLength(b[:HeaderPrefix]); err != nil || n != HeaderSize {

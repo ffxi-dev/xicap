@@ -71,6 +71,9 @@ extern "C"
     // Checks that data starts with a whole header this library can read.
     int xicap_check_header(const uint8_t* data, size_t size, char* err, size_t errlen);
 
+    // The action (1 stub, 2 zero byte ranges) of the first rule matching a packet, as the writer picks it; 0 when none matches.
+    uint8_t xicap_policy_action(const xicap_rule* rules, size_t rule_count, uint8_t channel, uint8_t direction, uint16_t opcode);
+
     // Reads a whole capture, decoding every frame and checking its signatures.
     // A cut-off capture reads up to its last intact frame.
     int xicap_read(const char* path, xicap_summary* out, char* err, size_t errlen);
