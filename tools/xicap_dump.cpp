@@ -4,15 +4,14 @@
 #include <xicap/xicap.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <format>
-#include <iomanip>
 #include <iostream>
 #include <map>
-#include <sstream>
 #include <string>
 #include <vector>
 
@@ -30,41 +29,29 @@ auto formatDuration(const uint64_t ms) -> std::string
     const uint64_t seconds = ms / 1000;
     const uint64_t minutes = seconds / 60;
     const uint64_t hours   = minutes / 60;
-
-    std::ostringstream oss;
     if (hours > 0)
     {
-        oss << hours << "h ";
+        return std::format("{}h {}m {}s", hours, minutes % 60, seconds % 60);
     }
-    if (minutes > 0 || hours > 0)
+    if (minutes > 0)
     {
-        oss << (minutes % 60) << "m ";
+        return std::format("{}m {}s", minutes, seconds % 60);
     }
-    oss << (seconds % 60) << "s";
-    return oss.str();
+    return std::format("{}s", seconds);
 }
 
 auto formatBytes(uint64_t bytes) -> std::string
 {
-    std::ostringstream oss;
-    oss << std::fixed << std::setprecision(2);
-    if (bytes >= 1024 * 1024 * 1024)
+    constexpr std::array units{ "GB", "MB", "KB" };
+    for (size_t i = 0; i < units.size(); ++i)
     {
-        oss << (static_cast<double>(bytes) / (1024 * 1024 * 1024)) << " GB";
+        const auto unit = uint64_t{ 1 } << (10 * (units.size() - i));
+        if (bytes >= unit)
+        {
+            return std::format("{:.2f} {}", static_cast<double>(bytes) / static_cast<double>(unit), units[i]);
+        }
     }
-    else if (bytes >= 1024 * 1024)
-    {
-        oss << (static_cast<double>(bytes) / (1024 * 1024)) << " MB";
-    }
-    else if (bytes >= 1024)
-    {
-        oss << (static_cast<double>(bytes) / 1024) << " KB";
-    }
-    else
-    {
-        oss << bytes << " B";
-    }
-    return oss.str();
+    return std::format("{} B", bytes);
 }
 
 template <typename T>
@@ -201,10 +188,7 @@ int main(int argc, char* argv[])
         std::cout << "=== " << filename << " (" << formatBytes(fileSize) << ") ===\n";
         std::cout << "Version:        " << static_cast<int>(reader.versionMajor()) << "." << static_cast<int>(reader.versionMinor()) << "\n";
         std::cout << "Capture id:     " << hex(reader.captureId()) << "\n";
-        if (std::ranges::any_of(reader.previousCaptureId(), [](uint8_t b)
-                                {
-                                    return b != 0;
-                                }))
+        if (reader.previousCaptureId() != xicap::CaptureId{})
         {
             std::cout << "Continues:      " << hex(reader.previousCaptureId()) << "\n";
         }
@@ -306,7 +290,7 @@ int main(int argc, char* argv[])
         std::cout << "Game S2C:       " << totalIncoming << " packets, " << formatBytes(totalIncomingBytes) << "\n";
         std::cout << "Game C2S:       " << totalOutgoing << " packets, " << formatBytes(totalOutgoingBytes) << "\n";
         const uint64_t raw = totalIncomingBytes + totalOutgoingBytes;
-        std::cout << "Ratio:          " << std::fixed << std::setprecision(2) << (fileSize > 0 ? static_cast<double>(raw) / fileSize : 0.0) << "x\n";
+        std::cout << std::format("Ratio:          {:.2f}x\n", fileSize > 0 ? static_cast<double>(raw) / static_cast<double>(fileSize) : 0.0);
 
         const auto top = [](const char* title, const std::map<uint16_t, uint64_t>& counts, std::map<uint16_t, uint64_t>& bytes)
         {
