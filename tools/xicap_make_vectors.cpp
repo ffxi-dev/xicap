@@ -4,11 +4,10 @@
 //
 //   xicap_make_vectors tests/vectors
 
+#include "craft.h"
 #include "vectors.h"
 
 #include <xicap/xicap.h>
-
-#include "internal/crc32.h"
 
 #include <cstring>
 #include <filesystem>
@@ -16,10 +15,10 @@
 #include <functional>
 #include <iostream>
 #include <stdexcept>
-#include <zstd.h>
 
 namespace fs = std::filesystem;
 using namespace xicap;
+using namespace craft;
 
 namespace
 {
@@ -102,63 +101,10 @@ auto session(const fs::path& path, int frames, bool dictionary, bool close = tru
     }
 }
 
-auto load(const fs::path& path) -> std::vector<uint8_t>
+auto packetFrames(std::span<const uint8_t> bytes) -> std::vector<FrameRef>
 {
-    std::ifstream f(path, std::ios::binary);
-    return { std::istreambuf_iterator<char>(f), {} };
-}
-
-auto save(const fs::path& path, const std::vector<uint8_t>& bytes) -> void
-{
-    std::ofstream f(path, std::ios::binary | std::ios::trunc);
-    f.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
-}
-
-template <typename T>
-auto podAt(const std::vector<uint8_t>& bytes, size_t offset) -> T
-{
-    T v{};
-    std::memcpy(&v, bytes.data() + offset, sizeof(T));
-    return v;
-}
-
-auto crcOf(const uint8_t* data, size_t size) -> uint32_t
-{
-    internal::Crc32 crc;
-    crc.update({ data, size });
-    return crc.value();
-}
-
-struct Frame
-{
-    size_t      offset;
-    size_t      size;
-    FrameHeader header;
-};
-
-auto frames(const std::vector<uint8_t>& bytes) -> std::vector<Frame>
-{
-    const auto header = podAt<Header>(bytes, 0);
-    size_t     offset = header.headerSize;
-    for (uint32_t i = 0; i < header.extensionCount; ++i)
-    {
-        offset += sizeof(ExtensionBlockHeader) + podAt<ExtensionBlockHeader>(bytes, offset).length + 4;
-    }
-    std::vector<Frame> out;
-    while (offset + sizeof(FrameHeader) <= bytes.size() && podAt<uint32_t>(bytes, offset) == FRAME_MAGIC)
-    {
-        const auto h    = podAt<FrameHeader>(bytes, offset);
-        const auto size = sizeof(FrameHeader) + h.payloadSize + 4;
-        out.push_back({ offset, size, h });
-        offset += size;
-    }
-    return out;
-}
-
-auto packetFrames(const std::vector<uint8_t>& bytes) -> std::vector<Frame>
-{
-    std::vector<Frame> out;
-    for (const auto& f : frames(bytes))
+    std::vector<FrameRef> out;
+    for (const auto& f : framesOf(bytes))
     {
         if (f.header.kind == FrameKind::Packets)
         {
@@ -168,44 +114,9 @@ auto packetFrames(const std::vector<uint8_t>& bytes) -> std::vector<Frame>
     return out;
 }
 
-auto footerOffset(const std::vector<uint8_t>& bytes) -> size_t
-{
-    return podAt<FooterTrailer>(bytes, bytes.size() - sizeof(FooterTrailer)).indexOffset;
-}
-
 auto rawFrame(FrameKind kind, const std::vector<uint8_t>& payload) -> std::vector<uint8_t>
 {
-    FrameHeader          h{ .magic = FRAME_MAGIC, .kind = kind, .reserved0 = 0, .markerCount = 0, .payloadSize = static_cast<uint32_t>(payload.size()), .packetCount = 0, .baseTimestamp = T0, .zoneId = 0, .reserved1 = 0 };
-    std::vector<uint8_t> out(sizeof(h));
-    std::memcpy(out.data(), &h, sizeof(h));
-    out.insert(out.end(), payload.begin(), payload.end());
-    const auto crc = crcOf(out.data(), out.size());
-    out.resize(out.size() + 4);
-    std::memcpy(out.data() + out.size() - 4, &crc, 4);
-    return out;
-}
-
-// Rewrites a packet frame's content; the capture must have no dictionary.
-auto rewrite(const std::vector<uint8_t>& bytes, const Frame& f, const std::function<void(std::vector<uint8_t>&)>& edit) -> std::vector<uint8_t>
-{
-    const uint8_t*       payload = bytes.data() + f.offset + sizeof(FrameHeader);
-    std::vector<uint8_t> content(ZSTD_getFrameContentSize(payload, f.header.payloadSize));
-    ZSTD_decompress(content.data(), content.size(), payload, f.header.payloadSize);
-    edit(content);
-    std::vector<uint8_t> compressed(ZSTD_compressBound(content.size()));
-    auto*                cctx = ZSTD_createCCtx();
-    ZSTD_CCtx_setParameter(cctx, ZSTD_c_checksumFlag, 1);
-    compressed.resize(ZSTD_compress2(cctx, compressed.data(), compressed.size(), content.data(), content.size()));
-    ZSTD_freeCCtx(cctx);
-    auto h        = f.header;
-    h.payloadSize = static_cast<uint32_t>(compressed.size());
-    std::vector<uint8_t> out(sizeof(h));
-    std::memcpy(out.data(), &h, sizeof(h));
-    out.insert(out.end(), compressed.begin(), compressed.end());
-    const auto crc = crcOf(out.data(), out.size());
-    out.resize(out.size() + 4);
-    std::memcpy(out.data() + out.size() - 4, &crc, 4);
-    return out;
+    return frameBytes({ .magic = FRAME_MAGIC, .kind = kind, .reserved0 = 0, .markerCount = 0, .payloadSize = static_cast<uint32_t>(payload.size()), .packetCount = 0, .baseTimestamp = T0, .zoneId = 0, .reserved1 = 0 }, payload);
 }
 
 auto splice(const std::vector<uint8_t>& bytes, size_t at, size_t remove, const std::vector<uint8_t>& insert) -> std::vector<uint8_t>
@@ -340,7 +251,7 @@ int main(int argc, char* argv[])
         { "cut-off", [&](const fs::path& p)
           {
               session(tmp, 4, true);
-              auto       bytes = load(tmp);
+              auto       bytes = bytesOf(tmp);
               const auto last  = packetFrames(bytes).back();
               bytes.resize(last.offset + 10);
               save(p, bytes);
@@ -350,7 +261,7 @@ int main(int argc, char* argv[])
         { "torn-tail", [&](const fs::path& p)
           {
               session(tmp, 4, true);
-              auto bytes = load(tmp);
+              auto bytes = bytesOf(tmp);
               bytes.resize(footerOffset(bytes));
               bytes.resize(bytes.size() + 4096, 0);
               save(p, bytes);
@@ -359,7 +270,7 @@ int main(int argc, char* argv[])
         { "damaged-footer", [&](const fs::path& p)
           {
               session(tmp, 3, true);
-              auto bytes = load(tmp);
+              auto bytes = bytesOf(tmp);
               bytes[bytes.size() - 20] ^= 1;
               save(p, bytes);
               Reader r(p);
@@ -368,7 +279,7 @@ int main(int argc, char* argv[])
         { "damaged-middle-complete", [&](const fs::path& p)
           {
               session(tmp, 3, true);
-              auto bytes = load(tmp);
+              auto bytes = bytesOf(tmp);
               bytes[packetFrames(bytes)[1].offset + 8] ^= 0x40;
               save(p, bytes);
               expect(refuses(p, ErrorCode::CorruptFrame), "a complete file with a bad frame is refused");
@@ -377,7 +288,7 @@ int main(int argc, char* argv[])
         { "damaged-middle-cut-off", [&](const fs::path& p)
           {
               session(tmp, 3, true);
-              auto bytes = load(tmp);
+              auto bytes = bytesOf(tmp);
               bytes[packetFrames(bytes)[1].offset + 8] ^= 0x40;
               bytes.resize(footerOffset(bytes));
               save(p, bytes);
@@ -387,7 +298,7 @@ int main(int argc, char* argv[])
         { "unknown-skippable-kind", [&](const fs::path& p)
           {
               session(tmp, 2, true);
-              auto bytes = load(tmp);
+              auto bytes = bytesOf(tmp);
               bytes.resize(footerOffset(bytes));
               save(p, splice(bytes, packetFrames(bytes)[1].offset, 0, rawFrame(static_cast<FrameKind>(0x02), { 1, 2, 3 })));
               expect(count(p) == 6, "an unknown skippable frame is skipped");
@@ -395,7 +306,7 @@ int main(int argc, char* argv[])
         { "unknown-required-kind", [&](const fs::path& p)
           {
               session(tmp, 2, true);
-              auto bytes = load(tmp);
+              auto bytes = bytesOf(tmp);
               bytes.resize(footerOffset(bytes));
               save(p, splice(bytes, packetFrames(bytes)[1].offset, 0, rawFrame(static_cast<FrameKind>(0x81), { 1, 2, 3 })));
               expect(refuses(p, ErrorCode::UnknownFrameKind), "an unknown must-understand frame is refused");
@@ -403,27 +314,27 @@ int main(int argc, char* argv[])
         { "unknown-required-flag", [&](const fs::path& p)
           {
               session(tmp, 2, false);
-              auto bytes = load(tmp);
+              auto bytes = bytesOf(tmp);
               bytes.resize(footerOffset(bytes));
               const auto f      = packetFrames(bytes)[0];
-              const auto edited = rewrite(bytes, f, [](std::vector<uint8_t>& content)
-                                          {
-                                              auto e = podAt<PacketEntry>(content, 0);
-                                              e.flags |= 0x0400;
-                                              std::memcpy(content.data(), &e, sizeof(e));
-                                          });
+              const auto edited = rewriteFrame(bytes, f, [](std::vector<uint8_t>& content)
+                                               {
+                                                   auto e = podAt<PacketEntry>(content, 0);
+                                                   e.flags |= 0x0400;
+                                                   std::memcpy(content.data(), &e, sizeof(e));
+                                               });
               save(p, splice(bytes, f.offset, f.size, edited));
               expect(refuses(p, ErrorCode::UnknownPacketFlag), "an unknown must-understand flag is refused");
           } },
         { "missing-dictionary", [&](const fs::path& p)
           {
               session(tmp, 1, true);
-              auto       bytes  = load(tmp);
+              auto       bytes  = bytesOf(tmp);
               const auto length = podAt<ExtensionBlockHeader>(bytes, HEADER_SIZE).length;
               bytes             = splice(bytes, HEADER_SIZE, 8 + length + 4, {});
               auto header       = podAt<Header>(bytes, 0);
               header.extensionCount--;
-              header.headerCrc = crcOf(reinterpret_cast<const uint8_t*>(&header), offsetof(Header, headerCrc));
+              header.headerCrc = internal::crc32({ reinterpret_cast<const uint8_t*>(&header), offsetof(Header, headerCrc) });
               std::memcpy(bytes.data(), &header, sizeof(header));
               save(p, bytes);
               expect(refuses(p, ErrorCode::MissingDictionary), "a file without its dictionary is refused");
@@ -431,7 +342,7 @@ int main(int argc, char* argv[])
         { "bad-header-crc", [&](const fs::path& p)
           {
               session(tmp, 1, true);
-              auto bytes = load(tmp);
+              auto bytes = bytesOf(tmp);
               bytes[120] ^= 1;
               save(p, bytes);
               expect(refuses(p, ErrorCode::HeaderChecksumMismatch), "a damaged header is refused");
@@ -439,7 +350,7 @@ int main(int argc, char* argv[])
         { "bad-extension-crc", [&](const fs::path& p)
           {
               session(tmp, 1, true);
-              auto bytes = load(tmp);
+              auto bytes = bytesOf(tmp);
               bytes[HEADER_SIZE + 100] ^= 1;
               save(p, bytes);
               expect(refuses(p, ErrorCode::ExtensionChecksumMismatch), "a damaged extension is refused");
@@ -454,14 +365,14 @@ int main(int argc, char* argv[])
         { "edited-packet", [&](const fs::path& p)
           {
               session(tmp, 6, false);
-              auto bytes = load(tmp);
+              auto bytes = bytesOf(tmp);
               bytes.resize(footerOffset(bytes));
               // Edit the last packet frame, after at least one checkpoint.
               const auto f      = packetFrames(bytes).back();
-              const auto edited = rewrite(bytes, f, [](std::vector<uint8_t>& content)
-                                          {
-                                              content[sizeof(PacketEntry) + 6] ^= 0xFF;
-                                          });
+              const auto edited = rewriteFrame(bytes, f, [](std::vector<uint8_t>& content)
+                                               {
+                                                   content[sizeof(PacketEntry) + 6] ^= 0xFF;
+                                               });
               save(p, splice(bytes, f.offset, f.size, edited));
               Reader     r(p);
               const auto v = r.verify();

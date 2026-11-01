@@ -1,5 +1,6 @@
 #include <xicap/xicap.h>
 
+#include "craft.h"
 #include "internal/chain.h"
 #include "internal/crc32.h"
 #include "vectors.h"
@@ -7,19 +8,18 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
-#include <fstream>
-#include <functional>
 #include <span>
 #include <string>
 #include <vector>
-#include <zstd.h>
 
 namespace fs = std::filesystem;
 using namespace xicap;
+using namespace craft;
 
 namespace
 {
@@ -118,98 +118,10 @@ auto readAll(const fs::path& path, ReaderOptions options = {}) -> std::vector<Ow
     return readAll(reader);
 }
 
-auto bytesOf(const fs::path& path) -> std::vector<uint8_t>
-{
-    std::ifstream f(path, std::ios::binary);
-    return { std::istreambuf_iterator<char>(f), {} };
-}
-
-auto save(const fs::path& path, std::span<const uint8_t> bytes) -> void
-{
-    std::ofstream f(path, std::ios::binary | std::ios::trunc);
-    f.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
-}
-
-template <typename T>
-auto podAt(std::span<const uint8_t> bytes, size_t offset) -> T
-{
-    T v{};
-    std::memcpy(&v, bytes.data() + offset, sizeof(T));
-    return v;
-}
-
-auto crcOf(std::span<const uint8_t> bytes) -> uint32_t
-{
-    internal::Crc32 crc;
-    crc.update(bytes);
-    return crc.value();
-}
-
-struct FrameRef
-{
-    size_t      offset;
-    size_t      size;
-    FrameHeader header;
-};
-
-// Walks the file the way FORMAT.md describes, independent of Reader.
-auto dataStart(std::span<const uint8_t> bytes) -> size_t
-{
-    const auto header = podAt<Header>(bytes, 0);
-    size_t     offset = header.headerSize;
-    for (uint32_t i = 0; i < header.extensionCount; ++i)
-    {
-        offset += sizeof(ExtensionBlockHeader) + podAt<ExtensionBlockHeader>(bytes, offset).length + 4;
-    }
-    return offset;
-}
-
-auto framesOf(std::span<const uint8_t> bytes) -> std::vector<FrameRef>
-{
-    std::vector<FrameRef> out;
-    if (bytes.size() < HEADER_SIZE)
-    {
-        return out; // nothing written yet
-    }
-    size_t offset = dataStart(bytes);
-    while (offset + sizeof(FrameHeader) <= bytes.size() && podAt<uint32_t>(bytes, offset) == FRAME_MAGIC)
-    {
-        const auto header = podAt<FrameHeader>(bytes, offset);
-        const auto size   = sizeof(FrameHeader) + header.payloadSize + 4;
-        out.push_back({ offset, size, header });
-        offset += size;
-    }
-    return out;
-}
-
 auto fixFrameCrc(std::vector<uint8_t>& bytes, const FrameRef& frame) -> void
 {
-    const auto crc = crcOf({ bytes.data() + frame.offset, frame.size - 4 });
+    const auto crc = internal::crc32({ bytes.data() + frame.offset, frame.size - 4 });
     std::memcpy(bytes.data() + frame.offset + frame.size - 4, &crc, 4);
-}
-
-// Rewrites a packet frame's decompressed content (no dictionary).
-auto rewriteFrame(std::vector<uint8_t>& bytes, const FrameRef& frame, const std::function<void(std::vector<uint8_t>&)>& edit) -> std::vector<uint8_t>
-{
-    const uint8_t*       payload = bytes.data() + frame.offset + sizeof(FrameHeader);
-    std::vector<uint8_t> content(ZSTD_getFrameContentSize(payload, frame.header.payloadSize));
-    ZSTD_decompress(content.data(), content.size(), payload, frame.header.payloadSize);
-    edit(content);
-    std::vector<uint8_t> compressed(ZSTD_compressBound(content.size()));
-    auto*                cctx = ZSTD_createCCtx();
-    ZSTD_CCtx_setParameter(cctx, ZSTD_c_checksumFlag, 1);
-    compressed.resize(ZSTD_compress2(cctx, compressed.data(), compressed.size(), content.data(), content.size()));
-    ZSTD_freeCCtx(cctx);
-
-    auto header        = frame.header;
-    header.payloadSize = static_cast<uint32_t>(compressed.size());
-    std::vector<uint8_t> out(sizeof(header));
-    std::memcpy(out.data(), &header, sizeof(header));
-    out.insert(out.end(), compressed.begin(), compressed.end());
-    const auto crc = crcOf(out);
-    out.resize(out.size() + 4);
-    std::memcpy(out.data() + out.size() - 4, &crc, 4);
-    return out;
 }
 
 auto truncateAt(const fs::path& path, size_t size) -> void
@@ -217,11 +129,6 @@ auto truncateAt(const fs::path& path, size_t size) -> void
     auto bytes = bytesOf(path);
     bytes.resize(size);
     save(path, bytes);
-}
-
-auto footerOffset(std::span<const uint8_t> bytes) -> size_t
-{
-    return podAt<FooterTrailer>(bytes, bytes.size() - sizeof(FooterTrailer)).indexOffset;
 }
 
 // Writes `frames` packet frames of `perFrame` packets each, one second apart.
@@ -636,7 +543,7 @@ TEST_CASE("readers refuse what they must")
         bytes.erase(bytes.begin() + HEADER_SIZE, bytes.begin() + HEADER_SIZE + 8 + dictLength + 4);
         auto header = podAt<Header>(bytes, 0);
         header.extensionCount--;
-        header.headerCrc = crcOf({ reinterpret_cast<const uint8_t*>(&header), offsetof(Header, headerCrc) });
+        header.headerCrc = internal::crc32({ reinterpret_cast<const uint8_t*>(&header), offsetof(Header, headerCrc) });
         std::memcpy(bytes.data(), &header, sizeof(header));
         save(tmp.path, bytes);
         try
@@ -664,13 +571,9 @@ TEST_CASE("frame kinds and flags a reader must understand")
     {
         auto out = bytes;
         out.resize(frames[1].offset);
-        FrameHeader          h{ .magic = FRAME_MAGIC, .kind = static_cast<FrameKind>(kind), .reserved0 = 0, .markerCount = 0, .payloadSize = 3, .packetCount = 0, .baseTimestamp = T0, .zoneId = 0, .reserved1 = 0 };
-        std::vector<uint8_t> frame(sizeof(h));
-        std::memcpy(frame.data(), &h, sizeof(h));
-        frame.insert(frame.end(), { 1, 2, 3 });
-        const auto crc = crcOf(frame);
-        frame.resize(frame.size() + 4);
-        std::memcpy(frame.data() + frame.size() - 4, &crc, 4);
+        const FrameHeader            h{ .magic = FRAME_MAGIC, .kind = static_cast<FrameKind>(kind), .reserved0 = 0, .markerCount = 0, .payloadSize = 3, .packetCount = 0, .baseTimestamp = T0, .zoneId = 0, .reserved1 = 0 };
+        const std::array<uint8_t, 3> payload{ 1, 2, 3 };
+        const auto                   frame = frameBytes(h, payload);
         out.insert(out.end(), frame.begin(), frame.end());
         out.insert(out.end(), second.begin(), second.end());
         return out;
@@ -998,7 +901,7 @@ TEST_CASE("SHA-512 matches FIPS 180-4 for abc")
 
 TEST_CASE("CRC-32 check value")
 {
-    CHECK(crcOf({ reinterpret_cast<const uint8_t*>("123456789"), 9 }) == 0xCBF43926);
+    CHECK(internal::crc32({ reinterpret_cast<const uint8_t*>("123456789"), 9 }) == 0xCBF43926);
 }
 
 #ifdef __linux__
@@ -1062,7 +965,7 @@ TEST_CASE("a footer whose offset wraps the size check is not trusted")
     // offset + count * 24 + 112 wraps around to the file size.
     trailer.entryCount  = 0xFFFFFFFF;
     trailer.indexOffset = uint64_t{ bytes.size() } - sizeof(FooterTrailer) - uint64_t{ 0xFFFFFFFF } * sizeof(FooterIndexEntry);
-    trailer.trailerCrc  = crcOf({ reinterpret_cast<const uint8_t*>(&trailer), offsetof(FooterTrailer, trailerCrc) });
+    trailer.trailerCrc  = internal::crc32({ reinterpret_cast<const uint8_t*>(&trailer), offsetof(FooterTrailer, trailerCrc) });
     std::memcpy(bytes.data() + bytes.size() - sizeof(FooterTrailer), &trailer, sizeof(trailer));
     save(tmp.path, bytes);
     Reader r(tmp.path);
