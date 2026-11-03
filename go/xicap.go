@@ -312,7 +312,7 @@ type WriterInfo struct {
 	Source            *Source  // required with OriginConverted
 	Policy            *Policy  // nil: the default, which stubs chat
 	Preset            Preset
-	Level             int // zstd level; 0 for the preset's
+	Level             int // zstd level; 0 for the preset's. Level 3 holds a live writer's compressor to about 3.7 MB
 }
 
 // Preset is how a writer frames and compresses. See FORMAT.md, Writer rules.

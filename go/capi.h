@@ -114,7 +114,7 @@ extern "C"
         uint8_t     previous_capture_id[16];
         uint8_t     signing_seed[32];
         int         preset; // 0 live, 1 archive
-        int         level;  // zstd level; 0 for the preset's
+        int         level;  // zstd level; 0 for the preset's. Another level takes its own match table
         // Exclusion policy; without one the writer uses the default. Each rule
         // takes its range_count ranges from ranges, in order.
         int                has_policy;
