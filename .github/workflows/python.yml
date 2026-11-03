@@ -45,7 +45,7 @@ jobs:
         run: python -m pytest python/tests -v
 
   spec-reader:
-    # A reader written from FORMAT.md alone must read the conformance set as recorded.
+    # A reader written from FORMAT.md and FORMAT-3.md alone must read the conformance set as recorded.
     runs-on: [self-hosted, lsb]
     steps:
       - uses: actions/checkout@v4
@@ -55,3 +55,4 @@ jobs:
       - run: pip install zstandard==0.25.0 cryptography==50.0.0
       - run: python tests/spec_reader.py tests/vectors
       - run: python tests/spec_reader.py --example FORMAT-3.md
+      - run: python tests/spec_reader.py --example FORMAT.md
