@@ -4,10 +4,10 @@ Version 4.0. This document is normative: a reader built from it alone, with the
 references below, must read every format-4 capture the library writes.
 [FORMAT-3.md](FORMAT-3.md) specifies format 3, which readers keep reading.
 
-**Status: draft.** Format 4 goes into production when Mogsafe deploys xicap
-4.0. Until then a draft may change anything; from then on, readers keep reading
-every released version of format 4, and a change that an older reader cannot
-follow needs a new major version.
+**Status: in production** since 2026-11-03, when Mogsafe deployed xicap 4.0
+and began archiving format 4. Captures are kept for the long term, so readers
+keep reading every released version of format 4, and a change that an older
+reader cannot follow needs a new major version.
 
 ## Conventions
 
