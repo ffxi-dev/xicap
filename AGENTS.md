@@ -1,6 +1,6 @@
 # xicap
 
-xicap is Vault's capture binary format and its C++20 library, built for replay and long-term archival: zstd-compressed frames, an index, and the dictionary embedded in each capture. `FORMAT.md` is the normative specification; `README.md` shows the library API. Every Vault brick that writes, stores, plays, or queries captures depends on it, so treat it as a contract.
+xicap is Vault's capture binary format and its C++20 library, built for replay and long-term archival: packets in columns over one zstd stream, an index, and signatures over the packets. `FORMAT.md` is the normative specification of format 4 and `FORMAT-3.md` of format 3, which readers keep reading; `README.md` shows the library API. Every Vault brick that writes, stores, plays, or queries captures depends on it, so treat it as a contract.
 
 ## Commands
 
@@ -24,7 +24,7 @@ go test ./go/                                          # Go via cgo; needs g++ a
 
 - A release sets its version in `CMakeLists.txt`, `js/package.json`, and `python/pyproject.toml`, then tags `v<version>`; CI fails when the three disagree.
 - A change to the on-disk format updates `FORMAT.md`, bumps the version in the header constants, and adds reader and writer tests. Captures are archived for the long term: from the day the owner declares the format in production, readers keep reading every released version, with tests that read captures written by each one. Until then a draft may break compatibility.
-- `tests/spec_reader.py` is a reader written from `FORMAT.md` alone, for tests only. It proves the spec is complete; it is not a binding and never ships.
+- `tests/spec_reader.py` is a reader written from `FORMAT.md` and `FORMAT-3.md` alone, for tests only. It proves the spec is complete; it is not a binding and never ships.
 - The C++ library and the Python, JavaScript, and Go bindings change together. Bindings wrap the C++ library; none reimplements the format.
 
 ## Part of Vault
