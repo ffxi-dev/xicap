@@ -474,8 +474,18 @@ func TestCut(t *testing.T) {
 		t.Fatalf("markers: %+v %v", m, err)
 	}
 
+	// The same range of the same recording cuts to the same file; another range gets another id.
+	if err := Cut(src, dst+"again", 1, 2, "mogsafe", seed, [64]byte{7}, []byte("capture abc")); err != nil {
+		t.Fatal(err)
+	}
+	if a, b := mustRead(t, dst), mustRead(t, dst+"again"); !bytes.Equal(a, b) {
+		t.Fatal("two cuts of one range differ")
+	}
 	if err := Cut(src, dst+"2", 0, 3, "mogsafe", seed, [64]byte{}, nil); err != nil {
 		t.Fatal(err)
+	}
+	if other, _ := Read(dst + "2"); other.CaptureID == s.CaptureID {
+		t.Fatal("two ranges share an id")
 	}
 	if s, _ := Read(dst + "2"); s.Packets != 4 || s.StartContext != StartLogin {
 		t.Fatalf("a cut from the first packet starts where its source does: %+v", s)
@@ -486,4 +496,13 @@ func TestCut(t *testing.T) {
 	if _, err := os.Stat(dst + "3"); err == nil {
 		t.Fatal("a failed cut leaves its file")
 	}
+}
+
+func mustRead(t *testing.T, path string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }

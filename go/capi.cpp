@@ -1,6 +1,7 @@
 #include "capi.h"
 
 #include "internal/crc32.h"
+#include "monocypher.h"
 #include "xicap/reader.h"
 #include "xicap/writer.h"
 
@@ -389,6 +390,13 @@ extern "C" int xicap_cut(const char* src, const char* dst, uint64_t first, uint6
                        config.startContext  = first == 0 ? reader.startContext() : xicap::StartContext::MidSession;
                        std::copy_n(signing_seed, config.signingSeed.size(), config.signingSeed.begin());
                        config.policy = reader.policy();
+                       // The same range of the same recording always cuts to the same file: its id comes from the
+                       // recording's hash and the range, not from a random draw.
+                       uint8_t idInput[64 + 16]{};
+                       std::copy_n(source_hash, 64, idInput);
+                       std::memcpy(idInput + 64, &first, 8);
+                       std::memcpy(idInput + 72, &last, 8);
+                       crypto_blake2b(config.captureId.data(), config.captureId.size(), idInput, sizeof idInput);
                        xicap::SourceInfo source{ .format = "xicap", .formatVersion = std::format("{}.{}", reader.versionMajor(), reader.versionMinor()) };
                        std::copy_n(source_hash, source.sourceHash.size(), source.sourceHash.begin());
                        if (metadata_size > 0)
