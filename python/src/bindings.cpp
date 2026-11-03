@@ -140,6 +140,16 @@ public:
         out["verifiedPackets"]    = v.verifiedPackets;
         out["goodCheckpoints"]    = v.goodCheckpoints;
         out["firstFailureOffset"] = v.firstFailureOffset ? py::cast(*v.firstFailureOffset) : py::none();
+        out["seal"]               = py::none();
+        if (v.seal)
+        {
+            py::dict seal;
+            seal["key"]        = toBytes(v.seal->key);
+            seal["agent"]      = v.seal->agent;
+            seal["sealedAtMs"] = v.seal->sealedAt;
+            seal["good"]       = v.seal->good;
+            out["seal"]        = seal;
+        }
         return out;
     }
 
@@ -255,7 +265,9 @@ PYBIND11_MODULE(_xicap, m)
         .value("InvalidPolicy", xicap::ErrorCode::InvalidPolicy)
         .value("InvalidExtension", xicap::ErrorCode::InvalidExtension)
         .value("WriteFailed", xicap::ErrorCode::WriteFailed)
-        .value("PacketTooShort", xicap::ErrorCode::PacketTooShort);
+        .value("PacketTooShort", xicap::ErrorCode::PacketTooShort)
+        .value("TranscodeRefused", xicap::ErrorCode::TranscodeRefused)
+        .value("TranscodeMismatch", xicap::ErrorCode::TranscodeMismatch);
 
     // Map xicap::Error onto a Python exception with a .code attribute.
     static py::exception<xicap::Error> errExc(m, "Error");
@@ -408,4 +420,55 @@ PYBIND11_MODULE(_xicap, m)
         .def("extension_types", &PyReader::extensionTypes)
         .def("get_extension", &PyReader::getExtension, py::arg("type"))
         .def("list_zones", &PyReader::listZones);
+
+    m.def(
+        "transcode",
+        [](const std::filesystem::path& src, const std::filesystem::path& dst, bool seal, const py::bytes& seed, const std::string& agent, int level, const py::object& sourceHash, const py::bytes& metadata)
+        {
+            const auto take = [](const py::bytes& b, auto& out, const char* what)
+            {
+                const auto view = static_cast<std::string_view>(b);
+                if (view.size() != out.size())
+                {
+                    throw py::value_error(std::string(what) + " must be " + std::to_string(out.size()) + " bytes");
+                }
+                std::memcpy(out.data(), view.data(), out.size());
+            };
+            xicap::TranscodeOptions options{};
+            options.signing = seal ? xicap::Signing::Seal : xicap::Signing::Resign;
+            options.agent   = agent;
+            take(seed, options.seed, "seed");
+            if (!sourceHash.is_none())
+            {
+                take(sourceHash.cast<py::bytes>(), options.sourceHash, "source_hash");
+            }
+            const auto meta = static_cast<std::string_view>(metadata);
+            options.metadata.assign(meta.begin(), meta.end());
+            if (level != 0)
+            {
+                options.policy.compressionLevel = level;
+            }
+            xicap::TranscodeResult r;
+            {
+                py::gil_scoped_release release;
+                r = xicap::transcode(src, dst, options);
+            }
+            py::dict out;
+            out["packets"]  = r.packets;
+            out["markers"]  = r.markers;
+            out["bytesIn"]  = r.bytesIn;
+            out["bytesOut"] = r.bytesOut;
+            return out;
+        },
+        py::arg("src"),
+        py::arg("dst"),
+        py::kw_only(),
+        py::arg("seal"),
+        py::arg("seed"),
+        py::arg("agent"),
+        py::arg("level")       = 0,
+        py::arg("source_hash") = py::none(),
+        py::arg("metadata")    = py::bytes(""),
+        "Rewrites src as format 4 at dst with the archive preset and checks it against src. seal=True keeps the signer's "
+        "signatures and adds a seal made with seed; seal=False signs anew with seed.");
 }
