@@ -1,6 +1,6 @@
 {
     "name": "@xicap/wasm",
-    "version": "4.0.0",
+    "version": "4.1.0",
     "description": "WebAssembly reader for xicap FFXI packet captures.",
     "type": "module",
     "main": "./dist/index.js",

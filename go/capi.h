@@ -155,7 +155,8 @@ extern "C"
     int xicap_writer_close(xicap_writer* w, char* err, size_t errlen);
 
     // Writes packets first to last of the capture at src, with the markers before each, as a new capture at dst signed
-    // with signing_seed, with the archive preset. The header keeps src's client version, character, clock, network and
+    // with signing_seed, with the archive preset; ahead of them, the packets from before first that set the scene,
+    // flagged carried (xicap::cut). The header keeps src's client version, character, clock, network and
     // exclusion policy; the cut is origin 2, starts at a login only when src does and first is 0, and names src in a
     // source block of format "xicap" with source_hash and metadata.
     int xicap_cut(const char* src, const char* dst, uint64_t first, uint64_t last, const char* capture_agent, const uint8_t signing_seed[32], const uint8_t source_hash[64], const uint8_t* metadata, size_t metadata_size, char* err, size_t errlen);

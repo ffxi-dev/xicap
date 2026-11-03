@@ -842,6 +842,68 @@ TEST_CASE("transcode")
     }
 }
 
+TEST_CASE("a cut carries the scene from before its range")
+{
+    TempCapture src;
+    TempCapture dst;
+    TempCapture again;
+    // An NPC update: its id at byte 4 and the parts it sends at byte 10.
+    const auto npc = [](uint32_t id, uint8_t parts)
+    {
+        auto p = gamePacket(0x00E, 40, 0);
+        std::memcpy(p.data() + 4, &id, sizeof(id));
+        p[10] = std::byte{ parts };
+        return p;
+    };
+    {
+        Writer w(src.path, config());
+        w.write(T0, PacketDirection::ServerToClient, npc(1, 0x1F));                 // 0: another zone
+        w.write(T0 + 1, PacketDirection::ServerToClient, zoneIn(100));              // 1: kept
+        w.write(T0 + 2, PacketDirection::ServerToClient, npc(2, 0x18));             // 2: kept, its name and model
+        w.write(T0 + 3, PacketDirection::ServerToClient, npc(2, 0x01));             // 3: its position, made stale by 4
+        w.write(T0 + 4, PacketDirection::ServerToClient, npc(2, 0x05));             // 4: kept
+        w.write(T0 + 5, PacketDirection::ServerToClient, npc(3, 0x1F));             // 5: gone at 6
+        w.write(T0 + 6, PacketDirection::ServerToClient, npc(3, 0x20));             // 6: despawns 3
+        w.write(T0 + 7, PacketDirection::ServerToClient, gamePacket(0x037, 32, 1)); // 7: made stale by 8
+        w.write(T0 + 8, PacketDirection::ServerToClient, gamePacket(0x037, 32, 2)); // 8: kept
+        w.write(T0 + 9, PacketDirection::ServerToClient, gamePacket(0x028, 32));    // 9: an event, not state
+        w.write(T0 + 10, PacketDirection::ClientToServer, gamePacket(0x015, 32));   // 10: kept, the recorder's position
+        w.mark(MarkerKind::Note, "cap start");
+        w.write(T0 + 11, PacketDirection::ServerToClient, gamePacket(0x0DF, 16, 3)); // 11: the range
+        w.write(T0 + 12, PacketDirection::ServerToClient, gamePacket(0x0DF, 16, 4)); // 12
+        w.write(T0 + 13, PacketDirection::ServerToClient, gamePacket(0x0DF, 16, 5)); // 13: past it
+        w.close();
+    }
+    const CutOptions options{ .first = 11, .last = 12, .seed = seed(9), .agent = "mogsafe", .sourceHash = {}, .metadata = {} };
+    cut(src.path, dst.path, options);
+
+    const auto from = readAll(src.path);
+    const auto got  = readAll(dst.path);
+    REQUIRE(got.size() == 7);
+    const std::vector<size_t> carried{ 1, 2, 4, 8, 10 };
+    for (size_t i = 0; i < carried.size(); ++i)
+    {
+        CHECK(got[i].flags == (from[carried[i]].flags | PacketFlag::Carried));
+        CHECK(got[i].data == from[carried[i]].data);
+        CHECK(got[i].timestamp == T0 + 11);
+        CHECK(got[i].markers.empty());
+    }
+    CHECK(got[5] == from[11]);
+    CHECK(got[6] == from[12]);
+
+    Reader r(dst.path);
+    CHECK(r.versionMinor() == 1);
+    CHECK(r.startTimestamp() == T0 + 11);
+    CHECK(r.verify().signedToEnd);
+
+    cut(src.path, again.path, options);
+    CHECK(craft::bytesOf(again.path) == craft::bytesOf(dst.path));
+
+    // A cut from the first packet has nothing before it to carry.
+    cut(src.path, again.path, { .first = 0, .last = 13, .seed = seed(9), .agent = "mogsafe", .sourceHash = {}, .metadata = {} });
+    CHECK(readAll(again.path) == from);
+}
+
 TEST_CASE("the stream reader reads as the bytes arrive")
 {
     TempCapture live;
