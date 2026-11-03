@@ -91,7 +91,7 @@ func TestWriteThenRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !s.Closed || s.Packets != 6 || s.Frames != 2 || s.VersionMajor != 3 || s.CaptureAgent != "test" ||
+	if !s.Closed || s.Packets != 6 || s.Frames != 2 || s.VersionMajor != 4 || s.CaptureAgent != "test" ||
 		s.Character.Name != "Nouurs" || s.Character.ContentID != 0x01020304 || s.Network != NetworkRetail ||
 		s.StartContext != StartLogin || s.StartTimestamp != t0 || s.EndTimestamp != t0+1002 ||
 		s.Policy.Name != "xicap-default" || s.RuleCount != 5 || len(s.Policy.Rules) != 5 || !s.SignedToEnd || s.VerifiedPackets != 6 || s.Source != nil {
@@ -162,10 +162,10 @@ func TestCheckHeader(t *testing.T) {
 	if CheckHeader(flipped) == nil {
 		t.Fatal("damaged header accepted")
 	}
-	v4 := append([]byte(nil), b[:HeaderSize]...)
-	v4[8] = 4
-	if CheckHeader(v4) == nil {
-		t.Fatal("version 4 accepted")
+	v5 := append([]byte(nil), b[:HeaderSize]...)
+	v5[8] = 5
+	if CheckHeader(v5) == nil {
+		t.Fatal("version 5 accepted")
 	}
 }
 
@@ -467,7 +467,7 @@ func TestCut(t *testing.T) {
 		s.Policy.Name != from.Policy.Name || s.RuleCount != from.RuleCount || s.CaptureAgent != "mogsafe" {
 		t.Fatalf("header: %+v\nsource: %+v", s, from)
 	}
-	if s.Origin != OriginConverted || s.StartContext != StartMidSession || s.Source == nil || s.Source.Format != "xicap" || s.Source.FormatVersion != "3.0" {
+	if s.Origin != OriginConverted || s.StartContext != StartMidSession || s.Source == nil || s.Source.Format != "xicap" || s.Source.FormatVersion != "4.0" {
 		t.Fatalf("provenance: %+v %+v", s, s.Source)
 	}
 	if m, err := Markers(dst); err != nil || !reflect.DeepEqual(m, []Marker{{MarkerNote, "cap start quest", 0, t0 + 10}}) {
@@ -505,4 +505,59 @@ func mustRead(t *testing.T, path string) []byte {
 		t.Fatal(err)
 	}
 	return b
+}
+
+func TestTranscode(t *testing.T) {
+	src := capture(t, 4, info())
+	dst := filepath.Join(t.TempDir(), "sealed.xicap")
+	mogsafe := [32]byte{9}
+	if err := Transcode(src, dst, TranscodeOptions{Seal: true, Agent: "mogsafe test", Seed: mogsafe}); err != nil {
+		t.Fatal(err)
+	}
+	in, _ := Read(src)
+	s, err := Read(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Packets != in.Packets || !s.SignedToEnd || s.SigningKey != in.SigningKey || s.Seal == nil || !s.Seal.OK || s.Seal.Agent != "mogsafe test" || s.Seal.Key == in.SigningKey {
+		t.Fatalf("sealed: %+v, seal %+v", s, s.Seal)
+	}
+	if in.Seal != nil {
+		t.Fatal("a recorder's own file has a seal")
+	}
+
+	// A format-3 capture is re-signed, and keeps its packets.
+	resigned := filepath.Join(t.TempDir(), "resigned.xicap")
+	if err := Transcode("../tests/vectors/clean.xicap", resigned, TranscodeOptions{Agent: "mogsafe test", Seed: mogsafe, SourceHash: [64]byte{1}, Metadata: []byte("capture x")}); err != nil {
+		t.Fatal(err)
+	}
+	old, _ := Read("../tests/vectors/clean.xicap")
+	s, err = Read(resigned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.VersionMajor != 4 || s.Packets != old.Packets || !s.SignedToEnd || s.SigningKey == old.SigningKey || s.Seal != nil || s.Source == nil || s.Source.Format != "xicap" || s.Source.FormatVersion != "3.0" {
+		t.Fatalf("resigned: %+v", s)
+	}
+
+	// A seal refuses format 3 and leaves no file.
+	refused := filepath.Join(t.TempDir(), "refused.xicap")
+	if err := Transcode("../tests/vectors/clean.xicap", refused, TranscodeOptions{Seal: true, Seed: mogsafe}); err == nil {
+		t.Fatal("sealed format 3")
+	}
+	if _, err := os.Stat(refused); !os.IsNotExist(err) {
+		t.Fatal("a refused transcode left a file")
+	}
+}
+
+func TestArchivePreset(t *testing.T) {
+	wi := info()
+	wi.Preset = PresetArchive
+	s, err := Read(capture(t, 3, wi))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Packets != 9 || !s.SignedToEnd {
+		t.Fatalf("archive preset: %+v", s)
+	}
 }
