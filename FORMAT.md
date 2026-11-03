@@ -676,7 +676,69 @@ them too.
 
 ## Worked example
 
-The conformance file `tests/vectors/4-example.xicap` is written in task 4.7.
+The conformance file `tests/vectors/4-example.xicap`, whole: a live capture of
+the three packets of [the example above](#example), with its exclusion policy,
+one packet frame, and the footer. Offsets are in hex.
+
+```
+00000000  89 58 43 50 0d 0a 1a 0a 04 00 80 01 01 00 00 00  magic; version 4.0; headerSize 384; extensionCount 1
+00000010  00 00 00 00 00 00 00 00 33 33 33 33 33 33 33 33  reserved; captureId
+00000020  33 33 33 33 33 33 33 33 00 00 00 00 00 00 00 00  previousCaptureId
+00000030  00 00 00 00 00 00 00 00 00 6c 50 c4 a0 01 00 00  startTimestamp
+00000040  00 00 00 01 01 01 01 00 00 00 00 00 00 00 00 00  reserved; clockSource 1 (live), origin 1 (live), network 1 (retail), startContext 1 (login); reserved; dictionaryId 0; reserved
+00000050  d7 59 79 3b bc 13 a2 81 9a 82 7c 76 ad b6 fb a8  signingKey
+00000060  a4 9a ee 00 7f 49 f2 d0 99 2d 99 b8 25 ad 2c 48
+00000070  78 69 63 61 70 5f 6d 61 6b 65 5f 76 65 63 74 6f  captureAgent
+00000080  72 73 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+00000090  76 65 63 74 6f 72 73 2d 31 2e 30 00 00 00 00 00  clientVersion
+000000a0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+000000b0  04 03 02 01 0d 0c 0b 0a 2a 00 00 00 4e 6f 75 75  contentId; characterId; worldId; characterName
+000000c0  72 73 00 00 00 00 00 00 00 00 00 00 41 73 75 72  worldName
+000000d0  61 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  reserved
+000000e0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+000000f0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+00000100  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+00000110  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+00000120  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+00000130  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+00000140  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+00000150  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+00000160  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+00000170  00 00 00 00 00 00 00 00 00 00 00 00 19 3b 9d 72  headerCrc
+00000180  09 00 00 00 50 00 00 00 78 69 63 61 70 2d 64 65  extension block: type 0x0009 (exclusion policy), length 80; policy name
+00000190  66 61 75 6c 74 00 00 00 00 00 00 00 00 00 00 00
+000001a0  00 00 00 00 00 00 00 00 01 00 00 00 05 00 00 00  version 1, 5 rules, reserved
+000001b0  00 00 01 00 17 00 00 00 00 01 01 00 b5 00 00 00  rules: channel, direction, action 1 (stub), reserved, opcode, rangeCount
+000001c0  00 01 01 00 b6 00 00 00 00 00 01 00 cc 00 00 00
+000001d0  00 01 01 00 e2 00 00 00 a2 a5 72 ea 58 43 46 52  block CRC; frame: magic XCFR
+000001e0  80 01 00 00 31 00 00 00 03 00 00 00 00 6c 50 c4  kind 0x80 (packets), frameFlags 1 (restart), markerCount 0, payloadSize 49, packetCount 3; baseTimestamp
+000001f0  a0 01 00 00 00 00 00 00 46 00 00 00 28 b5 2f fd  zoneId 0, reserved, plainSize 70; payload: a whole zstd stream (decoded below)
+00000200  04 00 25 01 00 90 00 0a 0a 00 df 01 00 00 00 02
+00000210  02 02 30 df 08 00 01 02 07 00 38 13 10 00 67 37
+00000220  33 08 b8 43 b9 c0 17 20 02 2e 49 ba 6a a0 90 f4  frame CRC
+00000230  43 00 6c 50 c4 a0 01 00 00 dc 01 00 00 00 00 00  footer index entry: timestamp, fileOffset, zoneId, flags 1 (restart), reserved
+00000240  00 00 00 01 00 00 00 00 00 14 6c 50 c4 a0 01 00  trailer: endTimestamp
+00000250  00 03 00 00 00 00 00 00 00 00 00 00 00 01 00 00  totalPacketCount 3; trailerFlags 0, entryCount 1
+00000260  00 31 02 00 00 00 00 00 00 38 ee d7 f4 01 00 00  indexOffset; indexCrc, frameCount 1
+00000270  00 3b 4c ba 00 07 0b 7d 18 fa d5 82 cf 4e 2e 0b  signature
+00000280  5d c4 06 4c 49 3a 54 24 62 5d 60 1d 91 93 96 06
+00000290  9f 38 7c f1 eb f7 78 cc dc 7a bd 87 cb b5 a4 c4
+000002a0  bd 7a 74 b5 58 25 b7 9f 5a 56 4a 17 dc 7e 94 b2
+000002b0  01 d6 f5 0a 44 58 43 50 46                       trailerCrc, magic XCPF
+```
+
+The frame's payload, decoded:
+
+```
+00000000  00 0a 0a 00 00 00 00 00 00 df 01 df 01 df 01 00  deltaMs 0, 10, 10; flags 0, 0, 0; channel 0, 0, 0; opcode 0x0DF three times; length 0 (implied) ...
+00000010  00 00 02 02 02 30 df 08 00 00 00 00 00 00 00 00  ... twice more; sync +1, +1, +1; group size 48; packet 0 from its header, sync zeroed
+00000020  00 00 00 00 00 00 df 08 00 00 01 01 01 01 01 01  packet 1
+00000030  01 01 01 01 01 01 df 08 00 00 02 02 02 02 02 02  packet 2
+00000040  02 02 02 02 02 02
+```
+
+`tests/spec_reader.py --example FORMAT.md` checks that these bytes are the
+conformance file and that it reads them.
 
 ## Versioning
 

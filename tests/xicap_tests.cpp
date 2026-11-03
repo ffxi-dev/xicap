@@ -889,7 +889,7 @@ TEST_CASE("the conformance set reads as recorded")
         CHECK(vectors::reading(entry.path()) == std::string(expected.begin(), expected.end()));
         checked++;
     }
-    CHECK(checked >= 18);
+    CHECK(checked >= 38);
 }
 
 TEST_CASE("the writer keeps frames within the reader's limits")
