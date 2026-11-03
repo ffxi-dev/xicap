@@ -288,7 +288,7 @@ See [Signatures](#signatures).
 | 1 | search | the plaintext request or reply, from its 4-byte size | byte `0x0B`, the request type | not defined |
 | 2 to 255 | reserved | | | |
 
-Channel 1 follows Memoria's hooks and waits for a check against real traffic.
+Channel 1 follows Memoria's hooks.
 
 A reader passes on packets of a channel it does not know, with the channel's
 number, and does not refuse the file. Adding a channel is a minor version.

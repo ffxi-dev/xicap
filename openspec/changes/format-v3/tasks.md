@@ -21,7 +21,7 @@
 - [x] 3.2 Add the channel, the 32-bit length, and the provenance flags (injected, blocked, modified, first in datagram) to the writer's packet call, and remove the client memory snapshot extensions; verify a round-trip test with game and search packets interleaved and a packet over 64 KiB on a non-game channel
 - [x] 3.3 Add `captureId`, `previousCaptureId`, the start-context field, and a login marker call; verify a test that two writers get different ids and a continued capture names its predecessor
 - [x] 3.5 Report a capture whose zone-in packets name a character other than the header's, with the identifying zone-in fields checked against the client's resources, and the character id's meaning and width confirmed; verify tests for a match and a mismatch
-- [ ] 3.6 Define the search channel in `FORMAT.md` (its packet header, opcode field, and stub) from the plugin's hooks and real search traffic; verify a round-trip test on recorded search packets
+- [x] 3.6 Define the search channel in `FORMAT.md` (its packet header, opcode field, and stub) from the plugin's hooks and real search traffic; verify a round-trip test on recorded search packets
 - [x] 3.4 Add the source extension for converted captures; verify a round-trip test with a captain manifest
 
 ## 4. Signing

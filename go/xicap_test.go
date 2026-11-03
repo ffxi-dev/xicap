@@ -2,6 +2,7 @@ package xicap
 
 import (
 	"bytes"
+	"encoding/hex"
 	"encoding/json"
 	"math"
 	"os"
@@ -209,6 +210,59 @@ func TestChannelsAndMarkers(t *testing.T) {
 	}
 	if s.Packets != 2 {
 		t.Fatalf("packets %d", s.Packets)
+	}
+}
+
+// TestSearchRoundTrip writes the packets of the search vector, recorded
+// search messages on channel 1 between game packets, and reads them back.
+// The Go binding reads only a Summary; the conformance set checks the bytes.
+func TestSearchRoundTrip(t *testing.T) {
+	b, err := os.ReadFile("../tests/vectors/search.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var v struct{ Packets [][]json.RawMessage }
+	if err := json.Unmarshal(b, &v); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(t.TempDir(), "s.xicap")
+	w, err := Create(p, info())
+	if err != nil {
+		t.Fatal(err)
+	}
+	searches := 0
+	for _, f := range v.Packets {
+		var pk Packet
+		var flags uint16
+		var data string
+		for i, dst := range []any{&pk.Timestamp, &pk.Channel, &pk.Opcode, &flags, &data} {
+			if err := json.Unmarshal(f[i], dst); err != nil {
+				t.Fatal(err)
+			}
+		}
+		pk.ClientToServer = flags&1 != 0
+		if pk.Data, err = hex.DecodeString(data); err != nil {
+			t.Fatal(err)
+		}
+		if pk.Channel == ChannelSearch {
+			searches++
+			if pk.Opcode != uint16(pk.Data[0x0B]) {
+				t.Fatalf("opcode %#x, byte 0x0B %#x", pk.Opcode, pk.Data[0x0B])
+			}
+		}
+		if err := w.WritePacket(pk); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Read(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if searches != 4 || s.Packets != uint64(len(v.Packets)) || !s.SignedToEnd || s.EndTimestamp != t0+744 {
+		t.Fatalf("searches %d, summary %+v", searches, s)
 	}
 }
 
