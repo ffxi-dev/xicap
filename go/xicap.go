@@ -19,8 +19,8 @@ import (
 	"unsafe"
 )
 
-// HeaderSize is the length of a format 3.0 header, the least a capture's
-// first bytes must hold before CheckHeader can judge them.
+// HeaderSize is the length of a format 3.0 or 4.0 header, the least a
+// capture's first bytes must hold before CheckHeader can judge them.
 const HeaderSize = 384
 
 // Values of the header's provenance fields. See FORMAT.md.
@@ -150,6 +150,15 @@ type Summary struct {
 	SigningKey        [32]byte
 	SignedToEnd       bool   // the footer's signature verifies
 	VerifiedPackets   uint64 // packets covered by the last good signature
+	Seal              *Seal  // set on a format-4 file another program rewrote
+}
+
+// Seal is what a program that rewrote a capture signed: every packet, with its key, name, and time.
+type Seal struct {
+	Key      [32]byte
+	Agent    string
+	SealedAt uint64 // Unix ms
+	OK       bool   // its signature verifies
 }
 
 func cerr(msg *[256]C.char) error { return errors.New(C.GoString(&msg[0])) }
@@ -165,7 +174,7 @@ func HeaderLength(b []byte) (int, error) {
 	}
 	n := C.xicap_header_size((*C.uint8_t)(unsafe.Pointer(&b[0])), C.size_t(len(b)))
 	if n < 0 {
-		return 0, errors.New("xicap: not a format 3 header")
+		return 0, errors.New("xicap: not a format 3 or 4 header")
 	}
 	return int(n), nil
 }
@@ -226,6 +235,14 @@ func Read(path string) (Summary, error) {
 		SigningKey:        *(*[32]byte)(unsafe.Pointer(&s.signing_key[0])),
 		SignedToEnd:       s.signed_to_end != 0,
 		VerifiedPackets:   uint64(s.verified_packets),
+	}
+	if s.sealed != 0 {
+		out.Seal = &Seal{
+			Key:      *(*[32]byte)(unsafe.Pointer(&s.seal_key[0])),
+			Agent:    C.GoString(&s.seal_agent[0]),
+			SealedAt: uint64(s.sealed_at),
+			OK:       s.seal_ok != 0,
+		}
 	}
 	for i := 0; i < int(min(s.rule_count, C.XICAP_SUMMARY_RULES)); i++ {
 		r := s.rules[i]
@@ -294,8 +311,19 @@ type WriterInfo struct {
 	SigningSeed       [32]byte // the recorder's Ed25519 seed
 	Source            *Source  // required with OriginConverted
 	Policy            *Policy  // nil: the default, which stubs chat
-	NoDictionary      bool
+	Preset            Preset
+	Level             int // zstd level; 0 for the preset's
 }
+
+// Preset is how a writer frames and compresses. See FORMAT.md, Writer rules.
+type Preset int
+
+const (
+	// PresetLive is what a recorder writes: level 7, small frames, checkpoints. The default.
+	PresetLive Preset = 0
+	// PresetArchive is what an archive writes: level 19, frames to each zone-in, no checkpoints.
+	PresetArchive Preset = 1
+)
 
 // Writer creates a capture. It is not safe for concurrent use.
 type Writer struct{ w *C.xicap_writer }
@@ -326,9 +354,8 @@ func Create(path string, info WriterInfo) (*Writer, error) {
 		network:        C.uint8_t(info.Network),
 		start_context:  C.uint8_t(info.StartContext),
 	}
-	if !info.NoDictionary {
-		ci.dictionary = 1
-	}
+	ci.preset = C.int(info.Preset)
+	ci.level = C.int(info.Level)
 	*(*[16]byte)(unsafe.Pointer(&ci.previous_capture_id[0])) = info.PreviousCaptureID
 	*(*[32]byte)(unsafe.Pointer(&ci.signing_seed[0])) = info.SigningSeed
 	if src := info.Source; src != nil {
@@ -486,6 +513,44 @@ func Cut(src, dst string, first, last uint64, agent string, seed [32]byte, hash 
 	if C.xicap_cut(s, d, C.uint64_t(first), C.uint64_t(last), a, (*C.uint8_t)(unsafe.Pointer(&seed[0])),
 		(*C.uint8_t)(unsafe.Pointer(&hash[0])), m, C.size_t(len(metadata)), &msg[0], C.size_t(len(msg))) != 0 {
 		os.Remove(dst)
+		return cerr(&msg)
+	}
+	return nil
+}
+
+// TranscodeOptions says how Transcode signs and compresses.
+type TranscodeOptions struct {
+	// Seal keeps the signer's signatures and adds a seal made with Seed: format 4, complete and signed to the end,
+	// or cut off. Without it, Transcode signs anew with Seed, and names a format-3 src in a source block.
+	Seal       bool
+	Level      int // zstd level; 0 for the archive preset's 19
+	Agent      string
+	Seed       [32]byte
+	SourceHash [64]byte // without Seal: the SHA-512 of src as stored
+	Metadata   []byte   // without Seal: added to the source block's metadata
+}
+
+// Transcode rewrites src as format 4 at dst with the archive preset, then reads dst back and checks that it holds
+// the same packets and markers as src and that its signatures verify. On any difference it returns an error and
+// leaves no file at dst.
+func Transcode(src, dst string, opt TranscodeOptions) error {
+	s, d, a := C.CString(src), C.CString(dst), C.CString(opt.Agent)
+	defer C.free(unsafe.Pointer(s))
+	defer C.free(unsafe.Pointer(d))
+	defer C.free(unsafe.Pointer(a))
+	ci := C.xicap_transcode_info{level: C.int(opt.Level), agent: a, metadata_size: C.size_t(len(opt.Metadata))}
+	if opt.Seal {
+		ci.seal = 1
+	}
+	*(*[32]byte)(unsafe.Pointer(&ci.seed[0])) = opt.Seed
+	*(*[64]byte)(unsafe.Pointer(&ci.source_hash[0])) = opt.SourceHash
+	if len(opt.Metadata) > 0 {
+		m := C.CBytes(opt.Metadata)
+		defer C.free(m)
+		ci.metadata = (*C.uint8_t)(m)
+	}
+	var msg [256]C.char
+	if C.xicap_transcode(s, d, &ci, &msg[0], C.size_t(len(msg))) != 0 {
 		return cerr(&msg)
 	}
 	return nil

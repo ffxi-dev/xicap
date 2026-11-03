@@ -1,8 +1,9 @@
 #include "capi.h"
 
-#include "internal/crc32.h"
+#include "internal/decoder.h"
 #include "monocypher.h"
 #include "xicap/reader.h"
+#include "xicap/transcode.h"
 #include "xicap/writer.h"
 
 #include <algorithm>
@@ -63,8 +64,9 @@ int guarded(char* err, size_t errlen, F&& f)
 
 extern "C" int xicap_header_size(const uint8_t* data, size_t size)
 {
+    const auto version = size > offsetof(xicap::Header, versionMajor) ? data[offsetof(xicap::Header, versionMajor)] : 0;
     if (size < offsetof(xicap::Header, extensionCount) || !std::equal(xicap::MAGIC.begin(), xicap::MAGIC.end(), data) ||
-        data[offsetof(xicap::Header, versionMajor)] != xicap::VERSION_MAJOR)
+        (version != 3 && version != xicap::VERSION_MAJOR))
     {
         return -1;
     }
@@ -75,43 +77,17 @@ extern "C" int xicap_header_size(const uint8_t* data, size_t size)
 
 extern "C" int xicap_check_header(const uint8_t* data, size_t size, char* err, size_t errlen)
 {
-    xicap::Header header{};
-    if (size < sizeof(header))
-    {
-        setError(err, errlen, "xicap: short header");
-        return -1;
-    }
-    std::memcpy(&header, data, sizeof(header));
-    if (header.magic != xicap::MAGIC)
-    {
-        setError(err, errlen, "xicap: bad magic");
-        return -1;
-    }
-    if (header.versionMajor != xicap::VERSION_MAJOR)
-    {
-        setError(err, errlen, "xicap: unsupported version");
-        return -1;
-    }
-    if (header.headerSize < xicap::HEADER_SIZE || header.headerSize > xicap::HEADER_SIZE_MAX)
-    {
-        setError(err, errlen, "xicap: header size out of range");
-        return -1;
-    }
-    if (size < header.headerSize)
-    {
-        setError(err, errlen, "xicap: short header");
-        return -1;
-    }
-    uint32_t stored = 0;
-    std::memcpy(&stored, data + header.headerSize - sizeof(stored), sizeof(stored));
-    xicap::internal::Crc32 crc;
-    crc.update({ data, header.headerSize - sizeof(stored) });
-    if (crc.value() != stored)
-    {
-        setError(err, errlen, "xicap: header crc mismatch");
-        return -1;
-    }
-    return 0;
+    return guarded(err, errlen, [&]
+                   {
+                       const std::span<const uint8_t> bytes{ data, size };
+                       const auto                     length = xicap::internal::headerSize(bytes);
+                       if (size < length)
+                       {
+                           throw xicap::Error(xicap::ErrorCode::ShortHeader, "xicap: short header");
+                       }
+                       xicap::internal::Start start;
+                       xicap::internal::readHeader(bytes.first(length), start);
+                   });
 }
 
 extern "C" int xicap_markers(const char* path, xicap_marker** out, size_t* count, char* err, size_t errlen)
@@ -240,6 +216,14 @@ extern "C" int xicap_read(const char* path, xicap_summary* out, char* err, size_
                        std::ranges::copy(verification.key, out->signing_key);
                        out->signed_to_end    = verification.signedToEnd ? 1 : 0;
                        out->verified_packets = verification.verifiedPackets;
+                       if (const auto& seal = verification.seal)
+                       {
+                           out->sealed    = 1;
+                           out->seal_ok   = seal->good ? 1 : 0;
+                           out->sealed_at = seal->sealedAt;
+                           std::ranges::copy(seal->key, out->seal_key);
+                           copyString(out->seal_agent, seal->agent);
+                       }
                    });
 }
 
@@ -306,10 +290,10 @@ extern "C" xicap_writer* xicap_writer_open(const char* path, const xicap_writer_
                                    }
                                    config.policy = std::move(p);
                                }
-                               xicap::FramePolicy policy{};
-                               if (!info->dictionary)
+                               auto policy = info->preset == 1 ? xicap::FramePolicy::archive() : xicap::FramePolicy::live();
+                               if (info->level != 0)
                                {
-                                   policy.dictionary = {};
+                                   policy.compressionLevel = info->level;
                                }
                                w = new xicap_writer{ xicap::Writer{ path, std::move(config), policy } };
                                });
@@ -405,7 +389,7 @@ extern "C" int xicap_cut(const char* src, const char* dst, uint64_t first, uint6
                        }
                        config.source = std::move(source);
 
-                       xicap::Writer     writer{ dst, std::move(config) };
+                       xicap::Writer     writer{ dst, std::move(config), xicap::FramePolicy::archive() };
                        xicap::ReadPacket packet{};
                        uint64_t          index = 0;
                        for (; index <= last && reader.next(packet); ++index)
@@ -432,5 +416,31 @@ extern "C" int xicap_cut(const char* src, const char* dst, uint64_t first, uint6
                            throw std::out_of_range(std::format("xicap: the capture holds {} packets, not {}", index, last + 1));
                        }
                        writer.close();
+                   });
+}
+
+extern "C" int xicap_transcode(const char* src, const char* dst, const xicap_transcode_info* info, char* err, size_t errlen)
+{
+    return guarded(err, errlen, [&]
+                   {
+                       xicap::TranscodeOptions options{
+                           .policy     = xicap::FramePolicy::archive(),
+                           .signing    = info->seal ? xicap::Signing::Seal : xicap::Signing::Resign,
+                           .seed       = {},
+                           .agent      = info->agent ? info->agent : "",
+                           .sourceHash = {},
+                           .metadata   = {},
+                       };
+                       if (info->level != 0)
+                       {
+                           options.policy.compressionLevel = info->level;
+                       }
+                       std::ranges::copy(info->seed, options.seed.begin());
+                       std::ranges::copy(info->source_hash, options.sourceHash.begin());
+                       if (info->metadata_size > 0)
+                       {
+                           options.metadata.assign(info->metadata, info->metadata + info->metadata_size);
+                       }
+                       xicap::transcode(src, dst, options);
                    });
 }
