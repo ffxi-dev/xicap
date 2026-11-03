@@ -5,10 +5,12 @@
 //   xicap_make_vectors tests/vectors
 
 #include "craft.h"
+#include "search.h"
 #include "vectors.h"
 
 #include <xicap/xicap.h>
 
+#include <algorithm>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -247,6 +249,30 @@ int main(int argc, char* argv[])
               }
               w.close();
               expect(Reader(p).source().has_value(), "converted carries its source");
+          } },
+        { "search", [](const fs::path& p)
+          {
+              Writer w(p, config(), policy(false));
+              w.write(T0, PacketDirection::ServerToClient, zoneIn(230));
+              for (const auto& m : search::recorded)
+              {
+                  const auto data = m.bytes();
+                  w.write({ .timestamp = T0 + 100 + m.offsetMs, .direction = m.direction, .data = data, .channel = 1, .opcode = std::to_integer<uint16_t>(data[0x0B]) });
+                  w.write(T0 + 100 + m.offsetMs, PacketDirection::ServerToClient, game(0x0DF, 16, 1));
+              }
+              w.close();
+              Reader     r(p);
+              ReadPacket pk{};
+              size_t     searches = 0;
+              while (r.next(pk))
+              {
+                  if (pk.channel == 1)
+                  {
+                      const auto want = search::recorded[searches++].bytes();
+                      expect(pk.opcode == std::to_integer<uint16_t>(want[0x0B]) && std::equal(pk.data.begin(), pk.data.end(), want.begin(), want.end()), "search messages read back as written");
+                  }
+              }
+              expect(searches == std::size(search::recorded), "search holds every recorded message");
           } },
         { "cut-off", [&](const fs::path& p)
           {

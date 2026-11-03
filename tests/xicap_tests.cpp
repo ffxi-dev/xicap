@@ -3,6 +3,7 @@
 #include "craft.h"
 #include "internal/chain.h"
 #include "internal/crc32.h"
+#include "search.h"
 #include "vectors.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -188,6 +189,41 @@ TEST_CASE("round trip keeps header, packets, channels, flags, and markers")
     CHECK(packets[2].channel == 1);
     CHECK(packets[2].opcode == 0x05);
     CHECK(packets[2].data.size() == 40);
+}
+
+TEST_CASE("recorded search messages round-trip on channel 1 between game packets")
+{
+    TempCapture tmp;
+    {
+        Writer w(tmp.path, config());
+        for (const auto& m : search::recorded)
+        {
+            w.write(T0 + m.offsetMs, PacketDirection::ServerToClient, gamePacket(0x0DF, 20));
+            const auto data = m.bytes();
+            w.write({ .timestamp = T0 + m.offsetMs, .direction = m.direction, .data = data, .channel = 1, .opcode = std::to_integer<uint16_t>(data[0x0B]) });
+        }
+        w.write(T0 + 1000, PacketDirection::ServerToClient, gamePacket(0x0DF, 20));
+        w.close();
+    }
+    const auto packets = readAll(tmp.path);
+    REQUIRE(packets.size() == std::size(search::recorded) * 2 + 1);
+    const uint16_t opcodes[] = { 0x15, 0x95, 0x10, 0x95 };
+    for (size_t i = 0; i < std::size(search::recorded); ++i)
+    {
+        const auto& m    = search::recorded[i];
+        const auto& game = packets[i * 2];
+        const auto& sent = packets[i * 2 + 1];
+        CHECK(game.channel == 0);
+        CHECK(game.timestamp == T0 + m.offsetMs);
+        CHECK(sent.channel == 1);
+        CHECK(sent.opcode == opcodes[i]);
+        CHECK(sent.direction == m.direction);
+        CHECK(sent.timestamp == T0 + m.offsetMs);
+        const auto want = m.bytes();
+        REQUIRE(sent.data.size() == want.size());
+        CHECK(std::memcmp(sent.data.data(), want.data(), want.size()) == 0);
+    }
+    CHECK(packets.back().channel == 0);
 }
 
 TEST_CASE("two writers pick different capture ids")
