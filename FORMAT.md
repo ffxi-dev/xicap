@@ -155,7 +155,7 @@ Converted captures (`origin` 2) carry this block.
 
 | Off | Size | Field | Notes |
 |----:|-----:|-------|-------|
-| 0 | 16 | `format` | text: the source format, such as `captain` |
+| 0 | 16 | `format` | text: the source format, such as `captain`, or `xicap` for packets cut from another capture |
 | 16 | 16 | `formatVersion` | text: the source program's version |
 | 32 | 4 | `skippedRecords` | source records not converted |
 | 36 | 4 | `utcOffsetSeconds` | `i32`: offset added to the source's times to get UTC |
