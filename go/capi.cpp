@@ -9,6 +9,8 @@
 #include <cstdio>
 #include <cstring>
 #include <exception>
+#include <format>
+#include <stdexcept>
 
 namespace
 {
@@ -366,4 +368,61 @@ extern "C" int xicap_writer_close(xicap_writer* w, char* err, size_t errlen)
                            });
     delete w;
     return rc;
+}
+
+extern "C" int xicap_cut(const char* src, const char* dst, uint64_t first, uint64_t last, const char* capture_agent, const uint8_t signing_seed[32], const uint8_t source_hash[64], const uint8_t* metadata, size_t metadata_size, char* err, size_t errlen)
+{
+    return guarded(err, errlen, [&]
+                   {
+                       if (first > last)
+                       {
+                           throw std::invalid_argument("xicap: a cut's first packet is after its last");
+                       }
+                       xicap::Reader       reader{ src };
+                       xicap::WriterConfig config{};
+                       config.captureAgent  = capture_agent ? capture_agent : "";
+                       config.clientVersion = reader.clientVersion();
+                       config.character     = reader.character();
+                       config.clockSource   = reader.clockSource();
+                       config.origin        = xicap::Origin::Converted;
+                       config.network       = reader.network();
+                       config.startContext  = first == 0 ? reader.startContext() : xicap::StartContext::MidSession;
+                       std::copy_n(signing_seed, config.signingSeed.size(), config.signingSeed.begin());
+                       config.policy = reader.policy();
+                       xicap::SourceInfo source{ .format = "xicap", .formatVersion = std::format("{}.{}", reader.versionMajor(), reader.versionMinor()) };
+                       std::copy_n(source_hash, source.sourceHash.size(), source.sourceHash.begin());
+                       if (metadata_size > 0)
+                       {
+                           source.metadata.assign(metadata, metadata + metadata_size);
+                       }
+                       config.source = std::move(source);
+
+                       xicap::Writer     writer{ dst, std::move(config) };
+                       xicap::ReadPacket packet{};
+                       uint64_t          index = 0;
+                       for (; index <= last && reader.next(packet); ++index)
+                       {
+                           if (index < first)
+                           {
+                               continue;
+                           }
+                           for (const auto& m : packet.markers)
+                           {
+                               writer.mark(m.kind, m.text);
+                           }
+                           writer.write({
+                               .timestamp  = packet.timestamp,
+                               .direction  = packet.direction,
+                               .data       = packet.data,
+                               .channel    = packet.channel,
+                               .opcode     = packet.opcode,
+                               .provenance = packet.flags,
+                           });
+                       }
+                       if (index <= last)
+                       {
+                           throw std::out_of_range(std::format("xicap: the capture holds {} packets, not {}", index, last + 1));
+                       }
+                       writer.close();
+                   });
 }

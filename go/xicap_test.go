@@ -426,3 +426,64 @@ func TestMarkers(t *testing.T) {
 		t.Fatal("a missing file: no error")
 	}
 }
+
+func TestCut(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "src.xicap")
+	w, err := Create(src, info())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range []error{
+		w.Mark(MarkerLogin, ""), w.Write(t0, false, pkt),
+		w.Mark(MarkerNote, "cap start quest"), w.Write(t0+10, true, pkt), w.Write(t0+20, false, pkt), w.Flush(),
+		w.Mark(MarkerNote, "cap stop quest"), w.Write(t0+30, false, pkt), w.Close(),
+	} {
+		if step != nil {
+			t.Fatal(step)
+		}
+	}
+	// The key a seed signs with, as a writer reports it.
+	seed := [32]byte{9}
+	kw, err := Create(filepath.Join(t.TempDir(), "k.xicap"), WriterInfo{SigningSeed: seed})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, key := kw.IDs()
+	kw.Close()
+
+	dst := filepath.Join(t.TempDir(), "cut.xicap")
+	if err := Cut(src, dst, 1, 2, "mogsafe", seed, [64]byte{7}, []byte("capture abc")); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Read(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	from, _ := Read(src)
+	if s.Packets != 2 || s.StartTimestamp != t0+10 || s.EndTimestamp != t0+20 || !s.Closed || !s.SignedToEnd || s.SigningKey != key {
+		t.Fatalf("cut: %+v", s)
+	}
+	if s.Character != from.Character || s.ClientVersion != from.ClientVersion || s.Network != from.Network || s.ClockSource != from.ClockSource ||
+		s.Policy.Name != from.Policy.Name || s.RuleCount != from.RuleCount || s.CaptureAgent != "mogsafe" {
+		t.Fatalf("header: %+v\nsource: %+v", s, from)
+	}
+	if s.Origin != OriginConverted || s.StartContext != StartMidSession || s.Source == nil || s.Source.Format != "xicap" || s.Source.FormatVersion != "3.0" {
+		t.Fatalf("provenance: %+v %+v", s, s.Source)
+	}
+	if m, err := Markers(dst); err != nil || !reflect.DeepEqual(m, []Marker{{MarkerNote, "cap start quest", 0, t0 + 10}}) {
+		t.Fatalf("markers: %+v %v", m, err)
+	}
+
+	if err := Cut(src, dst+"2", 0, 3, "mogsafe", seed, [64]byte{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if s, _ := Read(dst + "2"); s.Packets != 4 || s.StartContext != StartLogin {
+		t.Fatalf("a cut from the first packet starts where its source does: %+v", s)
+	}
+	if err := Cut(src, dst+"3", 2, 9, "mogsafe", seed, [64]byte{}, nil); err == nil {
+		t.Fatal("a range past the end: no error")
+	}
+	if _, err := os.Stat(dst + "3"); err == nil {
+		t.Fatal("a failed cut leaves its file")
+	}
+}
