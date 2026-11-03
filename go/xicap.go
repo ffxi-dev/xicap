@@ -63,6 +63,7 @@ const (
 	FlagBlocked      uint16 = 0x0004
 	FlagModified     uint16 = 0x0008
 	FlagFirstInChunk uint16 = 0x0010
+	FlagCarried      uint16 = 0x0020
 )
 
 // Exclusion rule directions and actions. See FORMAT.md, Exclusion.
@@ -495,7 +496,8 @@ func (w *Writer) Close() error {
 }
 
 // Cut writes packets first to last of the capture at src, counting from 0, with the markers before each, as a new
-// capture at dst signed with seed. The cut keeps src's client version, character, clock, network and exclusion policy;
+// capture at dst signed with seed. Ahead of them it writes the packets from before first that tell a reader the zone
+// and what is in view, flagged FlagCarried and stamped with first's time (README.md, Cuts). The cut keeps src's client version, character, clock, network and exclusion policy;
 // it is converted (OriginConverted), and its source block names format "xicap" with hash and metadata. On error dst is
 // removed.
 func Cut(src, dst string, first, last uint64, agent string, seed [32]byte, hash [64]byte, metadata []byte) error {

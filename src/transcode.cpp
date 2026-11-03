@@ -3,13 +3,17 @@
 #include "internal/chain.h"
 #include "internal/crc32.h"
 
+#include "monocypher.h"
 #include "xicap/reader.h"
 
 #include <algorithm>
 #include <chrono>
 #include <cstring>
 #include <format>
+#include <map>
 #include <optional>
+#include <stdexcept>
+#include <tuple>
 
 namespace xicap
 {
@@ -112,6 +116,124 @@ auto compare(const std::filesystem::path& src, const std::filesystem::path& dst)
     }
 }
 
+// What a reader needs to set the scene at a cut's start: the last zone-in before it, then, since that zone-in, the
+// last packet of each key below. A newer packet with the same key replaces the older; a packet is kept while any
+// key still names it.
+class Scene
+{
+public:
+    auto add(uint64_t index, const ReadPacket& p) -> void
+    {
+        if (p.channel != static_cast<uint8_t>(Channel::Game))
+        {
+            return;
+        }
+        const auto* d     = reinterpret_cast<const uint8_t*>(p.data.data());
+        const auto  n     = p.data.size();
+        const auto  field = [&](size_t at, size_t size) -> uint64_t
+        {
+            uint64_t v = 0;
+            if (at + size <= n)
+            {
+                std::memcpy(&v, d + at, size);
+            }
+            return v;
+        };
+        if (p.direction == PacketDirection::ClientToServer)
+        {
+            if (p.opcode == 0x015) // the recorder's position
+            {
+                keep({ 1, p.opcode, 0 }, index, p);
+            }
+            return;
+        }
+        switch (p.opcode)
+        {
+            case 0x00A: // zone-in: what came before it was another zone
+                latest_.clear();
+                kept_.clear();
+                keep({ 0, p.opcode, 0 }, index, p);
+                break;
+            case 0x00D: // a player's update, by id, the last carrying each part (position, claim, general, name, model)
+            case 0x00E: // an NPC's or mob's
+            {
+                const auto id    = field(4, 4) << 8;
+                const auto parts = field(10, 1);
+                for (uint64_t part = 0; part < 5; ++part)
+                {
+                    if (parts & 0x20) // despawned
+                    {
+                        release({ 0, p.opcode, id | part });
+                    }
+                    else if (parts >> part & 1)
+                    {
+                        keep({ 0, p.opcode, id | part }, index, p);
+                    }
+                }
+                break;
+            }
+            case 0x037: // the recorder's status
+            case 0x051: // its gear's look
+            case 0x057: // weather
+            case 0x061: // its job, level, HP and MP
+            case 0x076: // the party's status icons
+            case 0x0C8: // the party and alliance list
+                keep({ 0, p.opcode, 0 }, index, p);
+                break;
+            case 0x05F: // music, by slot
+            case 0x063: // the recorder's status icons and more, by type
+                keep({ 0, p.opcode, field(4, 2) }, index, p);
+                break;
+            case 0x0DD: // a party member, by id
+            case 0x0DF:
+            case 0x0E2:
+                keep({ 0, p.opcode, field(4, 4) }, index, p);
+                break;
+            default:
+                break;
+        }
+    }
+
+    // The packets kept, in the order they were read.
+    [[nodiscard]] auto packets() const -> const std::map<uint64_t, std::pair<CopiedPacket, int>>&
+    {
+        return kept_;
+    }
+
+private:
+    using Key = std::tuple<uint8_t, uint16_t, uint64_t>; // direction, opcode, what the packet is about
+
+    auto keep(const Key& key, uint64_t index, const ReadPacket& p) -> void
+    {
+        release(key);
+        latest_[key]     = index;
+        auto [it, added] = kept_.try_emplace(index);
+        if (added)
+        {
+            const auto* d    = reinterpret_cast<const uint8_t*>(p.data.data());
+            it->second.first = { .timestamp = p.timestamp, .flags = p.flags, .channel = p.channel, .opcode = p.opcode, .data = { d, d + p.data.size() }, .markers = {} };
+        }
+        it->second.second++;
+    }
+
+    auto release(const Key& key) -> void
+    {
+        const auto it = latest_.find(key);
+        if (it == latest_.end())
+        {
+            return;
+        }
+        if (const auto k = kept_.find(it->second); --k->second.second == 0)
+        {
+            kept_.erase(k);
+        }
+        latest_.erase(it);
+    }
+
+    std::map<Key, uint64_t>                          latest_;
+    std::map<uint64_t, std::pair<CopiedPacket, int>> kept_; // by index: the packet and how many keys name it
+};
+
 } // namespace
 
 auto transcode(const std::filesystem::path& src, const std::filesystem::path& dst, const TranscodeOptions& options, const TranscodeHooks& hooks) -> TranscodeResult
@@ -211,6 +333,79 @@ auto transcode(const std::filesystem::path& src, const std::filesystem::path& ds
 auto transcode(const std::filesystem::path& src, const std::filesystem::path& dst, const TranscodeOptions& options) -> TranscodeResult
 {
     return internal::transcode(src, dst, options, {});
+}
+
+auto cut(const std::filesystem::path& src, const std::filesystem::path& dst, const CutOptions& options) -> void
+{
+    if (options.first > options.last)
+    {
+        throw std::invalid_argument("xicap: a cut's first packet is after its last");
+    }
+    Reader       reader{ src };
+    WriterConfig config{};
+    config.captureAgent  = options.agent;
+    config.clientVersion = reader.clientVersion();
+    config.character     = reader.character();
+    config.clockSource   = reader.clockSource();
+    config.origin        = Origin::Converted;
+    config.network       = reader.network();
+    config.startContext  = options.first == 0 ? reader.startContext() : StartContext::MidSession;
+    config.signingSeed   = options.seed;
+    config.policy        = reader.policy();
+    // The same range of the same recording always cuts to the same file: its id comes from the recording's hash and
+    // the range, not from a random draw.
+    uint8_t idInput[64 + 16]{};
+    std::ranges::copy(options.sourceHash, idInput);
+    std::memcpy(idInput + 64, &options.first, 8);
+    std::memcpy(idInput + 72, &options.last, 8);
+    crypto_blake2b(config.captureId.data(), config.captureId.size(), idInput, sizeof idInput);
+    config.source = SourceInfo{ .format = "xicap", .formatVersion = std::format("{}.{}", reader.versionMajor(), reader.versionMinor()), .sourceHash = options.sourceHash, .metadata = options.metadata };
+
+    Writer          writer{ dst, std::move(config), FramePolicy::archive() };
+    internal::Scene scene;
+    ReadPacket      packet{};
+    uint64_t        index = 0;
+    for (; index <= options.last && reader.next(packet); ++index)
+    {
+        if (index < options.first)
+        {
+            scene.add(index, packet);
+            continue;
+        }
+        if (index == options.first)
+        {
+            // Stamped with the first packet's time, so a reader that does not know the flag still starts there.
+            for (const auto& [_, kept] : scene.packets())
+            {
+                const auto& p = kept.first;
+                writer.write({
+                    .timestamp  = packet.timestamp,
+                    .direction  = (p.flags & PacketFlag::ClientToServer) != 0 ? PacketDirection::ClientToServer : PacketDirection::ServerToClient,
+                    .data       = std::as_bytes(std::span{ p.data }),
+                    .channel    = p.channel,
+                    .opcode     = p.opcode,
+                    .provenance = static_cast<uint16_t>(p.flags | PacketFlag::Carried),
+                });
+            }
+        }
+        for (const auto& m : packet.markers)
+        {
+            writer.mark(m.kind, m.text);
+        }
+        writer.write({
+            .timestamp  = packet.timestamp,
+            .direction  = packet.direction,
+            .data       = packet.data,
+            .channel    = packet.channel,
+            .opcode     = packet.opcode,
+            .provenance = packet.flags,
+        });
+    }
+    if (index <= options.last)
+    {
+        throw std::out_of_range(std::format("xicap: the capture holds {} packets, not {}", index, options.last + 1));
+    }
+    writer.close();
 }
 
 } // namespace xicap

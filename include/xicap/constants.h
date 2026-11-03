@@ -19,7 +19,7 @@ inline constexpr uint32_t               SEAL_MAGIC   = 0x4C534358; // 'XCSL'
 
 // The version the writer writes. Readers also read format 3 (FORMAT-3.md).
 inline constexpr uint8_t VERSION_MAJOR = 4;
-inline constexpr uint8_t VERSION_MINOR = 0;
+inline constexpr uint8_t VERSION_MINOR = 1;
 
 inline constexpr uint16_t HEADER_SIZE     = 384;
 inline constexpr uint16_t HEADER_SIZE_MAX = 4096;
