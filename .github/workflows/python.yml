@@ -54,4 +54,4 @@ jobs:
           python-version: "3.13"
       - run: pip install zstandard==0.25.0 cryptography==50.0.0
       - run: python tests/spec_reader.py tests/vectors
-      - run: python tests/spec_reader.py --example FORMAT.md
+      - run: python tests/spec_reader.py --example FORMAT-3.md
