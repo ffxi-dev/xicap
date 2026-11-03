@@ -226,6 +226,10 @@ int main(int argc, char* argv[])
             std::cout << ", FAILED at offset " << *verification.firstFailureOffset;
         }
         std::cout << "\n";
+        if (const auto& seal = verification.seal)
+        {
+            std::cout << "Sealed by:      " << hex(seal->key) << ", " << seal->agent << ", " << formatTimestamp(seal->sealedAt) << (seal->good ? "" : ", FAILED") << "\n";
+        }
 
         const auto zones = reader.listZones();
         if (!zones.empty())

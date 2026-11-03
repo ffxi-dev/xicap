@@ -1,7 +1,6 @@
 #pragma once
 
 #include "constants.h"
-#include "dictionary.h"
 #include "types.h"
 
 #include <filesystem>
@@ -11,6 +10,8 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <unordered_set>
+#include <vector>
 
 struct ZSTD_CCtx_s;
 
@@ -19,8 +20,9 @@ namespace xicap
 
 namespace internal
 {
-class Chain;
+class SignedStream;
 class SigningKey;
+struct Access;
 } // namespace internal
 
 // Stubs chat on the game channel in both directions. See FORMAT.md, Exclusion.
@@ -45,18 +47,45 @@ struct WriterConfig
     std::optional<SourceInfo> source;
 };
 
-// When the writer ends a frame. Defaults suit FFXI.
+// How the writer frames and compresses packets. See FORMAT.md, Writer rules.
 struct FramePolicy
 {
-    size_t   maxFrameSize         = FrameLimits::MAX_COMPRESSED_SIZE;
-    uint32_t maxPacketsPerFrame   = FrameLimits::MAX_PACKET_COUNT;
-    uint64_t maxFrameTimeMs       = FrameLimits::MAX_TIME_WINDOW_MS;
+    size_t   maxFrameSize       = 64 * 1024; // plaintext bytes, at most 16 MiB
+    uint32_t maxPacketsPerFrame = 1000;      // at most 1,048,576
+    uint64_t maxFrameTimeMs     = 5000;
+    // 0 writes no checkpoint at all.
     uint64_t checkpointIntervalMs = CHECKPOINT_INTERVAL_MS;
-    int      compressionLevel     = 12;
+    int      compressionLevel     = 7;
+    // The writer ends a stream after a frame when its plaintext since the restart, plus maxFrameSize, would pass
+    // this. At most 16 MiB.
+    size_t restartBytes = 4 * 1024 * 1024;
+    // The zstd window, as a power of two; at most 23.
+    int windowLog = 21;
+    // zstd's match table, as a power of two; 0 for the level's own. It sets most of the compressor's memory.
+    int hashLog = 19;
 
-    // Dictionary used to compress frames; the capture carries a copy. Empty
-    // disables dictionary use.
-    std::span<const uint8_t> dictionary = builtinDictionary();
+    // What a recorder writes: level 7, a 2 MiB window, and a 2^19 match table, about 5.5 MB of compressor. The
+    // default.
+    static auto live() -> FramePolicy
+    {
+        return {};
+    }
+
+    // What an archive writes: level 19, frames to each zone-in or 1 MiB in streams of up to 4 MiB, no
+    // checkpoints. About 81 MB of compressor.
+    static auto archive() -> FramePolicy
+    {
+        return {
+            .maxFrameSize         = 1024 * 1024,
+            .maxPacketsPerFrame   = FrameLimits::MAX_PACKETS,
+            .maxFrameTimeMs       = UINT64_MAX,
+            .checkpointIntervalMs = 0,
+            .compressionLevel     = 19,
+            .restartBytes         = 4 * 1024 * 1024,
+            .windowLog            = 22,
+            .hashLog              = 0,
+        };
+    }
 };
 
 struct OutPacket
@@ -107,7 +136,8 @@ public:
     }
 
     // Places a marker just before the next packet written. A login or logout
-    // also ends the frame being built and signs what came before.
+    // also ends the frame being built and signs what came before, when the
+    // policy writes checkpoints.
     auto mark(MarkerKind kind, std::string_view text = {}) -> void;
 
     // Ends the frame being built. When there was none, the capture is idle and
@@ -143,6 +173,8 @@ public:
     }
 
 private:
+    friend struct internal::Access;
+
     struct PendingMarker
     {
         MarkerKind  kind;
@@ -150,16 +182,44 @@ private:
     };
     struct FrameMarkerEntry
     {
-        uint16_t      packetIndex;
+        uint32_t      packetIndex;
         PendingMarker marker;
     };
+    struct FramePacket
+    {
+        uint64_t timestamp;
+        uint16_t flags;
+        uint8_t  channel;
+        uint16_t opcode;
+        size_t   offset;
+        size_t   length;
+    };
+    // What the footer's signature is.
+    enum class FooterSignature
+    {
+        Sign,     // the writer's own
+        Copy,     // a rewritten file's signer's, unchanged
+        Unsigned, // the signer never signed the end
+    };
 
+    // A rewrite: the header and blocks as given, written unchanged.
+    Writer(const std::filesystem::path& path, FramePolicy policy, std::vector<uint8_t> header, std::vector<std::vector<uint8_t>> blocks, const SecretSeed* signer);
+    auto               open(const std::filesystem::path& path) -> void;
+    auto               add(uint64_t timestamp, uint16_t flags, uint8_t channel, uint16_t opcode, std::span<const uint8_t> data) -> void;
+    auto               queueMarker(MarkerKind kind, std::string_view text) -> void;
     auto               emit(std::span<const uint8_t> block) -> void;
     auto               writeStart() -> void;
     auto               writeFooter() -> void;
-    auto               endFrame() -> void;
+    auto               endFrame(bool last) -> void;
+    auto               compress(std::span<const uint8_t> plain, bool endStream) -> size_t;
     auto               checkpoint() -> void;
+    auto               writeCheckpoint(const CheckpointPayload& payload) -> void;
+    [[nodiscard]] auto packetCost(uint64_t timestamp, uint16_t flags, uint8_t channel, uint16_t opcode, size_t length) const -> size_t;
     [[nodiscard]] auto shouldEndFrame(uint64_t timestamp, size_t added) const noexcept -> bool;
+    [[nodiscard]] auto checkpoints() const noexcept -> bool
+    {
+        return policy_.checkpointIntervalMs != 0 && key_ != nullptr;
+    }
 
     std::ofstream file_;
     WriterConfig  config_;
@@ -169,34 +229,46 @@ private:
     bool          closed_{ false };
     uint64_t      offset_{ 0 };
 
-    std::vector<ExtensionBlock> extensions_;
-    std::vector<uint8_t>        dictionary_;
-    uint32_t                    dictionaryId_{ 0 };
+    std::vector<ExtensionBlock>       extensions_;
+    std::vector<uint8_t>              headerBytes_;
+    std::vector<std::vector<uint8_t>> blockBytes_;
 
-    std::vector<uint8_t>          frameBuffer_;
+    std::vector<uint8_t>          frameBytes_;
+    std::vector<FramePacket>      framePackets_;
+    std::unordered_set<uint32_t>  frameGroups_;
+    size_t                        frameSize_{ 0 }; // plaintext, at most
     std::vector<uint8_t>          compressedBuffer_;
     std::vector<uint8_t>          blockBuffer_;
     uint64_t                      frameBaseTimestamp_{ 0 };
     uint64_t                      lastTimestamp_{ 0 };
     uint64_t                      firstTimestamp_{ 0 };
-    uint32_t                      framePacketCount_{ 0 };
     uint16_t                      currentZoneId_{ 0 };
     std::vector<PendingMarker>    pendingMarkers_;
     std::vector<FrameMarkerEntry> frameMarkers_;
-    size_t                        pendingMarkerBytes_{ 0 }; // FrameMarker and text of each
-    size_t                        frameMarkerBytes_{ 0 };
+    size_t                        pendingMarkerBytes_{ 0 };
     std::vector<FooterIndexEntry> frameIndex_;
+
+    // The zstd stream: whether the next frame starts one, and its plaintext so far.
+    bool   nextRestart_{ true };
+    size_t streamPlain_{ 0 };
 
     // Frames written since the last checkpoint, and the first one's time.
     uint32_t unsignedFrames_{ 0 };
     uint64_t firstUnsignedTimestamp_{ 0 };
 
     uint64_t totalPackets_{ 0 };
+    uint64_t writtenPackets_{ 0 };
     uint32_t totalFrames_{ 0 };
     uint64_t totalUncompressedBytes_{ 0 };
     uint64_t totalCompressedBytes_{ 0 };
 
-    std::unique_ptr<internal::Chain>                     chain_;
+    FooterSignature                       footerSignature_{ FooterSignature::Sign };
+    Signature                             copiedSignature_{};
+    std::unique_ptr<internal::SigningKey> sealKey_;
+    std::string                           sealAgent_;
+    uint64_t                              sealedAt_{ 0 };
+
+    std::unique_ptr<internal::SignedStream>              stream_;
     std::unique_ptr<internal::SigningKey>                key_;
     std::unique_ptr<ZSTD_CCtx_s, void (*)(ZSTD_CCtx_s*)> cctx_;
 };

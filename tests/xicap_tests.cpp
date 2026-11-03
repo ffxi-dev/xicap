@@ -1,7 +1,7 @@
-#include <xicap/xicap.h>
-
-#include "craft.h"
+#include "helpers.h"
+#include "internal/access.h"
 #include "internal/chain.h"
+#include "internal/columns.h"
 #include "internal/crc32.h"
 #include "search.h"
 #include "vectors.h"
@@ -10,141 +10,43 @@
 
 #include <algorithm>
 #include <array>
-#include <atomic>
 #include <cstdint>
 #include <cstring>
-#include <filesystem>
 #include <span>
 #include <string>
 #include <vector>
 
-namespace fs = std::filesystem;
-using namespace xicap;
+using namespace test;
 using namespace craft;
 
 namespace
 {
 
-inline std::atomic<uint64_t> g_tempCounter{ 0 };
-
-struct TempCapture
+// The packets of a frame, as records over their own bytes.
+struct Records
 {
-    fs::path path = fs::temp_directory_path() / fs::path{ "xicap-test-" + std::to_string(g_tempCounter.fetch_add(1)) + ".xicap" };
-    ~TempCapture()
-    {
-        std::error_code ec;
-        fs::remove(path, ec);
-    }
+    std::vector<Owned>            packets;
+    std::vector<internal::Record> records;
 };
 
-constexpr uint64_t T0 = 1'790'000'000'000ULL;
-
-auto seed(uint8_t fill = 7) -> SecretSeed
+auto recordsOf(std::vector<Owned> packets, size_t count) -> Records
 {
-    SecretSeed s{};
-    s.fill(fill);
-    return s;
-}
-
-auto config() -> WriterConfig
-{
-    WriterConfig cfg{};
-    cfg.clientVersion         = "test-client";
-    cfg.captureAgent          = "xicap tests";
-    cfg.character.contentId   = 0x01020304;
-    cfg.character.worldId     = 42;
-    cfg.character.characterId = 0x0A0B0C0D;
-    std::memcpy(cfg.character.characterName.data(), "Nouurs", 6);
-    std::memcpy(cfg.character.worldName.data(), "Asura", 5);
-    cfg.network     = Network::Retail;
-    cfg.signingSeed = seed();
-    return cfg;
-}
-
-// No dictionary, so tests can recompress frames they tamper with.
-auto plain() -> FramePolicy
-{
-    FramePolicy p{};
-    p.dictionary = {};
-    return p;
-}
-
-auto gamePacket(uint16_t opcode, size_t size, uint8_t fill = 0xAB) -> std::vector<std::byte>
-{
-    std::vector<std::byte> p(size, std::byte{ fill });
-    const auto             words = static_cast<uint16_t>((size / 4) & 0x7F);
-    const auto             hdr   = static_cast<uint16_t>((words << 9) | (opcode & 0x1FF));
-    p[0]                         = std::byte(hdr & 0xFF);
-    p[1]                         = std::byte(hdr >> 8);
-    p[2]                         = std::byte{ 0x34 };
-    p[3]                         = std::byte{ 0x12 };
-    return p;
-}
-
-auto zoneIn(uint16_t zone, const char* name = "Nouurs", uint32_t id = 0x0A0B0C0D) -> std::vector<std::byte>
-{
-    auto p = gamePacket(FFXIPacket::LOGIN_ZONE, 160, 0);
-    std::memcpy(p.data() + FFXIPacket::LOGIN_ZONE_NO_OFFSET, &zone, sizeof(zone));
-    std::memcpy(p.data() + FFXIPacket::LOGIN_UNIQUE_NO_OFFSET, &id, sizeof(id));
-    std::memcpy(p.data() + FFXIPacket::LOGIN_NAME_OFFSET, name, std::strlen(name));
-    return p;
-}
-
-struct Owned
-{
-    uint64_t                timestamp;
-    uint8_t                 channel;
-    uint16_t                opcode;
-    uint16_t                flags;
-    PacketDirection         direction;
-    std::vector<uint8_t>    data;
-    std::vector<ReadMarker> markers;
-};
-
-auto readAll(Reader& reader) -> std::vector<Owned>
-{
-    std::vector<Owned> out;
-    ReadPacket         p{};
-    while (reader.next(p))
+    packets.resize(count);
+    Records out{ std::move(packets), {} };
+    for (const auto& p : out.packets)
     {
-        const auto* d = reinterpret_cast<const uint8_t*>(p.data.data());
-        out.push_back({ p.timestamp, p.channel, p.opcode, p.flags, p.direction, { d, d + p.data.size() }, { p.markers.begin(), p.markers.end() } });
+        out.records.push_back({ .timestamp = p.timestamp, .flags = p.flags, .channel = p.channel, .opcode = p.opcode, .data = p.data });
     }
     return out;
 }
 
-auto readAll(const fs::path& path, ReaderOptions options = {}) -> std::vector<Owned>
+// Frame `frame` of a cut-off copy, rewritten to hold `records` in its place.
+auto replaceFrame(const std::vector<uint8_t>& bytes, const FrameRef& frame, std::span<const internal::Record> records) -> std::vector<uint8_t>
 {
-    Reader reader(path, options);
-    return readAll(reader);
-}
-
-auto fixFrameCrc(std::vector<uint8_t>& bytes, const FrameRef& frame) -> void
-{
-    const auto crc = internal::crc32({ bytes.data() + frame.offset, frame.size - 4 });
-    std::memcpy(bytes.data() + frame.offset + frame.size - 4, &crc, 4);
-}
-
-auto truncateAt(const fs::path& path, size_t size) -> void
-{
-    auto bytes = bytesOf(path);
-    bytes.resize(size);
-    save(path, bytes);
-}
-
-// Writes `frames` packet frames of `perFrame` packets each, one second apart.
-auto writeFrames(const fs::path& path, int frames, int perFrame = 3, FramePolicy policy = plain()) -> void
-{
-    Writer w(path, config(), policy);
-    for (int f = 0; f < frames; ++f)
-    {
-        for (int i = 0; i < perFrame; ++i)
-        {
-            w.write(T0 + static_cast<uint64_t>(f) * 1000 + static_cast<uint64_t>(i), PacketDirection::ServerToClient, gamePacket(static_cast<uint16_t>(0x100 + f), 16, static_cast<uint8_t>(f)));
-        }
-        w.flush();
-    }
-    w.close();
+    const auto plain  = internal::encodeColumns(records, {});
+    const auto header = podAt<FrameHeader>(bytes, frame.offset);
+    const auto edited = packetFrame({ .magic = 0, .kind = FrameKind::Packets, .frameFlags = 0, .markerCount = 0, .payloadSize = 0, .packetCount = static_cast<uint32_t>(records.size()), .baseTimestamp = header.baseTimestamp, .zoneId = header.zoneId, .reserved = 0, .plainSize = 0 }, plain);
+    return splice(bytes, frame.offset, frame.size, edited);
 }
 
 } // namespace
@@ -164,7 +66,7 @@ TEST_CASE("round trip keeps header, packets, channels, flags, and markers")
         w.close();
     }
     Reader r(tmp.path);
-    CHECK(r.versionMajor() == 3);
+    CHECK(r.versionMajor() == 4);
     CHECK(r.complete());
     CHECK(r.captureId() == firstId);
     CHECK(r.startTimestamp() == T0);
@@ -345,7 +247,7 @@ TEST_CASE("chat is stubbed before it reaches disk")
     TempCapture       tmp;
     const std::string secret = "meet me at the docks";
     {
-        Writer w(tmp.path, config(), plain());
+        Writer w(tmp.path, config());
         auto   chat = gamePacket(0x017, 64, 0);
         std::memcpy(chat.data() + 20, secret.data(), secret.size());
         w.write(T0, PacketDirection::ServerToClient, chat);
@@ -432,7 +334,7 @@ TEST_CASE("applyPolicy gives what the writer stores")
         { .timestamp = T0 + 3, .direction = PacketDirection::ServerToClient, .data = search, .channel = 1, .opcode = 5 },
     };
     {
-        Writer w(tmp.path, cfg, plain());
+        Writer w(tmp.path, cfg);
         for (const auto& packet : sent)
         {
             w.write(packet);
@@ -481,7 +383,7 @@ TEST_CASE("redaction never reaches the game header, so the reader takes what the
     const std::vector<std::byte> search(8, std::byte{ 0x5A });
     good.policy.rules.push_back({ .channel = 1, .direction = ExclusionDirection::Both, .action = ExclusionAction::ZeroRange, .opcode = 5, .ranges = { { 0, 2 } } });
     {
-        Writer w(tmp.path, good, plain());
+        Writer w(tmp.path, good);
         w.write(T0, PacketDirection::ServerToClient, chat);
         w.write({ .timestamp = T0 + 1, .direction = PacketDirection::ServerToClient, .data = search, .channel = 1, .opcode = 5 });
         w.close();
@@ -575,7 +477,7 @@ TEST_CASE("a packet over 64 KiB on a non-game channel")
 TEST_CASE("readers refuse what they must")
 {
     TempCapture tmp;
-    writeFrames(tmp.path, 2, 3, FramePolicy{});
+    writeFrames(tmp.path, 2, 3);
     auto bytes = bytesOf(tmp.path);
 
     SECTION("a 2.x file")
@@ -601,7 +503,7 @@ TEST_CASE("readers refuse what they must")
     }
     SECTION("a flipped extension bit")
     {
-        bytes[HEADER_SIZE + 100] ^= 1;
+        bytes[HEADER_SIZE + 20] ^= 1;
         save(tmp.path, bytes);
         try
         {
@@ -613,14 +515,11 @@ TEST_CASE("readers refuse what they must")
             CHECK(e.code() == ErrorCode::ExtensionChecksumMismatch);
         }
     }
-    SECTION("a missing dictionary")
+    SECTION("a header naming a dictionary")
     {
-        // Drop the dictionary block, fix the count and the header CRC.
-        const auto dictLength = podAt<ExtensionBlockHeader>(bytes, HEADER_SIZE).length;
-        bytes.erase(bytes.begin() + HEADER_SIZE, bytes.begin() + HEADER_SIZE + 8 + dictLength + 4);
-        auto header = podAt<Header>(bytes, 0);
-        header.extensionCount--;
-        header.headerCrc = internal::crc32({ reinterpret_cast<const uint8_t*>(&header), offsetof(Header, headerCrc) });
+        auto header         = podAt<Header>(bytes, 0);
+        header.dictionaryId = 0x1234;
+        header.headerCrc    = internal::crc32({ reinterpret_cast<const uint8_t*>(&header), offsetof(Header, headerCrc) });
         std::memcpy(bytes.data(), &header, sizeof(header));
         save(tmp.path, bytes);
         try
@@ -630,30 +529,35 @@ TEST_CASE("readers refuse what they must")
         }
         catch (const Error& e)
         {
-            CHECK(e.code() == ErrorCode::MissingDictionary);
+            CHECK(e.code() == ErrorCode::DictionaryMismatch);
         }
+    }
+    SECTION("a dictionary block")
+    {
+        const std::vector<uint8_t> dict{ 0x37, 0xA4, 0x30, 0xEC, 1, 0, 0, 0 };
+        const auto                 block  = internal::encodeBlock(EXT_ZSTD_DICT, dict);
+        auto                       header = podAt<Header>(bytes, 0);
+        header.extensionCount++;
+        header.headerCrc = internal::crc32({ reinterpret_cast<const uint8_t*>(&header), offsetof(Header, headerCrc) });
+        std::memcpy(bytes.data(), &header, sizeof(header));
+        save(tmp.path, splice(bytes, HEADER_SIZE, 0, block));
+        CHECK_THROWS_AS(Reader(tmp.path), Error);
     }
 }
 
 TEST_CASE("frame kinds and flags a reader must understand")
 {
     TempCapture tmp;
-    writeFrames(tmp.path, 2);
+    writeFrames(tmp.path, 2, 3, alone());
     auto bytes = bytesOf(tmp.path);
-    bytes.resize(footerOffset(bytes)); // cut off, so frames can be appended
-    const auto                 frames = framesOf(bytes);
-    const std::vector<uint8_t> second(bytes.begin() + static_cast<std::ptrdiff_t>(frames[1].offset), bytes.end());
+    bytes.resize(footerOffset(bytes)); // cut off, so frames can be spliced in
+    const auto frames = framesOf(bytes);
 
     const auto withKind = [&](uint8_t kind)
     {
-        auto out = bytes;
-        out.resize(frames[1].offset);
-        const FrameHeader            h{ .magic = FRAME_MAGIC, .kind = static_cast<FrameKind>(kind), .reserved0 = 0, .markerCount = 0, .payloadSize = 3, .packetCount = 0, .baseTimestamp = T0, .zoneId = 0, .reserved1 = 0 };
+        const FrameHeader            h{ .magic = FRAME_MAGIC, .kind = static_cast<FrameKind>(kind), .frameFlags = 0, .markerCount = 0, .payloadSize = 3, .packetCount = 0, .baseTimestamp = T0, .zoneId = 0, .reserved = 0, .plainSize = 0 };
         const std::array<uint8_t, 3> payload{ 1, 2, 3 };
-        const auto                   frame = frameBytes(h, payload);
-        out.insert(out.end(), frame.begin(), frame.end());
-        out.insert(out.end(), second.begin(), second.end());
-        return out;
+        return splice(bytes, frames[1].offset, 0, frameBytes(h, payload));
     };
 
     SECTION("an unknown skippable kind is skipped")
@@ -668,15 +572,9 @@ TEST_CASE("frame kinds and flags a reader must understand")
     }
     SECTION("an unknown must-understand flag is refused")
     {
-        auto rewritten = rewriteFrame(bytes, frames[0], [](std::vector<uint8_t>& content)
-                                      {
-                                          auto entry = podAt<PacketEntry>(content, 0);
-                                          entry.flags |= 0x0400;
-                                          std::memcpy(content.data(), &entry, sizeof(entry));
-                                      });
-        bytes.erase(bytes.begin() + static_cast<std::ptrdiff_t>(frames[0].offset), bytes.begin() + static_cast<std::ptrdiff_t>(frames[0].offset + frames[0].size));
-        bytes.insert(bytes.begin() + static_cast<std::ptrdiff_t>(frames[0].offset), rewritten.begin(), rewritten.end());
-        save(tmp.path, bytes);
+        auto frame = recordsOf(readAll(tmp.path), 3);
+        frame.records[0].flags |= 0x0400;
+        save(tmp.path, replaceFrame(bytes, frames[0], frame.records));
         Reader     r(tmp.path);
         ReadPacket p{};
         CHECK_THROWS_AS(r.next(p), Error);
@@ -729,28 +627,25 @@ TEST_CASE("cut-off captures read up to the last intact frame")
 TEST_CASE("a damaged middle frame")
 {
     TempCapture tmp;
-    writeFrames(tmp.path, 3);
-    auto       bytes  = bytesOf(tmp.path);
-    const auto frames = framesOf(bytes);
-    // Damage the second packet frame's size field.
-    const auto target = std::ranges::find_if(frames, [](const FrameRef& f)
-                                             {
-                                                 return f.header.kind == FrameKind::Packets && f.header.baseTimestamp == T0 + 1000;
-                                             });
-    REQUIRE(target != frames.end());
-    bytes[target->offset + 8] ^= 0x40;
+    const auto  damage = [&](FramePolicy policy)
+    {
+        writeFrames(tmp.path, 3, 3, policy);
+        auto bytes = bytesOf(tmp.path);
+        // Damage the second packet frame's size field.
+        bytes[packetFrames(bytes)[1].offset + 8] ^= 0x40;
+        return bytes;
+    };
 
     SECTION("with a footer: refused, or skipped in recovery mode")
     {
-        save(tmp.path, bytes);
-        Reader     r(tmp.path);
-        ReadPacket p{};
+        save(tmp.path, damage(alone()));
+        Reader r(tmp.path);
         CHECK_THROWS_AS(readAll(r), Error);
-        const auto recovered = readAll(tmp.path, { .recovery = true });
-        CHECK(recovered.size() == 6);
+        CHECK(readAll(tmp.path, { .recovery = true }).size() == 6);
     }
     SECTION("without a footer: the capture ends there, or recovery skips it")
     {
+        auto bytes = damage(alone());
         bytes.resize(footerOffset(bytes));
         save(tmp.path, bytes);
         CHECK(readAll(tmp.path).size() == 3);
@@ -758,30 +653,37 @@ TEST_CASE("a damaged middle frame")
         CHECK(readAll(r).size() == 6);
         CHECK(r.skippedRegions().size() == 1);
     }
+    SECTION("in a stream, recovery loses the frames up to the next restart")
+    {
+        auto bytes = damage({});
+        bytes.resize(footerOffset(bytes));
+        save(tmp.path, bytes);
+        CHECK(readAll(tmp.path).size() == 3);
+        Reader r(tmp.path, { .recovery = true });
+        CHECK(readAll(r).size() == 3);
+        const auto first = packetFrames(bytes)[0];
+        REQUIRE(r.skippedRegions().size() == 1);
+        CHECK(r.skippedRegions()[0].offset == first.offset + first.size);
+        CHECK(r.skippedRegions()[0].offset + r.skippedRegions()[0].length == bytes.size());
+    }
 }
 
 TEST_CASE("a game packet whose opcode differs from its header is a bad frame")
 {
     TempCapture tmp;
-    writeFrames(tmp.path, 1);
-    auto       bytes     = bytesOf(tmp.path);
-    const auto frame     = framesOf(bytes).at(0);
-    const auto rewritten = rewriteFrame(bytes, frame, [](std::vector<uint8_t>& content)
-                                        {
-                                            auto entry = podAt<PacketEntry>(content, 0);
-                                            entry.opcode ^= 1;
-                                            std::memcpy(content.data(), &entry, sizeof(entry));
-                                        });
-    bytes.resize(frame.offset);
-    bytes.insert(bytes.end(), rewritten.begin(), rewritten.end());
-    save(tmp.path, bytes);
+    writeFrames(tmp.path, 1, 3, alone());
+    auto bytes = bytesOf(tmp.path);
+    bytes.resize(footerOffset(bytes));
+    auto frame = recordsOf(readAll(tmp.path), 3);
+    frame.records[0].opcode ^= 1;
+    save(tmp.path, replaceFrame(bytes, framesOf(bytes).at(0), frame.records));
     CHECK(readAll(tmp.path).empty()); // cut off: ends at the bad frame
 }
 
 TEST_CASE("signatures")
 {
     TempCapture tmp;
-    auto        policy          = plain();
+    auto        policy          = alone();
     policy.checkpointIntervalMs = 2000;
     writeFrames(tmp.path, 6, 3, policy);
     auto bytes = bytesOf(tmp.path);
@@ -795,23 +697,21 @@ TEST_CASE("signatures")
         CHECK(v.key == r.signingKey());
         CHECK(v.goodCheckpoints >= 2);
         CHECK_FALSE(v.firstFailureOffset);
+        CHECK_FALSE(v.seal);
     }
     SECTION("a cut-off capture verifies up to its last checkpoint")
     {
-        const auto frames         = framesOf(bytes);
-        size_t     lastCheckpoint = 0;
-        uint64_t   packetsBefore  = 0;
-        uint64_t   running        = 0;
-        for (const auto& f : frames)
+        uint64_t packetsBefore = 0;
+        uint64_t running       = 0;
+        for (const auto& f : framesOf(bytes))
         {
-            if (f.header.kind == FrameKind::Checkpoint)
+            if (f.info.kind == FrameKind::Checkpoint)
             {
-                lastCheckpoint = f.offset;
-                packetsBefore  = running;
+                packetsBefore = running;
             }
-            running += f.header.packetCount;
+            running += f.info.packetCount;
         }
-        REQUIRE(lastCheckpoint != 0);
+        REQUIRE(packetsBefore != 0);
         truncateAt(tmp.path, footerOffset(bytes));
         Reader     r(tmp.path);
         const auto v = r.verify();
@@ -821,33 +721,14 @@ TEST_CASE("signatures")
     }
     // The tampering below changes frame sizes, so it works on cut-off copies,
     // where no footer offsets need to stay valid.
+    bytes.resize(footerOffset(bytes));
     const auto frames = framesOf(bytes);
-    const auto slice  = [&](const FrameRef& f)
-    {
-        return std::vector<uint8_t>(bytes.begin() + static_cast<std::ptrdiff_t>(f.offset), bytes.begin() + static_cast<std::ptrdiff_t>(f.offset + f.size));
-    };
-    const auto rebuild = [&](const std::vector<std::vector<uint8_t>>& parts)
-    {
-        std::vector<uint8_t> out(bytes.begin(), bytes.begin() + static_cast<std::ptrdiff_t>(frames[0].offset));
-        for (const auto& part : parts)
-        {
-            out.insert(out.end(), part.begin(), part.end());
-        }
-        save(tmp.path, out);
-    };
-    std::vector<std::vector<uint8_t>> parts;
-    for (const auto& f : frames)
-    {
-        parts.push_back(slice(f));
-    }
 
-    SECTION("an edited packet with a fixed CRC still reads but fails verification")
+    SECTION("an edited packet still reads but fails verification")
     {
-        parts[0] = rewriteFrame(bytes, frames[0], [](std::vector<uint8_t>& content)
-                                {
-                                    content[sizeof(PacketEntry) + 6] ^= 0xFF;
-                                });
-        rebuild(parts);
+        auto frame = recordsOf(readAll(tmp.path), 3);
+        frame.packets[0].data[6] ^= 0xFF;
+        save(tmp.path, replaceFrame(bytes, frames[0], frame.records));
         Reader r(tmp.path);
         CHECK(readAll(r).size() == 18);
         const auto v = r.verify();
@@ -855,12 +736,15 @@ TEST_CASE("signatures")
         CHECK(v.verifiedPackets == 0);
         CHECK(v.firstFailureOffset);
     }
-    SECTION("swapped frames fail from the first swap")
+    SECTION("swapped frames fail from the first checkpoint")
     {
-        std::swap(parts[0], parts[1]);
-        rebuild(parts);
+        const std::vector<uint8_t> first(bytes.begin() + static_cast<std::ptrdiff_t>(frames[0].offset), bytes.begin() + static_cast<std::ptrdiff_t>(frames[0].offset + frames[0].size));
+        auto                       swapped = splice(bytes, frames[0].offset, frames[0].size, {});
+        swapped                            = splice(swapped, frames[0].offset + frames[1].size, 0, first);
+        save(tmp.path, swapped);
         Reader     r(tmp.path);
         const auto v = r.verify();
+        CHECK(readAll(r).size() == 18);
         CHECK(v.verifiedPackets == 0);
         CHECK(v.firstFailureOffset);
     }
@@ -874,7 +758,7 @@ TEST_CASE("checkpoints follow activity")
         const auto frames = framesOf(bytesOf(tmp.path));
         return std::ranges::count_if(frames, [](const FrameRef& f)
                                      {
-                                         return f.header.kind == FrameKind::Checkpoint;
+                                         return f.info.kind == FrameKind::Checkpoint;
                                      });
     };
 
@@ -1005,14 +889,14 @@ TEST_CASE("the conformance set reads as recorded")
         CHECK(vectors::reading(entry.path()) == std::string(expected.begin(), expected.end()));
         checked++;
     }
-    CHECK(checked >= 16);
+    CHECK(checked >= 18);
 }
 
 TEST_CASE("the writer keeps frames within the reader's limits")
 {
     TempCapture tmp;
-    FramePolicy policy        = plain();
-    policy.maxPacketsPerFrame = 1'000'000;        // over the 65535 a frame can hold
+    FramePolicy policy        = {};
+    policy.maxPacketsPerFrame = 2'000'000;        // over the 1,048,576 a frame can hold
     policy.maxFrameSize       = 64 * 1024 * 1024; // over the 16 MiB a frame can hold
     policy.maxFrameTimeMs     = 1'000'000;
     {
@@ -1030,7 +914,11 @@ TEST_CASE("the writer keeps frames within the reader's limits")
     }
     Reader r(tmp.path);
     CHECK(readAll(r).size() == 70'060);
-    CHECK(r.totalFrames() >= 3);
+    CHECK(r.totalFrames() >= 2);
+    for (const auto& f : framesOf(bytesOf(tmp.path)))
+    {
+        CHECK(f.info.plainSize <= FrameLimits::MAX_CONTENT_SIZE);
+    }
 }
 
 TEST_CASE("a footer whose offset wraps the size check is not trusted")
@@ -1058,8 +946,10 @@ TEST_CASE("markers never push a frame past what a reader takes")
     {
         Writer w(tmp.path, config());
         w.mark(MarkerKind::Note, "x");
-        const std::vector<std::byte> big(FrameLimits::MAX_CONTENT_SIZE - sizeof(PacketEntry), std::byte{ 1 });
+        const std::vector<std::byte> big(FrameLimits::MAX_CONTENT_SIZE - 20, std::byte{ 1 });
         CHECK_THROWS_AS(w.write({ .timestamp = T0, .direction = PacketDirection::ServerToClient, .data = big, .channel = 2, .opcode = 1 }), Error);
+        Writer alone(tmp.path, config());
+        CHECK_NOTHROW(alone.write({ .timestamp = T0, .direction = PacketDirection::ServerToClient, .data = big, .channel = 2, .opcode = 1 }));
     }
     SECTION("at most 65535 markers wait for a packet")
     {

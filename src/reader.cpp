@@ -1,23 +1,18 @@
 #include "xicap/reader.h"
 #include "internal/chain.h"
 #include "internal/crc32.h"
+#include "internal/decoder.h"
 
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <format>
 #include <span>
-#include <string_view>
-#include <zstd.h>
 
 namespace xicap
 {
 namespace
 {
-
-inline constexpr uint64_t FRAME_OVERHEAD = sizeof(FrameHeader) + sizeof(uint32_t);
-// zstd's output can exceed its input slightly; anything past this is garbage.
-inline constexpr uint64_t MAX_PAYLOAD_SIZE = FrameLimits::MAX_CONTENT_SIZE + 1024 * 1024;
 
 auto readAt(std::ifstream& file, uint64_t offset, std::span<uint8_t> out) -> bool
 {
@@ -33,108 +28,17 @@ auto readPodAt(std::ifstream& file, uint64_t offset, T& out) -> bool
     return readAt(file, offset, { reinterpret_cast<uint8_t*>(&out), sizeof(T) });
 }
 
-template <typename T>
-auto pop(std::span<const uint8_t> buf, size_t& pos, T& out) -> bool
-{
-    if (pos + sizeof(T) > buf.size())
-    {
-        return false;
-    }
-    std::memcpy(&out, buf.data() + pos, sizeof(T));
-    pos += sizeof(T);
-    return true;
-}
-
-// Kinds from 0x80 up must be understood; others are skipped.
-auto checkKind(FrameKind kind) -> void
-{
-    if (kind != FrameKind::Packets && kind != FrameKind::Checkpoint && static_cast<uint8_t>(kind) >= 0x80)
-    {
-        throw Error(ErrorCode::UnknownFrameKind, std::format("xicap: unknown frame kind {:#04x}", static_cast<uint8_t>(kind)));
-    }
-}
-
 auto textOf(std::span<const char> field) -> std::string
 {
     return { field.begin(), std::find(field.begin(), field.end(), '\0') };
-}
-
-auto parsePolicy(std::span<const uint8_t> payload) -> ExclusionPolicy
-{
-    const auto invalid = []
-    {
-        return Error(ErrorCode::InvalidPolicy, "xicap: malformed exclusion policy block");
-    };
-    size_t                pos = 0;
-    ExclusionPolicyHeader header{};
-    if (!pop(payload, pos, header))
-    {
-        throw invalid();
-    }
-    ExclusionPolicy policy{ .name = textOf(header.name), .version = header.version, .rules = {} };
-    for (uint16_t i = 0; i < header.ruleCount; ++i)
-    {
-        ExclusionRuleHeader rule{};
-        if (!pop(payload, pos, rule))
-        {
-            throw invalid();
-        }
-        ExclusionRule out{
-            .channel   = rule.channel,
-            .direction = static_cast<ExclusionDirection>(rule.direction),
-            .action    = static_cast<ExclusionAction>(rule.action),
-            .opcode    = rule.opcode,
-            .ranges    = {},
-        };
-        for (uint16_t r = 0; r < rule.rangeCount; ++r)
-        {
-            ByteRange range{};
-            if (!pop(payload, pos, range))
-            {
-                throw invalid();
-            }
-            out.ranges.push_back(range);
-        }
-        policy.rules.push_back(std::move(out));
-    }
-    if (pos != payload.size())
-    {
-        throw invalid();
-    }
-    return policy;
-}
-
-auto parseSource(std::span<const uint8_t> payload) -> SourceInfo
-{
-    size_t       pos = 0;
-    SourceHeader header{};
-    if (!pop(payload, pos, header) || payload.size() - pos != header.metadataLength)
-    {
-        throw Error(ErrorCode::InvalidExtension, "xicap: malformed source block");
-    }
-    return {
-        .format           = textOf(header.format),
-        .formatVersion    = textOf(header.formatVersion),
-        .skippedRecords   = header.skippedRecords,
-        .utcOffsetSeconds = header.utcOffsetSeconds,
-        .sourceHash       = header.sourceHash,
-        .metadata         = { payload.begin() + static_cast<std::ptrdiff_t>(pos), payload.end() },
-    };
 }
 
 } // namespace
 
 Reader::Reader(const std::filesystem::path& path, ReaderOptions options)
 : options_(options)
-, dctx_(ZSTD_createDCtx(), [](ZSTD_DCtx* c) noexcept
-        {
-            ZSTD_freeDCtx(c);
-        })
+, frame_(std::make_unique<internal::DecodedFrame>())
 {
-    if (!dctx_)
-    {
-        throw Error(ErrorCode::ZstdContextFailed, "xicap: ZSTD_createDCtx failed");
-    }
     file_.open(path, std::ios::binary);
     if (!file_)
     {
@@ -143,8 +47,8 @@ Reader::Reader(const std::filesystem::path& path, ReaderOptions options)
     file_.seekg(0, std::ios::end);
     fileSize_ = static_cast<uint64_t>(file_.tellg());
 
-    readHeader();
-    readExtensions();
+    readStart();
+    decoder_ = std::make_unique<internal::Decoder>(header_.versionMajor, dictionary_);
     readFooter();
     if (complete_)
     {
@@ -188,127 +92,57 @@ auto Reader::getExtension(uint32_t type) const noexcept -> const ExtensionBlock*
     return it == extensions_.end() ? nullptr : &*it;
 }
 
-auto Reader::readHeader() -> void
+auto Reader::readStart() -> void
 {
-    if (fileSize_ < HEADER_SIZE || !readPodAt(file_, 0, header_))
+    std::vector<uint8_t> bytes(HEADER_SIZE);
+    if (fileSize_ < HEADER_SIZE || !readAt(file_, 0, bytes))
     {
         throw Error(ErrorCode::ShortHeader, "xicap: short header");
     }
-    if (header_.magic != MAGIC)
-    {
-        throw Error(ErrorCode::BadMagic, "xicap: bad magic");
-    }
-    if (header_.versionMajor != VERSION_MAJOR)
-    {
-        throw Error(ErrorCode::UnsupportedVersion,
-                    std::format("xicap: unsupported version {} (expected {})", header_.versionMajor, VERSION_MAJOR));
-    }
-    const uint16_t size = header_.headerSize;
-    if (size < HEADER_SIZE || size > HEADER_SIZE_MAX || size > fileSize_)
+    const auto size = internal::headerSize(bytes);
+    if (size > fileSize_)
     {
         throw Error(ErrorCode::ShortHeader, std::format("xicap: header size {} out of range", size));
     }
-    headerBytes_.resize(size);
-    if (!readAt(file_, 0, headerBytes_))
+    bytes.resize(size);
+    if (!readAt(file_, 0, bytes))
     {
         throw Error(ErrorCode::ShortHeader, "xicap: short header");
     }
-    uint32_t stored = 0;
-    std::memcpy(&stored, headerBytes_.data() + size - sizeof(stored), sizeof(stored));
-    if (internal::crc32({ headerBytes_.data(), size - sizeof(stored) }) != stored)
-    {
-        throw Error(ErrorCode::HeaderChecksumMismatch, "xicap: header crc mismatch");
-    }
-}
+    internal::Start start;
+    internal::readHeader(bytes, start);
 
-auto Reader::readExtensions() -> void
-{
-    uint64_t             offset     = header_.headerSize;
-    bool                 haveDict   = false;
-    bool                 havePolicy = false;
-    std::vector<uint8_t> block;
-
-    for (uint32_t i = 0; i < header_.extensionCount; ++i)
+    uint64_t offset = size;
+    for (uint32_t i = 0; i < start.header.extensionCount; ++i)
     {
-        ExtensionBlockHeader hdr{};
-        if (offset + sizeof(hdr) > fileSize_ || !readPodAt(file_, offset, hdr))
+        std::array<uint8_t, sizeof(ExtensionBlockHeader)> first{};
+        if (offset + first.size() > fileSize_ || !readAt(file_, offset, first))
         {
             throw Error(ErrorCode::ShortExtension, "xicap: short extension header");
         }
-        if (hdr.length > FrameLimits::MAX_EXTENSION_SIZE)
-        {
-            throw Error(ErrorCode::ExtensionTooLarge, "xicap: extension block over 16 MiB");
-        }
-        const uint64_t blockSize = sizeof(hdr) + uint64_t{ hdr.length } + sizeof(uint32_t);
+        const uint64_t blockSize = internal::blockSize(first);
         if (offset + blockSize > fileSize_)
         {
             throw Error(ErrorCode::ShortExtension, "xicap: extension block runs past the file");
         }
-        block.resize(blockSize);
-        if (!readAt(file_, offset, block))
+        bytes.resize(static_cast<size_t>(blockSize));
+        if (!readAt(file_, offset, bytes))
         {
             throw Error(ErrorCode::ShortExtension, "xicap: short extension block");
         }
-        uint32_t stored = 0;
-        std::memcpy(&stored, block.data() + blockSize - sizeof(stored), sizeof(stored));
-        if (internal::crc32({ block.data(), static_cast<size_t>(blockSize) - sizeof(stored) }) != stored)
-        {
-            throw Error(ErrorCode::ExtensionChecksumMismatch, std::format("xicap: extension block {} crc mismatch", i));
-        }
-        const std::span<const uint8_t> payload{ block.data() + sizeof(hdr), hdr.length };
+        internal::readBlock(bytes, i, start);
         offset += blockSize;
+    }
+    internal::finishBlocks(start);
 
-        if (i == 0 && header_.dictionaryId != 0 && hdr.type != EXT_ZSTD_DICT)
-        {
-            throw Error(ErrorCode::MissingDictionary, "xicap: the header names a dictionary the file does not carry");
-        }
-        switch (hdr.type)
-        {
-            case EXT_ZSTD_DICT:
-            {
-                if (i != 0 || header_.dictionaryId == 0)
-                {
-                    throw Error(ErrorCode::DictionaryMismatch, "xicap: dictionary block out of place");
-                }
-                const uint32_t id = ZSTD_getDictID_fromDict(payload.data(), payload.size());
-                if (id != header_.dictionaryId)
-                {
-                    throw Error(ErrorCode::DictionaryMismatch,
-                                std::format("xicap: dictionary id {:#010x}, header says {:#010x}", id, header_.dictionaryId));
-                }
-                const size_t rc = ZSTD_DCtx_loadDictionary(dctx_.get(), payload.data(), payload.size());
-                if (ZSTD_isError(rc))
-                {
-                    throw Error(ErrorCode::DictionaryMismatch, std::string("xicap: zstd load dictionary: ") + ZSTD_getErrorName(rc));
-                }
-                haveDict = true;
-                break;
-            }
-            case EXT_EXCLUSION_POLICY:
-                if (havePolicy)
-                {
-                    throw Error(ErrorCode::InvalidExtension, "xicap: two exclusion policy blocks");
-                }
-                policy_    = parsePolicy(payload);
-                havePolicy = true;
-                break;
-            case EXT_SOURCE:
-                source_ = parseSource(payload);
-                break;
-            default:
-                extensions_.push_back({ hdr.type, { payload.begin(), payload.end() } });
-                break;
-        }
-    }
-    if (header_.dictionaryId != 0 && !haveDict)
-    {
-        throw Error(ErrorCode::MissingDictionary, "xicap: the header names a dictionary the file does not carry");
-    }
-    if (!havePolicy)
-    {
-        throw Error(ErrorCode::MissingPolicy, "xicap: no exclusion policy block");
-    }
-    dataStart_ = offset;
+    header_      = start.header;
+    headerBytes_ = std::move(start.headerBytes);
+    blockBytes_  = std::move(start.blocks);
+    dictionary_  = std::move(start.dictionary);
+    policy_      = std::move(start.policy);
+    source_      = std::move(start.source);
+    extensions_  = std::move(start.extensions);
+    dataStart_   = offset;
 }
 
 auto Reader::readFooter() -> void
@@ -324,9 +158,21 @@ auto Reader::readFooter() -> void
     {
         return;
     }
+    // Format 3 reserves trailerFlags; format 4 reads an unknown bit as a damaged footer.
+    const bool v4     = header_.versionMajor != 3;
+    const bool sealed = v4 && (trailer_.trailerFlags & TrailerFlag::Sealed) != 0;
+    if (v4 && (trailer_.trailerFlags & ~TrailerFlag::Known) != 0)
+    {
+        return;
+    }
     // Compare by subtraction: a crafted offset must not wrap the sum.
+    const uint64_t tail = sizeof(FooterTrailer) + (sealed ? sizeof(SealBlock) : 0);
+    if (fileSize_ < dataStart_ + tail)
+    {
+        return;
+    }
     const uint64_t indexBytes = uint64_t{ trailer_.entryCount } * sizeof(FooterIndexEntry);
-    const uint64_t indexEnd   = fileSize_ - sizeof(FooterTrailer);
+    const uint64_t indexEnd   = fileSize_ - tail;
     if (trailer_.indexOffset < dataStart_ || trailer_.indexOffset > indexEnd || indexEnd - trailer_.indexOffset != indexBytes ||
         indexBytes > SIZE_MAX)
     {
@@ -339,38 +185,54 @@ auto Reader::readFooter() -> void
     {
         return;
     }
+    if (sealed)
+    {
+        SealBlock seal{};
+        if (!readPodAt(file_, indexEnd, seal) || seal.magic != SEAL_MAGIC ||
+            internal::crc32({ reinterpret_cast<const uint8_t*>(&seal), offsetof(SealBlock, crc) }) != seal.crc)
+        {
+            return;
+        }
+        seal_ = seal;
+    }
     indexEntries_  = std::move(index);
     complete_      = true;
     footerDamaged_ = false;
 }
 
-auto Reader::readRawFrame(uint64_t offset, uint64_t limit, RawFrame& out) -> bool
+auto Reader::readRawFrame(uint64_t offset, uint64_t limit, std::vector<uint8_t>& bytes, internal::FrameInfo& info) -> bool
 {
-    if (offset + FRAME_OVERHEAD > limit || !readPodAt(file_, offset, out.header) || out.header.magic != FRAME_MAGIC)
+    const auto headerSize = internal::frameHeaderSize(header_.versionMajor);
+    if (offset + headerSize + sizeof(uint32_t) > limit)
     {
         return false;
     }
-    if (out.header.payloadSize > MAX_PAYLOAD_SIZE || offset + FRAME_OVERHEAD + out.header.payloadSize > limit)
+    bytes.resize(headerSize);
+    if (!readAt(file_, offset, bytes) || !internal::parseFrameHeader(header_.versionMajor, bytes, info))
     {
         return false;
     }
-    out.payload.resize(out.header.payloadSize);
-    if (!readAt(file_, offset + sizeof(FrameHeader), out.payload) ||
-        !readPodAt(file_, offset + sizeof(FrameHeader) + out.header.payloadSize, out.crc))
+    const uint64_t size = headerSize + uint64_t{ info.payloadSize } + sizeof(uint32_t);
+    if (info.payloadSize > internal::MAX_PAYLOAD_SIZE || offset + size > limit)
     {
         return false;
     }
-    internal::Crc32 crc;
-    crc.update({ reinterpret_cast<const uint8_t*>(&out.header), sizeof(FrameHeader) });
-    crc.update(out.payload);
-    return crc.value() == out.crc;
+    bytes.resize(static_cast<size_t>(size));
+    if (!readAt(file_, offset, bytes))
+    {
+        return false;
+    }
+    uint32_t stored = 0;
+    std::memcpy(&stored, bytes.data() + bytes.size() - sizeof(stored), sizeof(stored));
+    return internal::crc32({ bytes.data(), bytes.size() - sizeof(stored) }) == stored;
 }
 
 auto Reader::resync(uint64_t from, uint64_t limit) -> std::optional<uint64_t>
 {
     static constexpr std::array<uint8_t, 4> magic{ 'X', 'C', 'F', 'R' };
     std::vector<uint8_t>                    buf(64 * 1024);
-    RawFrame                                candidate;
+    std::vector<uint8_t>                    candidate;
+    internal::FrameInfo                     info;
     for (uint64_t pos = from; pos + magic.size() <= limit;)
     {
         const auto n = static_cast<size_t>(std::min<uint64_t>(buf.size(), limit - pos));
@@ -381,7 +243,7 @@ auto Reader::resync(uint64_t from, uint64_t limit) -> std::optional<uint64_t>
         for (size_t i = 0; i + magic.size() <= n; ++i)
         {
             if (std::equal(magic.begin(), magic.end(), buf.begin() + static_cast<std::ptrdiff_t>(i)) &&
-                readRawFrame(pos + i, limit, candidate))
+                readRawFrame(pos + i, limit, candidate, info))
             {
                 return pos + i;
             }
@@ -391,62 +253,81 @@ auto Reader::resync(uint64_t from, uint64_t limit) -> std::optional<uint64_t>
     return std::nullopt;
 }
 
+// Adjacent skipped regions are reported as one.
+auto Reader::skip(uint64_t offset, uint64_t length) -> void
+{
+    if (!skipped_.empty())
+    {
+        auto last = std::prev(skipped_.end());
+        if (last->first + last->second == offset)
+        {
+            last->second += length;
+            return;
+        }
+    }
+    skipped_[offset] = length;
+}
+
 auto Reader::scanCutOff() -> void
 {
-    uint64_t offset = dataStart_;
+    uint64_t            offset = dataStart_;
+    internal::FrameInfo info;
     while (offset < fileSize_)
     {
-        if (!readRawFrame(offset, fileSize_, raw_))
+        if (!readRawFrame(offset, fileSize_, raw_, info))
         {
             if (!options_.recovery)
             {
                 unreadBytes_ = fileSize_ - offset;
                 break;
             }
-            const auto next  = resync(offset + 1, fileSize_);
-            skipped_[offset] = next.value_or(fileSize_) - offset;
-            offset           = next.value_or(fileSize_);
+            const auto next = resync(offset + 1, fileSize_);
+            skip(offset, next.value_or(fileSize_) - offset);
+            offset = next.value_or(fileSize_);
             continue;
         }
-        checkKind(raw_.header.kind);
-        if (raw_.header.kind == FrameKind::Packets)
+        internal::checkKind(info.kind);
+        if (info.kind == FrameKind::Packets)
         {
             indexEntries_.push_back({
-                .timestamp  = raw_.header.baseTimestamp,
+                .timestamp  = info.baseTimestamp,
                 .fileOffset = offset,
-                .zoneId     = raw_.header.zoneId,
+                .zoneId     = info.zoneId,
+                .flags      = info.restart() ? IndexFlag::Restart : uint8_t{ 0 },
                 .reserved   = {},
             });
         }
-        offset += FRAME_OVERHEAD + raw_.header.payloadSize;
+        offset += raw_.size();
     }
     endOffset_ = options_.recovery ? fileSize_ : offset;
 }
 
 auto Reader::advance() -> bool
 {
-    packets_.clear();
-    markers_.clear();
+    frame_->clear();
     packetPos_ = 0;
 
+    internal::FrameInfo info;
     while (true)
     {
         if (const auto it = skipped_.find(nextOffset_); it != skipped_.end())
         {
             nextOffset_ += it->second;
+            decoder_->reset();
         }
         if (nextOffset_ >= endOffset_)
         {
             return false;
         }
         const uint64_t offset = nextOffset_;
-        if (!readRawFrame(offset, endOffset_, raw_))
+        if (!readRawFrame(offset, endOffset_, raw_, info))
         {
             if (options_.recovery)
             {
-                const auto next  = resync(offset + 1, endOffset_);
-                skipped_[offset] = next.value_or(endOffset_) - offset;
-                nextOffset_      = next.value_or(endOffset_);
+                const auto next = resync(offset + 1, endOffset_);
+                skip(offset, next.value_or(endOffset_) - offset);
+                nextOffset_ = next.value_or(endOffset_);
+                decoder_->reset();
                 continue;
             }
             if (complete_)
@@ -455,17 +336,18 @@ auto Reader::advance() -> bool
             }
             return false;
         }
-        const uint64_t size = FRAME_OVERHEAD + raw_.header.payloadSize;
+        const uint64_t size = raw_.size();
         nextOffset_         = offset + size;
 
-        checkKind(raw_.header.kind);
-        if (raw_.header.kind != FrameKind::Packets)
+        internal::checkKind(info.kind);
+        if (info.kind != FrameKind::Packets)
         {
             continue;
         }
+        const auto headerSize = internal::frameHeaderSize(header_.versionMajor);
         try
         {
-            decodeFrame(raw_);
+            decoder_->decode(info, { raw_.data() + headerSize, info.payloadSize }, *frame_);
         }
         catch (const Error& error)
         {
@@ -473,11 +355,10 @@ auto Reader::advance() -> bool
             {
                 throw;
             }
-            packets_.clear();
-            markers_.clear();
+            frame_->clear();
             if (options_.recovery)
             {
-                skipped_[offset] = size;
+                skip(offset, size);
                 continue;
             }
             // A cut-off capture ends at its first bad frame.
@@ -485,152 +366,51 @@ auto Reader::advance() -> bool
             unreadBytes_ = fileSize_ - offset;
             return false;
         }
+        for (const auto& p : frame_->packets)
+        {
+            if (internal::namesOtherCharacter(header_, p, { frame_->bytes.data() + p.offset, p.length }))
+            {
+                characterMismatch_ = true;
+            }
+        }
         const auto it      = std::ranges::lower_bound(indexEntries_, offset, {}, &FooterIndexEntry::fileOffset);
         currentFrameIndex_ = static_cast<uint64_t>(std::distance(indexEntries_.begin(), it));
         return true;
     }
 }
 
-auto Reader::decodeFrame(const RawFrame& frame) -> void
-{
-    const auto& header  = frame.header;
-    const auto  rawSize = ZSTD_getFrameContentSize(frame.payload.data(), frame.payload.size());
-    if (rawSize == ZSTD_CONTENTSIZE_ERROR || rawSize == ZSTD_CONTENTSIZE_UNKNOWN)
-    {
-        throw Error(ErrorCode::CorruptFrame, "xicap: frame without a zstd content size");
-    }
-    if (rawSize > FrameLimits::MAX_CONTENT_SIZE)
-    {
-        throw Error(ErrorCode::CorruptFrame, std::format("xicap: frame content size {} over 16 MiB", rawSize));
-    }
-    if (ZSTD_findFrameCompressedSize(frame.payload.data(), frame.payload.size()) != frame.payload.size())
-    {
-        throw Error(ErrorCode::CorruptFrame, "xicap: payload is not exactly one zstd frame");
-    }
-    const auto size = static_cast<size_t>(rawSize);
-    frameData_.resize(size);
-    const size_t result = ZSTD_decompressDCtx(dctx_.get(), frameData_.data(), size, frame.payload.data(), frame.payload.size());
-    if (ZSTD_isError(result))
-    {
-        throw Error(ErrorCode::DecompressFailed, std::string("xicap: zstd decompress: ") + ZSTD_getErrorName(result));
-    }
-    if (result != size || header.packetCount == 0)
-    {
-        throw Error(ErrorCode::CorruptFrame, "xicap: corrupt frame");
-    }
-
-    const std::span<const uint8_t> content{ frameData_.data(), size };
-    size_t                         pos       = 0;
-    uint64_t                       timestamp = header.baseTimestamp;
-    for (uint32_t i = 0; i < header.packetCount; ++i)
-    {
-        PacketEntry entry{};
-        if (!pop(content, pos, entry) || entry.length > size - pos)
-        {
-            throw Error(ErrorCode::CorruptFrame, "xicap: packet runs past its frame");
-        }
-        if ((entry.flags & PacketFlag::Required & ~PacketFlag::KnownRequired) != 0)
-        {
-            throw Error(ErrorCode::UnknownPacketFlag, std::format("xicap: unknown packet flags {:#06x}", entry.flags));
-        }
-        if (entry.channel == static_cast<uint8_t>(Channel::Game))
-        {
-            uint16_t firstWord = 0;
-            if (entry.length < sizeof(FFXIPacketHeader))
-            {
-                throw Error(ErrorCode::CorruptFrame, "xicap: game packet under 4 bytes");
-            }
-            std::memcpy(&firstWord, frameData_.data() + pos, sizeof(firstWord));
-            if ((firstWord & 0x1FFU) != entry.opcode)
-            {
-                throw Error(ErrorCode::CorruptFrame, "xicap: game packet opcode differs from its header");
-            }
-            checkCharacter(entry, { frameData_.data() + pos, entry.length });
-        }
-        timestamp += entry.deltaMs;
-        packets_.push_back({ .entry = entry, .timestamp = timestamp, .dataOffset = pos, .firstMarker = 0, .markerCount = 0 });
-        pos += entry.length;
-    }
-
-    std::vector<std::pair<uint16_t, ReadMarker>> found;
-    for (uint16_t i = 0; i < header.markerCount; ++i)
-    {
-        FrameMarker marker{};
-        if (!pop(content, pos, marker) || marker.textLength > size - pos || marker.packetIndex >= header.packetCount)
-        {
-            throw Error(ErrorCode::CorruptFrame, "xicap: corrupt marker");
-        }
-        found.push_back({ marker.packetIndex, { marker.kind, std::string(reinterpret_cast<const char*>(frameData_.data() + pos), marker.textLength) } });
-        pos += marker.textLength;
-    }
-    if (pos != size)
-    {
-        throw Error(ErrorCode::CorruptFrame, "xicap: bytes after the last marker");
-    }
-    std::ranges::stable_sort(found, {}, &std::pair<uint16_t, ReadMarker>::first);
-    for (auto& [index, marker] : found)
-    {
-        auto& packet = packets_[index];
-        if (packet.markerCount == 0)
-        {
-            packet.firstMarker = markers_.size();
-        }
-        packet.markerCount++;
-        markers_.push_back(std::move(marker));
-    }
-}
-
-auto Reader::checkCharacter(const PacketEntry& entry, std::span<const uint8_t> data) -> void
-{
-    using namespace FFXIPacket;
-    if (entry.opcode != LOGIN_ZONE || (entry.flags & (PacketFlag::ClientToServer | PacketFlag::Excluded | PacketFlag::Redacted)) != 0 ||
-        data.size() < LOGIN_NAME_OFFSET + LOGIN_NAME_SIZE)
-    {
-        return;
-    }
-    uint32_t uniqueNo = 0;
-    std::memcpy(&uniqueNo, data.data() + LOGIN_UNIQUE_NO_OFFSET, sizeof(uniqueNo));
-    const auto* name = reinterpret_cast<const char*>(data.data() + LOGIN_NAME_OFFSET);
-    const auto& c    = header_.character;
-    if (uniqueNo != c.characterId ||
-        std::string_view(name, strnlen(name, LOGIN_NAME_SIZE)) != std::string_view(c.characterName.data(), strnlen(c.characterName.data(), c.characterName.size())))
-    {
-        characterMismatch_ = true;
-    }
-}
-
 auto Reader::next(ReadPacket& packet) -> bool
 {
-    while (packetPos_ >= packets_.size())
+    while (packetPos_ >= frame_->packets.size())
     {
         if (!advance())
         {
             return false;
         }
     }
-    const auto& p    = packets_[packetPos_++];
+    const auto& p    = frame_->packets[packetPos_++];
     packet.timestamp = p.timestamp;
-    packet.channel   = p.entry.channel;
-    packet.opcode    = p.entry.opcode;
-    packet.flags     = p.entry.flags;
-    packet.direction = (p.entry.flags & PacketFlag::ClientToServer) ? PacketDirection::ClientToServer : PacketDirection::ServerToClient;
-    packet.data      = { reinterpret_cast<const std::byte*>(frameData_.data() + p.dataOffset), p.entry.length };
-    packet.markers   = { markers_.data() + p.firstMarker, p.markerCount };
+    packet.channel   = p.channel;
+    packet.opcode    = p.opcode;
+    packet.flags     = p.flags;
+    packet.direction = (p.flags & PacketFlag::ClientToServer) ? PacketDirection::ClientToServer : PacketDirection::ServerToClient;
+    packet.data      = { reinterpret_cast<const std::byte*>(frame_->bytes.data() + p.offset), p.length };
+    packet.markers   = { frame_->markers.data() + p.firstMarker, p.markerCount };
     return true;
 }
 
 auto Reader::skipCurrentFrame() noexcept -> void
 {
-    packetPos_ = packets_.size();
+    packetPos_ = frame_->packets.size();
 }
 
 auto Reader::reset() -> void
 {
     nextOffset_        = dataStart_;
     currentFrameIndex_ = 0;
-    packets_.clear();
-    markers_.clear();
+    frame_->clear();
     packetPos_ = 0;
+    decoder_->reset();
 }
 
 auto Reader::seekToFrame(uint64_t frameIndex) -> SeekResult
@@ -643,8 +423,22 @@ auto Reader::seekToFrame(uint64_t frameIndex) -> SeekResult
     {
         return SeekResult::OutOfRange;
     }
-    nextOffset_ = indexEntries_[frameIndex].fileOffset;
-    return advance() ? SeekResult::Ok : SeekResult::OutOfRange;
+    // In format 4, decode from the stream's start.
+    uint64_t start = frameIndex;
+    while (header_.versionMajor != 3 && start > 0 && (indexEntries_[start].flags & IndexFlag::Restart) == 0)
+    {
+        start--;
+    }
+    nextOffset_ = indexEntries_[start].fileOffset;
+    decoder_->reset();
+    while (advance())
+    {
+        if (currentFrameIndex_ >= frameIndex)
+        {
+            return SeekResult::Ok;
+        }
+    }
+    return SeekResult::OutOfRange;
 }
 
 auto Reader::seekToTime(uint64_t timestamp) -> SeekResult
@@ -665,7 +459,7 @@ auto Reader::seekToTime(uint64_t timestamp) -> SeekResult
         return result;
     }
     // Leave next() on the first packet at or after the time.
-    while (packetPos_ < packets_.size() && packets_[packetPos_].timestamp < timestamp)
+    while (packetPos_ < frame_->packets.size() && frame_->packets[packetPos_].timestamp < timestamp)
     {
         packetPos_++;
     }
@@ -717,29 +511,30 @@ auto Reader::durationMs() const -> uint64_t
 
 auto Reader::verify() -> Verification
 {
+    return header_.versionMajor == 3 ? verify3() : verify4();
+}
+
+auto Reader::verify3() -> Verification
+{
+    using internal::checkSignature;
+    using internal::signedMessage;
     Verification result{ .key = header_.signingKey };
 
     internal::Chain chain;
     chain.start(headerBytes_);
-
-    std::vector<uint8_t> block;
-    uint64_t             offset = header_.headerSize;
-    for (uint32_t i = 0; i < header_.extensionCount; ++i)
+    for (const auto& block : blockBytes_)
     {
-        ExtensionBlockHeader hdr{};
-        readPodAt(file_, offset, hdr);
-        block.resize(sizeof(hdr) + uint64_t{ hdr.length } + sizeof(uint32_t));
-        readAt(file_, offset, block);
         chain.absorb(block);
-        offset += block.size();
     }
 
-    const uint64_t limit   = complete_ ? trailer_.indexOffset : fileSize_;
-    uint64_t       packets = 0;
-    RawFrame       frame;
-    for (offset = dataStart_; offset < limit;)
+    const uint64_t       limit   = complete_ ? trailer_.indexOffset : fileSize_;
+    uint64_t             packets = 0;
+    uint64_t             offset  = dataStart_;
+    std::vector<uint8_t> frame;
+    internal::FrameInfo  info;
+    for (; offset < limit;)
     {
-        if (!readRawFrame(offset, limit, frame))
+        if (!readRawFrame(offset, limit, frame, info))
         {
             if (complete_ && !result.firstFailureOffset)
             {
@@ -747,12 +542,12 @@ auto Reader::verify() -> Verification
             }
             break;
         }
-        if (frame.header.kind == FrameKind::Checkpoint && frame.payload.size() == sizeof(CheckpointPayload))
+        if (info.kind == FrameKind::Checkpoint && info.payloadSize == sizeof(CheckpointPayload3))
         {
-            CheckpointPayload checkpoint{};
-            std::memcpy(&checkpoint, frame.payload.data(), sizeof(checkpoint));
+            CheckpointPayload3 checkpoint{};
+            std::memcpy(&checkpoint, frame.data() + sizeof(FrameHeader3), sizeof(checkpoint));
             const bool good = checkpoint.chain == chain.value() &&
-                              internal::checkSignature(header_.signingKey, checkpoint.signature, internal::CHECKPOINT_PREFIX, chain.value());
+                              checkSignature(header_.signingKey, checkpoint.signature, signedMessage(internal::CHECKPOINT_PREFIX3, chain.value()));
             if (!result.firstFailureOffset)
             {
                 if (good)
@@ -766,16 +561,12 @@ auto Reader::verify() -> Verification
                 }
             }
         }
-        chain.begin();
-        chain.update({ reinterpret_cast<const uint8_t*>(&frame.header), sizeof(FrameHeader) });
-        chain.update(frame.payload);
-        chain.update({ reinterpret_cast<const uint8_t*>(&frame.crc), sizeof(frame.crc) });
-        chain.end();
-        if (frame.header.kind == FrameKind::Packets)
+        chain.absorb(frame);
+        if (info.kind == FrameKind::Packets)
         {
-            packets += frame.header.packetCount;
+            packets += info.packetCount;
         }
-        offset += FRAME_OVERHEAD + frame.header.payloadSize;
+        offset += frame.size();
     }
 
     if (complete_ && offset == limit)
@@ -784,7 +575,7 @@ auto Reader::verify() -> Verification
         chain.update({ reinterpret_cast<const uint8_t*>(indexEntries_.data()), indexEntries_.size() * sizeof(FooterIndexEntry) });
         chain.update({ reinterpret_cast<const uint8_t*>(&trailer_), offsetof(FooterTrailer, signature) });
         chain.end();
-        const bool good = internal::checkSignature(header_.signingKey, trailer_.signature, internal::FOOTER_PREFIX, chain.value());
+        const bool good = checkSignature(header_.signingKey, trailer_.signature, signedMessage(internal::FOOTER_PREFIX3, chain.value()));
         if (!result.firstFailureOffset)
         {
             if (good)
@@ -797,6 +588,122 @@ auto Reader::verify() -> Verification
                 result.firstFailureOffset = trailer_.indexOffset;
             }
         }
+    }
+    return result;
+}
+
+auto Reader::verify4() -> Verification
+{
+    using internal::checkSignature;
+    using internal::signedMessage;
+    Verification result{ .key = header_.signingKey };
+
+    internal::SignedStream stream;
+    stream.bytes(headerBytes_);
+    for (const auto& block : blockBytes_)
+    {
+        stream.bytes(block);
+    }
+
+    const uint64_t         limit   = complete_ ? trailer_.indexOffset : fileSize_;
+    uint64_t               packets = 0;
+    uint64_t               offset  = dataStart_;
+    std::vector<uint8_t>   frame;
+    internal::FrameInfo    info;
+    internal::Decoder      decoder(header_.versionMajor, {});
+    internal::DecodedFrame decoded;
+    const auto             failAt = [&](uint64_t at)
+    {
+        if (!result.firstFailureOffset)
+        {
+            result.firstFailureOffset = at;
+        }
+    };
+    for (; offset < limit; offset += frame.size())
+    {
+        if (!readRawFrame(offset, limit, frame, info))
+        {
+            if (complete_)
+            {
+                failAt(offset);
+            }
+            break;
+        }
+        const auto payload = std::span{ frame }.subspan(sizeof(FrameHeader), info.payloadSize);
+        if (info.kind == FrameKind::Checkpoint && info.payloadSize == sizeof(CheckpointPayload))
+        {
+            CheckpointPayload checkpoint{};
+            std::memcpy(&checkpoint, payload.data(), sizeof(checkpoint));
+            const bool good = checkpoint.packets == packets && checkpoint.digest == stream.digest() &&
+                              checkSignature(header_.signingKey, checkpoint.signature, signedMessage(internal::CHECKPOINT_PREFIX, checkpoint.digest));
+            if (result.firstFailureOffset)
+            {
+                continue;
+            }
+            if (!good)
+            {
+                failAt(offset);
+                continue;
+            }
+            result.goodCheckpoints++;
+            result.verifiedPackets     = packets;
+            result.checkpointDigest    = checkpoint.digest;
+            result.checkpointSignature = checkpoint.signature;
+        }
+        if (info.kind != FrameKind::Packets)
+        {
+            continue;
+        }
+        try
+        {
+            decoder.decode(info, payload, decoded);
+        }
+        catch (const Error&)
+        {
+            if (complete_)
+            {
+                failAt(offset);
+            }
+            break;
+        }
+        for (const auto& p : decoded.packets)
+        {
+            for (size_t m = 0; m < p.markerCount; ++m)
+            {
+                const auto& marker = decoded.markers[p.firstMarker + m];
+                stream.marker(marker.kind, marker.text);
+            }
+            stream.packet({ .timestamp = p.timestamp, .flags = p.flags, .channel = p.channel, .opcode = p.opcode, .data = { decoded.bytes.data() + p.offset, p.length } });
+            packets++;
+        }
+    }
+
+    if (!complete_ || offset != limit)
+    {
+        return result;
+    }
+    const auto end = stream.end(trailer_.totalPacketCount, trailer_.endTimestamp);
+    if ((trailer_.trailerFlags & TrailerFlag::EndUnsigned) == 0)
+    {
+        if (!checkSignature(header_.signingKey, trailer_.signature, signedMessage(internal::FOOTER_PREFIX, end)))
+        {
+            failAt(trailer_.indexOffset);
+        }
+        else if (!result.firstFailureOffset)
+        {
+            result.signedToEnd     = true;
+            result.verifiedPackets = packets;
+        }
+    }
+    if (seal_)
+    {
+        const auto* bytes = reinterpret_cast<const uint8_t*>(&*seal_);
+        result.seal       = SealCheck{
+            .key      = seal_->key,
+            .agent    = textOf(seal_->agent),
+            .sealedAt = seal_->sealedAt,
+            .good     = checkSignature(seal_->key, seal_->signature, signedMessage(internal::SEAL_PREFIX, end, std::span{ bytes, offsetof(SealBlock, signature) })),
+        };
     }
     return result;
 }

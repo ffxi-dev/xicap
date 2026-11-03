@@ -9,11 +9,19 @@
 #include <map>
 #include <memory>
 #include <optional>
-
-struct ZSTD_DCtx_s;
+#include <string>
+#include <vector>
 
 namespace xicap
 {
+
+namespace internal
+{
+class Decoder;
+struct DecodedFrame;
+struct FrameInfo;
+struct Access;
+} // namespace internal
 
 struct ZoneEntry
 {
@@ -35,17 +43,33 @@ struct SkippedRegion
     uint64_t length;
 };
 
+// Format 4: the seal of a program that rewrote the file. See FORMAT.md, Signatures.
+struct SealCheck
+{
+    PublicKey   key{};
+    std::string agent;
+    uint64_t    sealedAt{ 0 }; // Unix ms
+    // The seal's signature verifies over every packet of the file.
+    bool good{ false };
+};
+
 // What the signatures prove. See FORMAT.md, Signatures.
 struct Verification
 {
+    // The signer's key, from the header.
     PublicKey key{};
-    // The footer's signature verifies: every byte is as the recorder wrote it.
+    // The footer's signature verifies: every packet is as the signer wrote it.
     bool signedToEnd{ false };
     // Packets covered by the last signature that verifies.
     uint64_t verifiedPackets{ 0 };
     uint32_t goodCheckpoints{ 0 };
-    // First frame whose stored chain value or signature fails, if any.
+    // First checkpoint frame, or footer index, whose signature fails, if any.
     std::optional<uint64_t> firstFailureOffset;
+    // Format 4: the last checkpoint that verifies, which a rewrite of a cut-off file carries.
+    Digest    checkpointDigest{};
+    Signature checkpointSignature{};
+    // Format 4: the seal, in a file another program rewrote.
+    std::optional<SealCheck> seal;
 };
 
 class Reader
@@ -182,8 +206,8 @@ public:
     }
     [[nodiscard]] auto durationMs() const -> uint64_t;
 
-    // Recomputes the hash chain over the whole file and checks every
-    // signature. Independent of iteration.
+    // Checks every signature over the whole file, in format 3 by its hash
+    // chain and in format 4 by its signed stream. Independent of iteration.
     [[nodiscard]] auto verify() -> Verification;
 
     class Iterator
@@ -230,38 +254,27 @@ public:
     }
 
 private:
-    struct RawFrame
-    {
-        FrameHeader          header{};
-        std::vector<uint8_t> payload;
-        uint32_t             crc{};
-    };
-    struct DecodedPacket
-    {
-        PacketEntry entry;
-        uint64_t    timestamp;
-        size_t      dataOffset;
-        size_t      firstMarker;
-        size_t      markerCount;
-    };
+    friend struct internal::Access;
 
-    auto readHeader() -> void;
-    auto readExtensions() -> void;
+    auto readStart() -> void;
     auto readFooter() -> void;
     auto scanCutOff() -> void;
-    auto readRawFrame(uint64_t offset, uint64_t limit, RawFrame& out) -> bool;
+    auto readRawFrame(uint64_t offset, uint64_t limit, std::vector<uint8_t>& bytes, internal::FrameInfo& info) -> bool;
     auto resync(uint64_t from, uint64_t limit) -> std::optional<uint64_t>;
+    auto skip(uint64_t offset, uint64_t length) -> void;
     auto advance() -> bool;
-    auto decodeFrame(const RawFrame& frame) -> void;
-    auto checkCharacter(const PacketEntry& entry, std::span<const uint8_t> data) -> void;
+    auto verify3() -> Verification;
+    auto verify4() -> Verification;
 
-    std::ifstream        file_;
-    ReaderOptions        options_;
-    uint64_t             fileSize_{ 0 };
-    Header               header_{};
-    std::vector<uint8_t> headerBytes_;
-    uint64_t             dataStart_{ 0 };
-    uint64_t             endOffset_{ 0 };
+    std::ifstream                     file_;
+    ReaderOptions                     options_;
+    uint64_t                          fileSize_{ 0 };
+    Header                            header_{};
+    std::vector<uint8_t>              headerBytes_;
+    std::vector<std::vector<uint8_t>> blockBytes_; // each from type to crc
+    std::vector<uint8_t>              dictionary_; // format 3
+    uint64_t                          dataStart_{ 0 };
+    uint64_t                          endOffset_{ 0 };
 
     ExclusionPolicy             policy_;
     std::optional<SourceInfo>   source_;
@@ -270,20 +283,18 @@ private:
     bool                          complete_{ false };
     bool                          footerDamaged_{ false };
     FooterTrailer                 trailer_{};
+    std::optional<SealBlock>      seal_;
     std::vector<FooterIndexEntry> indexEntries_;
     uint64_t                      unreadBytes_{ 0 };
     bool                          characterMismatch_{ false };
     std::map<uint64_t, uint64_t>  skipped_;
 
-    RawFrame                   raw_;
-    std::vector<uint8_t>       frameData_;
-    std::vector<DecodedPacket> packets_;
-    std::vector<ReadMarker>    markers_;
-    size_t                     packetPos_{ 0 };
-    uint64_t                   nextOffset_{ 0 };
-    uint64_t                   currentFrameIndex_{ 0 };
-
-    std::unique_ptr<ZSTD_DCtx_s, void (*)(ZSTD_DCtx_s*)> dctx_;
+    std::vector<uint8_t>                    raw_;
+    std::unique_ptr<internal::Decoder>      decoder_;
+    std::unique_ptr<internal::DecodedFrame> frame_;
+    size_t                                  packetPos_{ 0 };
+    uint64_t                                nextOffset_{ 0 };
+    uint64_t                                currentFrameIndex_{ 0 };
 };
 
 } // namespace xicap

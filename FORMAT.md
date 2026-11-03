@@ -640,8 +640,9 @@ it parses.
   |---|---|---|
   | zstd level | 7 | 19 |
   | window | 2 MiB | 4 MiB |
-  | frame ends | every zone-in, 5 s, 1,000 packets, 64 KiB of plaintext, host flush | every zone-in, 4 MiB of plaintext |
-  | stream restart | 4 MiB | 4 MiB, so each frame is a stream |
+  | match table (`hashLog`) | 2^19 | the level's own |
+  | frame ends | every zone-in, 5 s, 1,000 packets, 64 KiB of plaintext, host flush | every zone-in, 1 MiB of plaintext |
+  | stream restart | 4 MiB | 4 MiB |
   | checkpoints | yes | none |
 
 - **Streams.** A writer compresses each frame's plaintext and flushes, so a
