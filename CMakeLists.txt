@@ -12,12 +12,15 @@ if(XICAP_BUILD_32BIT AND NOT MSVC)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -m32")
 endif()
 
-# Find zstd or fetch it
-find_package(zstd CONFIG QUIET)
-if(NOT zstd_FOUND)
-    find_package(PkgConfig QUIET)
-    if(PkgConfig_FOUND)
-        pkg_check_modules(ZSTD IMPORTED_TARGET libzstd)
+# Find zstd or fetch it. A shared module needs zstd built with -fPIC, which a system libzstd.a may not be.
+option(XICAP_FETCH_ZSTD "Build zstd from source even when the system has it" OFF)
+if(NOT XICAP_FETCH_ZSTD)
+    find_package(zstd CONFIG QUIET)
+    if(NOT zstd_FOUND)
+        find_package(PkgConfig QUIET)
+        if(PkgConfig_FOUND)
+            pkg_check_modules(ZSTD IMPORTED_TARGET libzstd)
+        endif()
     endif()
 endif()
 
