@@ -13,7 +13,7 @@ FIXTURE = Path(__file__).parent.parent.parent / "js" / "test" / "fixtures" / "sa
 def test_header_and_packets():
     r = xicap.Reader(FIXTURE)
 
-    assert r.version_major == 3
+    assert r.version_major == 4
     assert r.client_version == "fixture-1.0"
     assert r.capture_agent == "xicap_make_fixture"
     assert r.capture_id == bytes([0x11] * 16)
@@ -122,3 +122,37 @@ def test_conformance_set(path):
     assert r.character_mismatch == expected["characterMismatch"]
     v = r.verify()
     assert [v["signedToEnd"], v["verifiedPackets"], v["goodCheckpoints"], v["firstFailureOffset"] is not None] == expected["verify"]
+    seal = v["seal"]
+    assert (seal and [seal["key"].hex(), seal["agent"], seal["sealedAtMs"], seal["good"]]) == expected.get("seal")
+
+
+def test_transcode_seal(tmp_path):
+    out = tmp_path / "sealed.xicap"
+    result = xicap.transcode(FIXTURE, out, seal=True, seed=bytes([9] * 32), agent="mogsafe test")
+    assert result["packets"] == 51
+    v = xicap.Reader(out).verify()
+    assert v["signedToEnd"] is True
+    assert v["key"] == xicap.Reader(FIXTURE).signing_key
+    assert v["seal"]["good"] is True
+    assert v["seal"]["agent"] == "mogsafe test"
+    assert xicap.Reader(FIXTURE).verify()["seal"] is None
+
+
+def test_transcode_resign_format_3(tmp_path):
+    out = tmp_path / "resigned.xicap"
+    src = VECTORS / "clean.xicap"
+    xicap.transcode(src, out, seal=False, seed=bytes([9] * 32), agent="mogsafe test", source_hash=bytes(64), metadata=b"capture x")
+    r = xicap.Reader(out)
+    assert r.version_major == 4
+    assert r.source["format"] == "xicap"
+    assert r.source["metadata"].endswith(b"transcoded-by mogsafe test\ncapture x")
+    assert [p.data for p in r] == [p.data for p in xicap.Reader(src)]
+    assert r.verify()["signedToEnd"] is True
+
+
+def test_transcode_refuses_and_leaves_nothing(tmp_path):
+    out = tmp_path / "refused.xicap"
+    with pytest.raises(xicap.Error) as exc_info:
+        xicap.transcode(VECTORS / "clean.xicap", out, seal=True, seed=bytes(32), agent="x")
+    assert exc_info.value.code == xicap.ErrorCode.TranscodeRefused
+    assert not out.exists()
