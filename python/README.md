@@ -27,16 +27,22 @@ import xicap
 
 r = xicap.Reader("session.xicap")
 print(r.client_version, r.start_timestamp_ms)
-print(r.lobby["characterName"], "@", r.lobby["worldName"])
+print(r.character["characterName"], "@", r.character["worldName"])
 
 for pkt in r:
     if pkt.direction == xicap.PacketDirection.ServerToClient:
-        # pkt.timestamp_ms, pkt.opcode, pkt.data: bytes, pkt.markers: list[str]
+        # pkt.timestampMs, pkt.opcode, pkt.data: bytes, pkt.markers: [(MarkerKind, text)]
         ...
 
 # Random access
 r.seek_to_zone(245)
 r.seek_to_time(1_700_000_500_000)
+
+# Signatures, and a repacker's seal
+v = r.verify()   # v["signedToEnd"], v["seal"]
+
+# Rewrite at archive size; checked packet by packet before dst appears
+xicap.transcode("upload.xicap", "archived.xicap", seal=True, seed=seed32, agent="mogsafe 2026.11.4")
 ```
 
 ## API

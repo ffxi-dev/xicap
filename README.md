@@ -2,15 +2,19 @@
 
 Binary capture format and C++20 library for Final Fantasy XI network packets.
 
-A capture is a header written once, format-level extension blocks (the zstd
-dictionary, the exclusion policy, the source of converted captures),
-zstd-compressed packet frames, and a footer index once the capture is closed.
-The file only ever grows, so a capture can be uploaded while it records, and a
-cut-off capture reads up to its last intact frame. Every block carries a CRC,
-every capture is signed by its recorder's Ed25519 key, and the exclusion policy
-stubs chat before it reaches disk.
+A capture is a header written once, format-level extension blocks (the
+exclusion policy, the source of converted captures), packet frames, and a footer
+index once the capture is closed. Packet frames hold their packets in columns,
+compressed as one zstd stream that runs across frames and restarts every 4 MiB.
+The file only ever grows, and each frame is decodable the moment it is written,
+so a capture can be uploaded while it records, and a cut-off capture reads up to
+its last intact frame. Every block carries a CRC, the exclusion policy stubs
+chat before it reaches disk, and the recorder's Ed25519 key signs the packets
+themselves, so a capture can be recompressed and keep its signature.
 
-See [FORMAT.md](FORMAT.md) for the on-disk specification (format 3).
+See [FORMAT.md](FORMAT.md) for the on-disk specification (format 4) and
+[FORMAT-3.md](FORMAT-3.md) for format 3, which readers keep reading. The
+library writes format 4 only.
 
 ## Library
 
@@ -24,7 +28,7 @@ cfg.character     = character;   // content id, world, names
 cfg.network       = xicap::Network::Retail;
 cfg.signingSeed   = installSeed; // the recorder's Ed25519 seed
 
-xicap::Writer w("session.xicap", cfg);
+xicap::Writer w("session.xicap", cfg);   // FramePolicy::live(): level 7, about 5.5 MB
 w.mark(xicap::MarkerKind::Login);
 w.write(timestampMs, xicap::PacketDirection::ServerToClient,
         std::as_bytes(std::span{packetBytes, packetLen}));
@@ -41,7 +45,21 @@ for (const auto& pkt : r) {
     // pkt.timestamp, pkt.channel, pkt.opcode, pkt.flags, pkt.direction,
     // pkt.data, pkt.markers
 }
-const auto v = r.verify();   // v.signedToEnd, v.verifiedPackets
+const auto v = r.verify();   // v.signedToEnd, v.verifiedPackets, v.seal
+
+// Rewrite a capture at archive size and check it packet by packet. Seal keeps
+// the recorder's signatures and adds the archive's; Resign signs anew, and
+// names a format-3 source in a SOURCE block.
+xicap::transcode("upload.xicap", "archived.xicap",
+                 { .policy = xicap::FramePolicy::archive(),
+                   .signing = xicap::Signing::Seal,
+                   .seed = archiveSeed, .agent = "mogsafe 2026.11.4" });
+
+// Read a capture as it downloads.
+xicap::StreamReader s;
+s.push(chunk);
+xicap::ReadPacket p{};
+while (s.next(p)) { /* every packet whose frame has arrived */ }
 ```
 
 ## Build
@@ -64,7 +82,7 @@ via FetchContent). Run via `ctest` or the produced `xicap_tests` executable.
   WebAssembly via Emscripten + Embind. Works in browsers and Node.
 * **Go** — see [`go/`](go/). cgo wrapper that builds the C++ reader in place;
   needs a C++20 compiler and libzstd (`apt install libzstd-dev`). Import
-  `github.com/ffxi-dev/xicap/v3/go`.
+  `github.com/ffxi-dev/xicap/v4/go`.
 
 ## License
 
