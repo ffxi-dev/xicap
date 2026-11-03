@@ -1,12 +1,15 @@
-// Writes the conformance set: each tests/vectors/<name>.xicap with
-// <name>.json, its expected reading (see vectors.h). Every file is checked
-// against what it was built to show before its reading is saved.
+// Writes the format-4 conformance set: each tests/vectors/4-<name>.xicap with 4-<name>.json, its expected reading (see
+// vectors.h). Every file is checked against what it was built to show before its reading is saved. The format-3 files
+// in the same directory were written by xicap 3 and stay as they are.
 //
 //   xicap_make_vectors tests/vectors
 
 #include "craft.h"
 #include "search.h"
 #include "vectors.h"
+
+#include "internal/columns.h"
+#include "internal/transcode.h"
 
 #include <xicap/xicap.h>
 
@@ -51,49 +54,60 @@ auto config() -> WriterConfig
     return cfg;
 }
 
-auto policy(bool dictionary) -> FramePolicy
+// Small frames, streams of a few frames, a checkpoint every two seconds.
+auto shortStreams() -> FramePolicy
 {
-    FramePolicy p{};
+    auto p                 = FramePolicy::live();
+    p.maxFrameSize         = 128;
+    p.restartBytes         = 400;
     p.checkpointIntervalMs = 2000;
-    if (!dictionary)
-    {
-        p.dictionary = {};
-    }
     return p;
 }
 
-auto game(uint16_t opcode, size_t size, uint8_t fill) -> std::vector<std::byte>
+// Each frame a stream of its own.
+auto alone() -> FramePolicy
+{
+    auto p         = shortStreams();
+    p.restartBytes = 0;
+    return p;
+}
+
+auto game(uint16_t opcode, size_t size, uint8_t fill, uint16_t sync) -> std::vector<std::byte>
 {
     std::vector<std::byte> p(size, std::byte{ fill });
     const auto             hdr = static_cast<uint16_t>((((size / 4) & 0x7F) << 9) | (opcode & 0x1FF));
     p[0]                       = std::byte(hdr & 0xFF);
     p[1]                       = std::byte(hdr >> 8);
-    p[2]                       = std::byte{ 0x01 };
-    p[3]                       = std::byte{ 0x00 };
+    p[2]                       = std::byte(sync & 0xFF);
+    p[3]                       = std::byte(sync >> 8);
     return p;
 }
 
-// A zone-in naming the vectors' character, or another one.
-auto zoneIn(uint8_t zone, const char* name = "Nouurs", uint32_t id = 0x0A0B0C0D) -> std::vector<std::byte>
+// A zone-in naming the vectors' character.
+auto zoneIn(uint8_t zone, uint16_t sync) -> std::vector<std::byte>
 {
-    auto p                              = game(FFXIPacket::LOGIN_ZONE, 160, 0);
+    auto           p                    = game(FFXIPacket::LOGIN_ZONE, 160, 0, sync);
+    const uint32_t id                   = 0x0A0B0C0D;
     p[FFXIPacket::LOGIN_ZONE_NO_OFFSET] = std::byte{ zone };
     std::memcpy(p.data() + FFXIPacket::LOGIN_UNIQUE_NO_OFFSET, &id, sizeof(id));
-    std::memcpy(p.data() + FFXIPacket::LOGIN_NAME_OFFSET, name, std::strlen(name));
+    std::memcpy(p.data() + FFXIPacket::LOGIN_NAME_OFFSET, "Nouurs", 6);
     return p;
 }
 
-// `frames` frames of three packets, one second apart, closed.
-auto session(const fs::path& path, int frames, bool dictionary, bool close = true) -> void
+// `frames` frames of three packets, one second apart, with a note before the second packet of each.
+auto session(const fs::path& path, int frames, FramePolicy policy, bool close = true) -> void
 {
-    Writer w(path, config(), policy(dictionary));
+    Writer w(path, config(), policy);
+    w.mark(MarkerKind::Login, "in");
     for (int f = 0; f < frames; ++f)
     {
         for (int i = 0; i < 3; ++i)
         {
-            w.write(T0 + static_cast<uint64_t>(f) * 1000 + static_cast<uint64_t>(i),
-                    i % 2 ? PacketDirection::ClientToServer : PacketDirection::ServerToClient,
-                    game(static_cast<uint16_t>(0x100 + f), 16, static_cast<uint8_t>(f)));
+            if (i == 1)
+            {
+                w.mark(MarkerKind::Note, "n" + std::to_string(f));
+            }
+            w.write(T0 + static_cast<uint64_t>(f) * 1000 + static_cast<uint64_t>(i), i % 2 ? PacketDirection::ClientToServer : PacketDirection::ServerToClient, game(static_cast<uint16_t>(0x100 + f % 4), 16, static_cast<uint8_t>(f), static_cast<uint16_t>(f * 3 + i)));
         }
         w.flush();
     }
@@ -101,32 +115,6 @@ auto session(const fs::path& path, int frames, bool dictionary, bool close = tru
     {
         w.close();
     }
-}
-
-auto packetFrames(std::span<const uint8_t> bytes) -> std::vector<FrameRef>
-{
-    std::vector<FrameRef> out;
-    for (const auto& f : framesOf(bytes))
-    {
-        if (f.header.kind == FrameKind::Packets)
-        {
-            out.push_back(f);
-        }
-    }
-    return out;
-}
-
-auto rawFrame(FrameKind kind, const std::vector<uint8_t>& payload) -> std::vector<uint8_t>
-{
-    return frameBytes({ .magic = FRAME_MAGIC, .kind = kind, .reserved0 = 0, .markerCount = 0, .payloadSize = static_cast<uint32_t>(payload.size()), .packetCount = 0, .baseTimestamp = T0, .zoneId = 0, .reserved1 = 0 }, payload);
-}
-
-auto splice(const std::vector<uint8_t>& bytes, size_t at, size_t remove, const std::vector<uint8_t>& insert) -> std::vector<uint8_t>
-{
-    std::vector<uint8_t> out(bytes.begin(), bytes.begin() + static_cast<std::ptrdiff_t>(at));
-    out.insert(out.end(), insert.begin(), insert.end());
-    out.insert(out.end(), bytes.begin() + static_cast<std::ptrdiff_t>(at + remove), bytes.end());
-    return out;
 }
 
 auto count(const fs::path& path, ReaderOptions options = {}) -> uint64_t
@@ -154,6 +142,112 @@ auto refuses(const fs::path& path, ErrorCode code) -> bool
     }
 }
 
+auto cutOff(const fs::path& path) -> std::vector<uint8_t>
+{
+    auto bytes = bytesOf(path);
+    bytes.resize(footerOffset(bytes));
+    return bytes;
+}
+
+auto mogsafe() -> TranscodeOptions
+{
+    TranscodeOptions o{ .policy = FramePolicy::archive(), .signing = Signing::Seal, .seed = {}, .agent = "mogsafe vectors", .sourceHash = {}, .metadata = {} };
+    o.seed.fill(0x99);
+    return o;
+}
+
+auto seal(const fs::path& src, const fs::path& dst) -> void
+{
+    internal::transcode(src, dst, mogsafe(), { .edit = {}, .check = true, .sealedAt = T0 + 86'400'000 });
+}
+
+// FORMAT.md's example plaintext: three 0x0DF packets, syncs 1 to 3.
+auto examplePlain() -> std::vector<uint8_t>
+{
+    return {
+        0x00,
+        0x0a,
+        0x0a,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0xdf,
+        0x01,
+        0xdf,
+        0x01,
+        0xdf,
+        0x01,
+        0x00,
+        0x00,
+        0x00,
+        0x02,
+        0x02,
+        0x02,
+        0x30,
+        0xdf,
+        0x08,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0xdf,
+        0x08,
+        0x00,
+        0x00,
+        0x01,
+        0x01,
+        0x01,
+        0x01,
+        0x01,
+        0x01,
+        0x01,
+        0x01,
+        0x01,
+        0x01,
+        0x01,
+        0x01,
+        0xdf,
+        0x08,
+        0x00,
+        0x00,
+        0x02,
+        0x02,
+        0x02,
+        0x02,
+        0x02,
+        0x02,
+        0x02,
+        0x02,
+        0x02,
+        0x02,
+        0x02,
+        0x02,
+    };
+}
+
+// Three frames of their own streams, the middle one replaced by a frame holding `plain` as three packets.
+auto badMiddle(const fs::path& tmp, const fs::path& p, const std::vector<uint8_t>& plain) -> void
+{
+    session(tmp, 3, alone());
+    const auto bytes = cutOff(tmp);
+    const auto f     = packetFrames(bytes)[1];
+    const auto h     = podAt<FrameHeader>(bytes, f.offset);
+    save(p, splice(bytes, f.offset, f.size, packetFrame({ .magic = 0, .kind = FrameKind::Packets, .frameFlags = 0, .markerCount = 0, .payloadSize = 0, .packetCount = 3, .baseTimestamp = h.baseTimestamp, .zoneId = 0, .reserved = 0, .plainSize = 0 }, plain)));
+}
+
 } // namespace
 
 int main(int argc, char* argv[])
@@ -165,254 +259,248 @@ int main(int argc, char* argv[])
     }
     const fs::path dir = argv[1];
     fs::create_directories(dir);
-    const fs::path tmp = dir / "work.tmp";
+    const fs::path tmp  = dir / "work.tmp";
+    const fs::path tmp2 = dir / "work2.tmp";
 
     std::vector<std::pair<std::string, std::function<void(const fs::path&)>>> cases = {
+        { "example", [](const fs::path& p)
+          {
+              Writer w(p, config());
+              for (int i = 0; i < 3; ++i)
+              {
+                  w.write(T0 + static_cast<uint64_t>(i) * 10, PacketDirection::ServerToClient, game(0x0DF, 16, static_cast<uint8_t>(i), static_cast<uint16_t>(i + 1)));
+              }
+              w.close();
+              const auto bytes = bytesOf(p);
+              expect(plainOf(bytes, packetFrames(bytes).at(0)) == examplePlain(), "the example frame holds FORMAT.md's plaintext");
+          } },
         { "clean", [](const fs::path& p)
           {
               auto cfg           = config();
               cfg.policy.name    = "vectors";
               cfg.policy.version = 2;
               cfg.policy.rules.push_back({ .channel = 0, .direction = ExclusionDirection::Both, .action = ExclusionAction::ZeroRange, .opcode = 0x020, .ranges = { { 8, 4 }, { 30, 0xFFFFFFFF } } });
-              Writer                       w(p, cfg, policy(true));
+              Writer                       w(p, cfg, shortStreams());
               const std::vector<std::byte> hello{ std::byte{ 'h' }, std::byte{ 'i' } };
               w.addExtension(0x8000, hello);
               w.mark(MarkerKind::Login, "start");
-              const auto zone = zoneIn(230);
-              w.write(T0, PacketDirection::ServerToClient, zone);
-              w.write({ .timestamp = T0 + 1, .direction = PacketDirection::ClientToServer, .data = game(0x015, 32, 7), .provenance = PacketFlag::Injected | PacketFlag::FirstInChunk });
-              w.write(T0 + 2, PacketDirection::ServerToClient, game(0x017, 64, 'x'));  // chat: stubbed
-              w.write(T0 + 3, PacketDirection::ServerToClient, game(0x020, 40, 0xFF)); // redacted
+              w.write(T0, PacketDirection::ServerToClient, zoneIn(230, 1));
+              w.write({ .timestamp = T0 + 1, .direction = PacketDirection::ClientToServer, .data = game(0x015, 32, 7, 1), .provenance = PacketFlag::Injected | PacketFlag::FirstInChunk });
+              w.write(T0 + 2, PacketDirection::ServerToClient, game(0x017, 64, 'x', 2));  // chat: stubbed
+              w.write(T0 + 3, PacketDirection::ServerToClient, game(0x020, 40, 0xFF, 3)); // redacted
               const std::vector<std::byte> search(24, std::byte{ 0x5A });
               w.write({ .timestamp = T0 + 4, .direction = PacketDirection::ServerToClient, .data = search, .channel = 1, .opcode = 5 });
               const std::vector<std::byte> other(8, std::byte{ 0x0F });
               w.write({ .timestamp = T0 + 5, .direction = PacketDirection::ClientToServer, .data = other, .channel = 9, .opcode = 1 });
-              w.write(T0 + 3, PacketDirection::ServerToClient, game(0x0DF, 16, 1)); // clock stepped back: clamped
+              w.write(T0 + 3, PacketDirection::ServerToClient, game(0x0DF, 16, 1, 4)); // clock stepped back: clamped
               for (int f = 1; f <= 4; ++f)
               {
                   for (int i = 0; i < 3; ++i)
                   {
-                      w.write(T0 + static_cast<uint64_t>(f) * 1000 + static_cast<uint64_t>(i), PacketDirection::ServerToClient, game(0x0DF, 16, static_cast<uint8_t>(f)));
+                      w.write(T0 + static_cast<uint64_t>(f) * 1000 + static_cast<uint64_t>(i), PacketDirection::ServerToClient, game(0x0DF, 16, static_cast<uint8_t>(f), static_cast<uint16_t>(4 + f * 3 + i)));
                   }
                   w.flush();
               }
               w.flush(); // idle: signs
               w.mark(MarkerKind::Note, "between");
-              w.write(T0 + 6000, PacketDirection::ServerToClient, game(0x0DF, 16, 9));
+              w.write(T0 + 6000, PacketDirection::ServerToClient, game(0x0DF, 16, 9, 0xFFFF));
+              w.write(T0 + 6001, PacketDirection::ServerToClient, game(0x0DF, 16, 9, 0x0002)); // the sync wraps
               w.mark(MarkerKind::Logout);
               w.mark(MarkerKind::Login);
-              w.write(T0 + 9000, PacketDirection::ServerToClient, zone);
+              w.write(T0 + 9000, PacketDirection::ServerToClient, zoneIn(231, 3));
               w.close();
               Reader r(p);
-              expect(r.complete() && r.verify().signedToEnd, "clean is complete and signed");
-              expect(count(p) == 21, "clean holds 21 packets");
-              Reader     all(p);
-              ReadPacket pk{};
-              while (all.next(pk))
-              {
-              }
-              expect(!all.characterMismatch(), "clean's zone-ins name its character");
-          } },
-        { "character-mismatch", [](const fs::path& p)
-          {
-              Writer w(p, config(), policy(true));
-              w.write(T0, PacketDirection::ServerToClient, zoneIn(230));
-              w.write(T0 + 1000, PacketDirection::ServerToClient, zoneIn(231, "Someoneelse", 0x00ABCDEF));
-              w.close();
-              Reader     r(p);
-              ReadPacket pk{};
-              while (r.next(pk))
-              {
-              }
-              expect(r.characterMismatch(), "a zone-in naming another character is reported");
+              expect(r.complete() && r.verify().signedToEnd && r.verify().goodCheckpoints >= 2, "clean is complete, signed, with checkpoints");
+              expect(count(p) == 22, "clean holds 22 packets");
           } },
         { "empty", [](const fs::path& p)
           {
-              Writer(p, config(), policy(true)).close();
-              expect(count(p) == 0 && Reader(p).complete(), "empty is complete with no packets");
-          } },
-        { "converted", [](const fs::path& p)
-          {
-              auto cfg                   = config();
-              cfg.origin                 = Origin::Converted;
-              cfg.clockSource            = ClockSource::Converted;
-              cfg.network                = Network::Private;
-              cfg.startContext           = StartContext::Unknown;
-              cfg.previousCaptureId      = CaptureId{ 0x55, 0x55 };
-              const std::string manifest = "{ Captain = { Version = \"1.13.0\" }, FFXI = { IsRetail = false }, StartTime = 1790000000 }";
-              cfg.source                 = SourceInfo{ .format = "captain", .formatVersion = "1.13.0", .skippedRecords = 3, .utcOffsetSeconds = -21600, .sourceHash = {}, .metadata = { manifest.begin(), manifest.end() } };
-              cfg.source->sourceHash.fill(0xAA);
-              Writer w(p, cfg, policy(false));
-              for (int i = 0; i < 4; ++i)
-              {
-                  w.write(T0 + static_cast<uint64_t>(i) * 10, PacketDirection::ServerToClient, game(0x0DF, 16, static_cast<uint8_t>(i)));
-              }
-              w.close();
-              expect(Reader(p).source().has_value(), "converted carries its source");
+              Writer(p, config()).close();
+              expect(count(p) == 0 && Reader(p).complete() && Reader(p).verify().signedToEnd, "empty is complete and signed");
           } },
         { "search", [](const fs::path& p)
           {
-              Writer w(p, config(), policy(false));
-              w.write(T0, PacketDirection::ServerToClient, zoneIn(230));
+              Writer   w(p, config());
+              uint16_t sync = 0;
+              w.write(T0, PacketDirection::ServerToClient, zoneIn(230, sync++));
               for (const auto& m : search::recorded)
               {
                   const auto data = m.bytes();
                   w.write({ .timestamp = T0 + 100 + m.offsetMs, .direction = m.direction, .data = data, .channel = 1, .opcode = std::to_integer<uint16_t>(data[0x0B]) });
-                  w.write(T0 + 100 + m.offsetMs, PacketDirection::ServerToClient, game(0x0DF, 16, 1));
+                  w.write(T0 + 100 + m.offsetMs, PacketDirection::ServerToClient, game(0x0DF, 16, 1, sync++));
               }
               w.close();
-              Reader     r(p);
-              ReadPacket pk{};
-              size_t     searches = 0;
-              while (r.next(pk))
-              {
-                  if (pk.channel == 1)
-                  {
-                      const auto want = search::recorded[searches++].bytes();
-                      expect(pk.opcode == std::to_integer<uint16_t>(want[0x0B]) && std::equal(pk.data.begin(), pk.data.end(), want.begin(), want.end()), "search messages read back as written");
-                  }
-              }
-              expect(searches == std::size(search::recorded), "search holds every recorded message");
+              expect(count(p) == 1 + 2 * std::size(search::recorded), "search holds every recorded message");
+          } },
+        { "restarts", [](const fs::path& p)
+          {
+              session(p, 12, shortStreams());
+              const auto frames   = packetFrames(bytesOf(p));
+              const auto restarts = std::ranges::count_if(frames, [](const FrameRef& f)
+                                                          {
+                                                              return f.info.restart();
+                                                          });
+              expect(restarts >= 3 && restarts < static_cast<std::ptrdiff_t>(frames.size()), "restarts has several streams of several frames");
           } },
         { "cut-off", [&](const fs::path& p)
           {
-              session(tmp, 4, true);
-              auto       bytes = bytesOf(tmp);
-              const auto last  = packetFrames(bytes).back();
-              bytes.resize(last.offset + 10);
+              session(tmp, 6, shortStreams());
+              auto       bytes  = cutOff(tmp);
+              const auto frames = packetFrames(bytes);
+              const auto last   = std::ranges::find_if(frames.rbegin(), frames.rend(), [](const FrameRef& f)
+                                                       {
+                                                         return !f.info.restart();
+                                                       });
+              bytes.resize(last->offset + 10);
               save(p, bytes);
               Reader r(p);
-              expect(!r.complete() && count(p) == 9 && r.unreadBytes() == 10, "cut-off ends at its last intact frame");
+              expect(!r.complete() && r.unreadBytes() == 10 && count(p) > 0 && r.verify().verifiedPackets > 0, "cut-off ends mid-stream, after a checkpoint");
           } },
         { "torn-tail", [&](const fs::path& p)
           {
-              session(tmp, 4, true);
-              auto bytes = bytesOf(tmp);
-              bytes.resize(footerOffset(bytes));
+              session(tmp, 4, shortStreams());
+              auto bytes = cutOff(tmp);
               bytes.resize(bytes.size() + 4096, 0);
               save(p, bytes);
               expect(count(p) == 12 && Reader(p).unreadBytes() == 4096, "a zeroed tail is unread");
           } },
         { "damaged-footer", [&](const fs::path& p)
           {
-              session(tmp, 3, true);
+              session(tmp, 3, shortStreams());
               auto bytes = bytesOf(tmp);
               bytes[bytes.size() - 20] ^= 1;
               save(p, bytes);
               Reader r(p);
               expect(!r.complete() && r.footerDamaged() && count(p) == 9, "a damaged footer reads as cut off");
           } },
-        { "damaged-middle-complete", [&](const fs::path& p)
+        { "unknown-trailer-flag", [&](const fs::path& p)
           {
-              session(tmp, 3, true);
-              auto bytes = bytesOf(tmp);
-              bytes[packetFrames(bytes)[1].offset + 8] ^= 0x40;
+              session(tmp, 3, shortStreams());
+              auto bytes   = bytesOf(tmp);
+              auto trailer = podAt<FooterTrailer>(bytes, bytes.size() - sizeof(FooterTrailer));
+              trailer.trailerFlags |= 0x80;
+              trailer.trailerCrc = internal::crc32({ reinterpret_cast<const uint8_t*>(&trailer), offsetof(FooterTrailer, trailerCrc) });
+              std::memcpy(bytes.data() + bytes.size() - sizeof(trailer), &trailer, sizeof(trailer));
+              save(p, bytes);
+              Reader r(p);
+              expect(!r.complete() && r.footerDamaged() && count(p) == 9, "an unknown trailer flag reads as cut off");
+          } },
+        { "damaged-stream-complete", [&](const fs::path& p)
+          {
+              session(tmp, 8, shortStreams());
+              auto       bytes  = bytesOf(tmp);
+              const auto frames = packetFrames(bytes);
+              const auto target = std::ranges::find_if(frames, [](const FrameRef& f)
+                                                       {
+                                                           return !f.info.restart();
+                                                       });
+              bytes[target->offset + sizeof(FrameHeader) + 1] ^= 0x40;
               save(p, bytes);
               expect(refuses(p, ErrorCode::CorruptFrame), "a complete file with a bad frame is refused");
-              expect(count(p, { .recovery = true }) == 6, "recovery skips the bad frame");
+              Reader r(p, { .recovery = true });
+              expect(count(p, { .recovery = true }) < 24 && count(p, { .recovery = true }) > 3, "recovery resumes at the next restart");
           } },
-        { "damaged-middle-cut-off", [&](const fs::path& p)
+        { "damaged-stream-cut-off", [&](const fs::path& p)
           {
-              session(tmp, 3, true);
-              auto bytes = bytesOf(tmp);
-              bytes[packetFrames(bytes)[1].offset + 8] ^= 0x40;
-              bytes.resize(footerOffset(bytes));
+              session(tmp, 8, shortStreams());
+              auto       bytes  = cutOff(tmp);
+              const auto frames = packetFrames(bytes);
+              const auto target = std::ranges::find_if(frames, [](const FrameRef& f)
+                                                       {
+                                                           return !f.info.restart();
+                                                       });
+              bytes[target->offset + sizeof(FrameHeader) + 1] ^= 0x40;
               save(p, bytes);
-              expect(count(p) == 3, "a cut-off capture ends at its bad frame");
-              expect(count(p, { .recovery = true }) == 6, "recovery skips the bad frame");
+              expect(count(p) == static_cast<uint64_t>(target - frames.begin()) * 3, "a cut-off file ends at its bad frame");
+          } },
+        { "sealed", [&](const fs::path& p)
+          {
+              session(tmp, 6, shortStreams());
+              seal(tmp, p);
+              const auto v = Reader(p).verify();
+              expect(v.signedToEnd && v.seal && v.seal->good, "sealed keeps the recorder's signature and adds a good seal");
+          } },
+        { "sealed-cut-off", [&](const fs::path& p)
+          {
+              session(tmp, 7, shortStreams());
+              auto bytes = cutOff(tmp);
+              bytes.resize(bytes.size() - 5);
+              save(tmp2, bytes);
+              const auto before = Reader(tmp2).verify();
+              seal(tmp2, p);
+              const auto v = Reader(p).verify();
+              expect(before.verifiedPackets > 0 && v.verifiedPackets == before.verifiedPackets && !v.signedToEnd && v.seal && v.seal->good, "sealed-cut-off carries its last checkpoint");
+          } },
+        { "resigned-3", [&](const fs::path& p)
+          {
+              auto options    = mogsafe();
+              options.signing = Signing::Resign;
+              options.sourceHash.fill(0xAB);
+              options.metadata = { 'c', 'a', 'p', 't', 'u', 'r', 'e', ' ', 'x' };
+              transcode(dir / "clean.xicap", p, options);
+              Reader r(p);
+              expect(r.source() && r.source()->format == "xicap" && r.verify().signedToEnd, "resigned-3 names its format-3 source");
           } },
         { "unknown-skippable-kind", [&](const fs::path& p)
           {
-              session(tmp, 2, true);
-              auto bytes = bytesOf(tmp);
-              bytes.resize(footerOffset(bytes));
-              save(p, splice(bytes, packetFrames(bytes)[1].offset, 0, rawFrame(static_cast<FrameKind>(0x02), { 1, 2, 3 })));
+              session(tmp, 2, alone());
+              const auto                   bytes = cutOff(tmp);
+              const std::array<uint8_t, 3> payload{ 1, 2, 3 };
+              save(p, splice(bytes, packetFrames(bytes)[1].offset, 0, frameBytes(FrameHeader{ .magic = FRAME_MAGIC, .kind = static_cast<FrameKind>(0x02), .frameFlags = 0, .markerCount = 0, .payloadSize = 3, .packetCount = 0, .baseTimestamp = T0, .zoneId = 0, .reserved = 0, .plainSize = 0 }, payload)));
               expect(count(p) == 6, "an unknown skippable frame is skipped");
           } },
         { "unknown-required-kind", [&](const fs::path& p)
           {
-              session(tmp, 2, true);
-              auto bytes = bytesOf(tmp);
-              bytes.resize(footerOffset(bytes));
-              save(p, splice(bytes, packetFrames(bytes)[1].offset, 0, rawFrame(static_cast<FrameKind>(0x81), { 1, 2, 3 })));
+              session(tmp, 2, alone());
+              const auto                   bytes = cutOff(tmp);
+              const std::array<uint8_t, 3> payload{ 1, 2, 3 };
+              save(p, splice(bytes, packetFrames(bytes)[1].offset, 0, frameBytes(FrameHeader{ .magic = FRAME_MAGIC, .kind = static_cast<FrameKind>(0x81), .frameFlags = 0, .markerCount = 0, .payloadSize = 3, .packetCount = 0, .baseTimestamp = T0, .zoneId = 0, .reserved = 0, .plainSize = 0 }, payload)));
               expect(refuses(p, ErrorCode::UnknownFrameKind), "an unknown must-understand frame is refused");
           } },
         { "unknown-required-flag", [&](const fs::path& p)
           {
-              session(tmp, 2, false);
-              auto bytes = bytesOf(tmp);
-              bytes.resize(footerOffset(bytes));
-              const auto f      = packetFrames(bytes)[0];
-              const auto edited = rewriteFrame(bytes, f, [](std::vector<uint8_t>& content)
-                                               {
-                                                   auto e = podAt<PacketEntry>(content, 0);
-                                                   e.flags |= 0x0400;
-                                                   std::memcpy(content.data(), &e, sizeof(e));
-                                               });
-              save(p, splice(bytes, f.offset, f.size, edited));
+              auto plain = examplePlain();
+              plain[3]   = 0x80;
+              plain.insert(plain.begin() + 4, 0x08); // flags 0x400
+              badMiddle(tmp, p, plain);
               expect(refuses(p, ErrorCode::UnknownPacketFlag), "an unknown must-understand flag is refused");
           } },
-        { "missing-dictionary", [&](const fs::path& p)
+        { "dictionary-id", [&](const fs::path& p)
           {
-              session(tmp, 1, true);
-              auto       bytes  = bytesOf(tmp);
-              const auto length = podAt<ExtensionBlockHeader>(bytes, HEADER_SIZE).length;
-              bytes             = splice(bytes, HEADER_SIZE, 8 + length + 4, {});
-              auto header       = podAt<Header>(bytes, 0);
-              header.extensionCount--;
-              header.headerCrc = internal::crc32({ reinterpret_cast<const uint8_t*>(&header), offsetof(Header, headerCrc) });
+              session(tmp, 1, alone());
+              auto bytes          = bytesOf(tmp);
+              auto header         = podAt<Header>(bytes, 0);
+              header.dictionaryId = 0x0D1C7;
+              header.headerCrc    = internal::crc32({ reinterpret_cast<const uint8_t*>(&header), offsetof(Header, headerCrc) });
               std::memcpy(bytes.data(), &header, sizeof(header));
               save(p, bytes);
-              expect(refuses(p, ErrorCode::MissingDictionary), "a file without its dictionary is refused");
+              expect(refuses(p, ErrorCode::DictionaryMismatch), "a header naming a dictionary is refused");
           } },
-        { "bad-header-crc", [&](const fs::path& p)
+        { "bad-varint", [&](const fs::path& p)
           {
-              session(tmp, 1, true);
-              auto bytes = bytesOf(tmp);
-              bytes[120] ^= 1;
-              save(p, bytes);
-              expect(refuses(p, ErrorCode::HeaderChecksumMismatch), "a damaged header is refused");
+              auto plain = examplePlain();
+              plain[0]   = 0x80; // deltaMs 0 in six bytes
+              plain.insert(plain.begin() + 1, { 0x80, 0x80, 0x80, 0x80, 0x00 });
+              badMiddle(tmp, p, plain);
+              expect(count(p) == 3 && count(p, { .recovery = true }) == 6, "a varint over five bytes is a bad frame");
           } },
-        { "bad-extension-crc", [&](const fs::path& p)
+        { "group-sizes", [&](const fs::path& p)
           {
-              session(tmp, 1, true);
-              auto bytes = bytesOf(tmp);
-              bytes[HEADER_SIZE + 100] ^= 1;
-              save(p, bytes);
-              expect(refuses(p, ErrorCode::ExtensionChecksumMismatch), "a damaged extension is refused");
-          } },
-        { "format-2", [](const fs::path& p)
-          {
-              std::vector<uint8_t> old(512);
-              std::memcpy(old.data(), "XCAP\x02\x01", 6);
-              save(p, old);
-              expect(refuses(p, ErrorCode::BadMagic), "a 2.x file is refused");
-          } },
-        { "edited-packet", [&](const fs::path& p)
-          {
-              session(tmp, 6, false);
-              auto bytes = bytesOf(tmp);
-              bytes.resize(footerOffset(bytes));
-              // Edit the last packet frame, after at least one checkpoint.
-              const auto f      = packetFrames(bytes).back();
-              const auto edited = rewriteFrame(bytes, f, [](std::vector<uint8_t>& content)
-                                               {
-                                                   content[sizeof(PacketEntry) + 6] ^= 0xFF;
-                                               });
-              save(p, splice(bytes, f.offset, f.size, edited));
-              Reader     r(p);
-              const auto v = r.verify();
-              expect(count(p) == 18 && !v.signedToEnd && v.goodCheckpoints > 0 && v.verifiedPackets < 18, "an edited packet reads but fails after the last good checkpoint");
+              auto plain = examplePlain();
+              plain[21]  = 0x2F;
+              badMiddle(tmp, p, plain);
+              expect(count(p) == 3 && count(p, { .recovery = true }) == 6, "group sizes that do not add up make a bad frame");
           } },
     };
 
     for (const auto& [name, make] : cases)
     {
-        const auto path = dir / (name + ".xicap");
+        const auto path = dir / ("4-" + name + ".xicap");
         make(path);
-        std::ofstream(dir / (name + ".json"), std::ios::binary | std::ios::trunc) << vectors::reading(path);
-        std::cout << name << "\n";
+        std::ofstream(dir / ("4-" + name + ".json"), std::ios::binary | std::ios::trunc) << vectors::reading(path);
+        std::cout << "4-" << name << "\n";
     }
     fs::remove(tmp);
+    fs::remove(tmp2);
     return 0;
 }

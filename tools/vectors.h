@@ -44,6 +44,8 @@ inline auto errorName(xicap::ErrorCode code) -> std::string
         "InvalidExtension",
         "WriteFailed",
         "PacketTooShort",
+        "TranscodeRefused",
+        "TranscodeMismatch",
     };
     return names[static_cast<size_t>(code)];
 }
@@ -196,6 +198,10 @@ inline auto normalReading(const std::filesystem::path& path) -> std::string
     out += std::format("  \"unreadBytes\": {},\n", r.unreadBytes());
     const auto v = r.verify();
     out += std::format("  \"verify\": [{}, {}, {}, {}]", v.signedToEnd, v.verifiedPackets, v.goodCheckpoints, v.firstFailureOffset.has_value());
+    if (v.seal)
+    {
+        out += std::format(",\n  \"seal\": [{}, {}, {}, {}]", hex(v.seal->key), str(v.seal->agent), v.seal->sealedAt, v.seal->good);
+    }
     return out;
 }
 

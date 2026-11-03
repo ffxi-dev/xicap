@@ -21,7 +21,8 @@ using CaptureId  = std::array<uint8_t, 16>;
 using PublicKey  = std::array<uint8_t, 32>;
 using SecretSeed = std::array<uint8_t, 32>;
 using Signature  = std::array<uint8_t, 64>;
-using ChainValue = std::array<uint8_t, 64>;
+using ChainValue = std::array<uint8_t, 64>; // format 3's hash chain
+using Digest     = std::array<uint8_t, 64>; // format 4's D(k), a SHA-512
 
 enum class ClockSource : uint8_t
 {
@@ -105,7 +106,7 @@ struct CharacterIdentity
 };
 static_assert(sizeof(CharacterIdentity) == 44);
 
-// Written once, with every field final. See FORMAT.md.
+// Written once, with every field final. The same in formats 3 and 4. See FORMAT.md.
 struct Header
 {
     std::array<uint8_t, 8>                   magic;
@@ -151,8 +152,38 @@ struct ExtensionBlockHeader
 };
 static_assert(sizeof(ExtensionBlockHeader) == 8);
 
-// Followed by payloadSize bytes, then a u32 CRC of everything from magic on.
+// Format 4. Followed by payloadSize bytes, then a u32 CRC of everything from magic on.
 struct FrameHeader
+{
+    uint32_t  magic;
+    FrameKind kind;
+    uint8_t   frameFlags;
+    uint16_t  markerCount;
+    uint32_t  payloadSize;
+    uint32_t  packetCount;
+    uint64_t  baseTimestamp;
+    uint16_t  zoneId;
+    uint16_t  reserved;
+    uint32_t  plainSize;
+};
+static_assert(sizeof(FrameHeader) == 32);
+static_assert(offsetof(FrameHeader, plainSize) == 28);
+
+namespace FrameFlag
+{
+inline constexpr uint8_t Restart = 0x01; // this packet frame starts a zstd stream
+} // namespace FrameFlag
+
+struct CheckpointPayload
+{
+    uint64_t  packets;
+    Digest    digest;
+    Signature signature;
+};
+static_assert(sizeof(CheckpointPayload) == 136);
+
+// Format 3 (FORMAT-3.md). Followed by payloadSize bytes, then a u32 CRC.
+struct FrameHeader3
 {
     uint32_t  magic;
     FrameKind kind;
@@ -164,11 +195,11 @@ struct FrameHeader
     uint16_t  zoneId;
     uint16_t  reserved1;
 };
-static_assert(sizeof(FrameHeader) == 28);
-static_assert(offsetof(FrameHeader, baseTimestamp) == 16);
+static_assert(sizeof(FrameHeader3) == 28);
+static_assert(offsetof(FrameHeader3, baseTimestamp) == 16);
 
-// Followed by `length` bytes of packet data.
-struct PacketEntry
+// Format 3. Followed by `length` bytes of packet data.
+struct PacketEntry3
 {
     uint16_t deltaMs;
     uint16_t flags;
@@ -177,39 +208,61 @@ struct PacketEntry
     uint16_t opcode;
     uint32_t length;
 };
-static_assert(sizeof(PacketEntry) == 12);
+static_assert(sizeof(PacketEntry3) == 12);
 
-// Followed by textLength bytes of UTF-8. Sits just before packet packetIndex.
-struct FrameMarker
+// Format 3. Followed by textLength bytes of UTF-8. Sits just before packet packetIndex.
+struct FrameMarker3
 {
     uint16_t   packetIndex;
     MarkerKind kind;
     uint8_t    reserved;
     uint16_t   textLength;
 };
-static_assert(sizeof(FrameMarker) == 6);
+static_assert(sizeof(FrameMarker3) == 6);
 
-struct CheckpointPayload
+struct CheckpointPayload3
 {
     ChainValue chain;
     Signature  signature;
 };
-static_assert(sizeof(CheckpointPayload) == 128);
+static_assert(sizeof(CheckpointPayload3) == 128);
 
 struct FooterIndexEntry
 {
     uint64_t timestamp;
     uint64_t fileOffset;
     uint16_t zoneId;
-    uint8_t  reserved[6];
+    uint8_t  flags; // format 4: IndexFlag. Format 3 writes 0
+    uint8_t  reserved[5];
 };
 static_assert(sizeof(FooterIndexEntry) == 24);
+
+namespace IndexFlag
+{
+inline constexpr uint8_t Restart = 0x01;
+} // namespace IndexFlag
+
+// Format 4: what another program that rewrote the file signed.
+struct SealBlock
+{
+    uint32_t                magic;
+    uint32_t                reserved0;
+    uint64_t                sealedAt;
+    PublicKey               key;
+    std::array<char, 32>    agent;
+    Signature               signature;
+    std::array<uint8_t, 12> reserved1;
+    uint32_t                crc;
+};
+static_assert(sizeof(SealBlock) == 160);
+static_assert(offsetof(SealBlock, signature) == 80);
+static_assert(offsetof(SealBlock, crc) == 156);
 
 struct FooterTrailer
 {
     uint64_t  endTimestamp;
     uint64_t  totalPacketCount;
-    uint32_t  reserved;
+    uint32_t  trailerFlags; // format 4: TrailerFlag. Format 3 writes 0
     uint32_t  entryCount;
     uint64_t  indexOffset;
     uint32_t  indexCrc;
@@ -221,6 +274,13 @@ struct FooterTrailer
 static_assert(sizeof(FooterTrailer) == 112);
 static_assert(offsetof(FooterTrailer, signature) == 40);
 static_assert(offsetof(FooterTrailer, trailerCrc) == 104);
+
+namespace TrailerFlag
+{
+inline constexpr uint32_t Sealed      = 0x01; // a seal precedes the trailer
+inline constexpr uint32_t EndUnsigned = 0x02; // the signer never signed the end; signature is zero
+inline constexpr uint32_t Known       = Sealed | EndUnsigned;
+} // namespace TrailerFlag
 
 struct ExclusionPolicyHeader
 {
@@ -367,6 +427,8 @@ enum class ErrorCode
     InvalidExtension,
     WriteFailed,
     PacketTooShort,
+    TranscodeRefused,
+    TranscodeMismatch,
 };
 
 class Error : public std::runtime_error

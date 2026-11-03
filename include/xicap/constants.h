@@ -15,8 +15,10 @@ namespace xicap
 inline constexpr std::array<uint8_t, 8> MAGIC{ 0x89, 'X', 'C', 'P', '\r', '\n', 0x1A, '\n' };
 inline constexpr uint32_t               FRAME_MAGIC  = 0x52464358; // 'XCFR'
 inline constexpr uint32_t               FOOTER_MAGIC = 0x46504358; // 'XCPF'
+inline constexpr uint32_t               SEAL_MAGIC   = 0x4C534358; // 'XCSL'
 
-inline constexpr uint8_t VERSION_MAJOR = 3;
+// The version the writer writes. Readers also read format 3 (FORMAT-3.md).
+inline constexpr uint8_t VERSION_MAJOR = 4;
 inline constexpr uint8_t VERSION_MINOR = 0;
 
 inline constexpr uint16_t HEADER_SIZE     = 384;
@@ -24,14 +26,11 @@ inline constexpr uint16_t HEADER_SIZE_MAX = 4096;
 
 namespace FrameLimits
 {
-// Writer defaults for ending a frame.
-inline constexpr size_t   MAX_COMPRESSED_SIZE = 64 * 1024;
-inline constexpr uint32_t MAX_PACKET_COUNT    = 1000;
-inline constexpr uint64_t MAX_TIME_WINDOW_MS  = 5000;
 // Hard limits from FORMAT.md.
 inline constexpr uint64_t MAX_CONTENT_SIZE   = 16 * 1024 * 1024;
-inline constexpr uint32_t MAX_PACKETS        = UINT16_MAX;
+inline constexpr uint32_t MAX_PACKETS        = 1024 * 1024;
 inline constexpr uint32_t MAX_EXTENSION_SIZE = 16 * 1024 * 1024;
+inline constexpr int      MAX_WINDOW_LOG     = 23;
 } // namespace FrameLimits
 
 inline constexpr uint64_t CHECKPOINT_INTERVAL_MS = 60'000;
