@@ -291,9 +291,11 @@ extern "C" xicap_writer* xicap_writer_open(const char* path, const xicap_writer_
                                    config.policy = std::move(p);
                                }
                                auto policy = info->preset == 1 ? xicap::FramePolicy::archive() : xicap::FramePolicy::live();
-                               if (info->level != 0)
+                               // Another level takes its own match table: the live one suits level 7.
+                               if (info->level != 0 && info->level != policy.compressionLevel)
                                {
                                    policy.compressionLevel = info->level;
+                                   policy.hashLog          = 0;
                                }
                                w = new xicap_writer{ xicap::Writer{ path, std::move(config), policy } };
                                });
