@@ -66,6 +66,40 @@ auto text(const std::array<char, N>& field) -> std::string
     return { field.data(), ::strnlen(field.data(), N) };
 }
 
+// A JS-owned packet object.
+auto packetObject(const xicap::ReadPacket& p) -> em::val
+{
+    em::val o = em::val::object();
+    o.set("timestampMs", static_cast<double>(p.timestamp));
+    o.set("channel", p.channel);
+    o.set("opcode", p.opcode);
+    o.set("flags", p.flags);
+    o.set("direction", static_cast<int>(p.direction));
+    o.set("data", copyBytes(p.data.data(), p.data.size()));
+    em::val markers = em::val::array();
+    size_t  mi      = 0;
+    for (const auto& m : p.markers)
+    {
+        em::val marker = em::val::object();
+        marker.set("kind", static_cast<int>(m.kind));
+        marker.set("text", m.text);
+        markers.set(mi++, marker);
+    }
+    o.set("markers", markers);
+    return o;
+}
+
+auto characterObject(const xicap::CharacterIdentity& c) -> em::val
+{
+    em::val o = em::val::object();
+    o.set("contentId", static_cast<double>(c.contentId));
+    o.set("characterId", static_cast<double>(c.characterId));
+    o.set("worldId", c.worldId);
+    o.set("characterName", text(c.characterName));
+    o.set("worldName", text(c.worldName));
+    return o;
+}
+
 // Wraps xicap::Reader for Embind. Lifecycle: Reader.open writes the input bytes
 // to a MEMFS path and constructs the C++ Reader against that path. delete()
 // releases the C++ object; the JS wrapper removes the MEMFS file.
@@ -166,14 +200,7 @@ public:
 
     [[nodiscard]] auto character() const -> em::val
     {
-        const auto& c = reader_->character();
-        em::val     o = em::val::object();
-        o.set("contentId", static_cast<double>(c.contentId));
-        o.set("characterId", static_cast<double>(c.characterId));
-        o.set("worldId", c.worldId);
-        o.set("characterName", text(c.characterName));
-        o.set("worldName", text(c.worldName));
-        return o;
+        return characterObject(reader_->character());
     }
 
     [[nodiscard]] auto policy() const -> em::val
@@ -234,6 +261,16 @@ public:
                                 o.set("verifiedPackets", static_cast<double>(v.verifiedPackets));
                                 o.set("goodCheckpoints", static_cast<double>(v.goodCheckpoints));
                                 o.set("firstFailureOffset", v.firstFailureOffset ? em::val(static_cast<double>(*v.firstFailureOffset)) : em::val::null());
+                                em::val seal = em::val::null();
+                                if (v.seal)
+                                {
+                                    seal = em::val::object();
+                                    seal.set("key", copyBytes(v.seal->key));
+                                    seal.set("agent", v.seal->agent);
+                                    seal.set("sealedAtMs", static_cast<double>(v.seal->sealedAt));
+                                    seal.set("good", v.seal->good);
+                                }
+                                o.set("seal", seal);
                                 return o;
                             });
     }
@@ -293,25 +330,7 @@ public:
                                 {
                                     return em::val::null();
                                 }
-                                em::val o = em::val::object();
-                                o.set("timestampMs", static_cast<double>(pkt_.timestamp));
-                                o.set("channel", pkt_.channel);
-                                o.set("opcode", pkt_.opcode);
-                                o.set("flags", pkt_.flags);
-                                o.set("direction", static_cast<int>(pkt_.direction));
-                                o.set("data", copyBytes(pkt_.data.data(), pkt_.data.size()));
-
-                                em::val markers = em::val::array();
-                                size_t  mi      = 0;
-                                for (const auto& m : pkt_.markers)
-                                {
-                                    em::val marker = em::val::object();
-                                    marker.set("kind", static_cast<int>(m.kind));
-                                    marker.set("text", m.text);
-                                    markers.set(mi++, marker);
-                                }
-                                o.set("markers", markers);
-                                return o;
+                                return packetObject(pkt_);
                             });
     }
 
@@ -347,10 +366,86 @@ private:
     xicap::ReadPacket              pkt_{};
 };
 
+// Wraps xicap::StreamReader: a capture's bytes in, as they arrive; packets out.
+class JsStreamReader
+{
+public:
+    // The packets whose frames this chunk completed.
+    auto push(const em::val& chunk) -> em::val
+    {
+        return withJsErrors([&]() -> em::val
+                            {
+                                const auto           length = chunk["length"].as<size_t>();
+                                std::vector<uint8_t> bytes(length);
+                                em::val(em::typed_memory_view(length, bytes.data())).call<void>("set", chunk);
+                                reader_.push(bytes);
+                                em::val           out = em::val::array();
+                                xicap::ReadPacket p{};
+                                for (size_t i = 0; reader_.next(p); ++i)
+                                {
+                                    out.set(i, packetObject(p));
+                                }
+                                return out;
+                            });
+    }
+    [[nodiscard]] auto ready() const -> bool
+    {
+        return reader_.ready();
+    }
+    [[nodiscard]] auto stopped() const -> bool
+    {
+        return reader_.stopped();
+    }
+    [[nodiscard]] auto unreadBytes() const -> double
+    {
+        return static_cast<double>(reader_.unreadBytes());
+    }
+    [[nodiscard]] auto versionMajor() const -> uint8_t
+    {
+        return reader_.versionMajor();
+    }
+    [[nodiscard]] auto startTimestampMs() const -> double
+    {
+        return static_cast<double>(reader_.startTimestamp());
+    }
+    [[nodiscard]] auto origin() const -> int
+    {
+        return static_cast<int>(reader_.origin());
+    }
+    [[nodiscard]] auto character() const -> em::val
+    {
+        return characterObject(reader_.character());
+    }
+    [[nodiscard]] auto clientVersion() const -> std::string
+    {
+        return reader_.clientVersion();
+    }
+    [[nodiscard]] auto captureAgent() const -> std::string
+    {
+        return reader_.captureAgent();
+    }
+
+private:
+    xicap::StreamReader reader_;
+};
+
 } // namespace
 
 EMSCRIPTEN_BINDINGS(xicap_module)
 {
+    em::class_<JsStreamReader>("StreamReader")
+        .constructor<>()
+        .function("push", &JsStreamReader::push)
+        .function("ready", &JsStreamReader::ready)
+        .function("stopped", &JsStreamReader::stopped)
+        .function("unreadBytes", &JsStreamReader::unreadBytes)
+        .function("versionMajor", &JsStreamReader::versionMajor)
+        .function("startTimestampMs", &JsStreamReader::startTimestampMs)
+        .function("origin", &JsStreamReader::origin)
+        .function("character", &JsStreamReader::character)
+        .function("clientVersion", &JsStreamReader::clientVersion)
+        .function("captureAgent", &JsStreamReader::captureAgent);
+
     em::class_<JsReader>("Reader")
         .constructor<std::string, bool>()
         .function("versionMajor", &JsReader::versionMajor)

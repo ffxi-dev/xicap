@@ -4,7 +4,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
-import { Reader, XicapError, ErrorCode } from "../dist/index.js";
+import { Reader, StreamReader, XicapError, ErrorCode } from "../dist/index.js";
 
 // Written by tools/xicap_make_fixture; see its comments for the contents.
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -13,7 +13,7 @@ const fixturePath = path.resolve(here, "fixtures/sample.xicap");
 test("reads header and packets from the fixture", async () => {
     const r = await Reader.open(await readFile(fixturePath));
     try {
-        assert.equal(r.versionMajor, 3);
+        assert.equal(r.versionMajor, 4);
         assert.equal(r.clientVersion, "fixture-1.0");
         assert.equal(r.captureAgent, "xicap_make_fixture");
         assert.deepEqual(Array.from(r.captureId), new Array(16).fill(0x11));
@@ -50,6 +50,7 @@ test("reads header and packets from the fixture", async () => {
         assert.equal(v.signedToEnd, true);
         assert.equal(v.verifiedPackets, 51);
         assert.equal(v.firstFailureOffset, null);
+        assert.equal(v.seal, null);
     } finally {
         r.close();
     }
@@ -112,8 +113,36 @@ test("reads the conformance set as recorded", async () => {
             assert.equal(r.characterMismatch, expected.characterMismatch, name);
             const v = r.verify();
             assert.deepEqual([v.signedToEnd, v.verifiedPackets, v.goodCheckpoints, v.firstFailureOffset !== null], expected.verify, name);
+            assert.deepEqual(v.seal && [hex(v.seal.key), v.seal.agent, v.seal.sealedAtMs, v.seal.good], expected.seal ?? null, name);
         } finally {
             r.close();
+        }
+    }
+});
+
+test("the stream reader gives the same packets in chunks of any size", async () => {
+    const dir = path.resolve(here, "../../tests/vectors");
+    const files = [fixturePath, ...(await readdir(dir)).filter((n) => n.endsWith(".xicap")).map((n) => path.join(dir, n))];
+    const shape = (p) => [p.timestampMs, p.channel, p.opcode, p.flags, Buffer.from(p.data).toString("hex"), p.markers];
+    for (const file of files) {
+        const bytes = new Uint8Array(await readFile(file));
+        let whole;
+        try {
+            const r = await Reader.open(bytes);
+            whole = [...r].map(shape);
+            r.close();
+        } catch {
+            continue; // refused
+        }
+        for (const size of [1, 7, 4096, 65536]) {
+            const s = await StreamReader.create();
+            const got = [];
+            for (let at = 0; at < bytes.length; at += size) {
+                got.push(...s.push(bytes.subarray(at, at + size)).map(shape));
+            }
+            assert.equal(s.ready, true, file);
+            assert.deepEqual(got, whole, `${file} in chunks of ${size}`);
+            s.close();
         }
     }
 });

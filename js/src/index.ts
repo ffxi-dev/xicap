@@ -1,11 +1,15 @@
 // xicap wasm reader. Uses the C++ Reader compiled via Emscripten + Embind.
 // Public API:
 //
-//   import { Reader } from "@xicap/wasm";
+//   import { Reader, StreamReader } from "@xicap/wasm";
 //   const r = await Reader.open(bytes);
 //   for (const pkt of r) { ... }
 //   r.verify().signedToEnd;
 //   r.close();
+//
+//   const s = await StreamReader.create();
+//   for await (const chunk of download) for (const pkt of s.push(chunk)) { ... }
+//   s.close();
 //
 // `bytes` accepts ArrayBuffer or any TypedArray. The whole buffer is copied
 // into the wasm heap (via MEMFS); large captures use proportional memory.
@@ -99,6 +103,8 @@ export const enum ErrorCode {
     InvalidExtension = 23,
     WriteFailed = 24,
     PacketTooShort = 25,
+    TranscodeRefused = 26,
+    TranscodeMismatch = 27,
 }
 
 export class XicapError extends Error {
@@ -151,12 +157,22 @@ export interface SourceInfo {
     metadata: Uint8Array;
 }
 
+// Format 4: the seal of a program that rewrote the file.
+export interface Seal {
+    key: Uint8Array;
+    agent: string;
+    sealedAtMs: number;
+    // Its signature verifies over every packet of the file.
+    good: boolean;
+}
+
 export interface Verification {
     key: Uint8Array;
     signedToEnd: boolean;
     verifiedPackets: number;
     goodCheckpoints: number;
     firstFailureOffset: number | null;
+    seal: Seal | null;
 }
 
 export interface ZoneEntry {
@@ -308,5 +324,46 @@ export class Reader {
 
     seekToZone(zoneId: number): SeekResult {
         return rethrowXicapError(this.module, () => this.native.seekToZone(zoneId));
+    }
+}
+
+// Reads a capture of format 3 or 4 as its bytes arrive, holding only the frame
+// being received and one zstd stream's history. It stops at the first bytes
+// that are not a whole, valid frame: in a complete file, the footer.
+export class StreamReader {
+    static async create(): Promise<StreamReader> {
+        const module = await getModule();
+        return new StreamReader(new module.StreamReader(), module);
+    }
+
+    private closed = false;
+
+    private constructor(
+        private readonly native: any,
+        private readonly module: any,
+    ) {}
+
+    // The packets whose frames this chunk completed. Throws XicapError when the
+    // file must be refused.
+    push(chunk: Uint8Array): Packet[] {
+        return rethrowXicapError(this.module, () => this.native.push(chunk));
+    }
+
+    // True once the header and extension blocks have arrived.
+    get ready(): boolean { return this.native.ready(); }
+    // True once the reader met bytes that are not a whole, valid frame.
+    get stopped(): boolean { return this.native.stopped(); }
+    get unreadBytes(): number { return this.native.unreadBytes(); }
+    get versionMajor(): number { return this.native.versionMajor(); }
+    get startTimestampMs(): number { return this.native.startTimestampMs(); }
+    get origin(): Origin { return this.native.origin(); }
+    get character(): CharacterIdentity { return this.native.character(); }
+    get clientVersion(): string { return this.native.clientVersion(); }
+    get captureAgent(): string { return this.native.captureAgent(); }
+
+    close(): void {
+        if (this.closed) return;
+        this.closed = true;
+        this.native.delete();
     }
 }
