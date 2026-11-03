@@ -10,6 +10,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(XICAP_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
 set(XICAP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(XICAP_FETCH_ZSTD ON CACHE BOOL "" FORCE)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/.. xicap_lib)
 
 # pybind11 — fetched if not provided by the build environment.
