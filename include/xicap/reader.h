@@ -121,10 +121,6 @@ public:
     {
         return header_.startContext;
     }
-    [[nodiscard]] auto recordingMode() const noexcept -> RecordingMode
-    {
-        return header_.recordingMode;
-    }
     [[nodiscard]] auto character() const noexcept -> const CharacterIdentity&
     {
         return header_.character;

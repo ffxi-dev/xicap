@@ -458,14 +458,11 @@ func TestTranscode(t *testing.T) {
 		t.Fatal("a recorder's own file has a seal")
 	}
 
-	if in.RecordingMode != ModeDefault {
-		t.Fatalf("mode: %v", in.RecordingMode)
-	}
-	everything := info()
-	everything.RecordingMode = ModeEverything
-	everything.Policy = &Policy{Name: "none", Version: 1}
-	if s, err := Read(capture(t, 1, everything)); err != nil || s.RecordingMode != ModeEverything || s.RuleCount != 0 {
-		t.Fatalf("everything: %+v %v", s, err)
+	// A recording that keeps chat has a policy with no rules, and covers nothing of the default's.
+	keeps := info()
+	keeps.Policy = &Policy{Name: "none", Version: 1}
+	if s, err := Read(capture(t, 1, keeps)); err != nil || s.RuleCount != 0 || s.CoversDefault || !in.CoversDefault {
+		t.Fatalf("chat kept: %+v %v", s, err)
 	}
 	if !reflect.DeepEqual(in.Channels, []uint8{0}) {
 		t.Fatalf("channels: %v", in.Channels)

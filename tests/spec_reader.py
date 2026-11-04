@@ -238,9 +238,7 @@ class Capture:
         self.capture_id = d[24:40]
         self.previous_capture_id = d[40:56]
         self.start_timestamp = struct.unpack_from("<Q", d, 56)[0]
-        self.clock_source, self.origin, self.network, self.start_context, self.recording_mode = d[67], d[68], d[69], d[70], d[71]
-        if self.recording_mode > 2:
-            raise Refused("unknown-required", "recording mode")
+        self.clock_source, self.origin, self.network, self.start_context = d[67], d[68], d[69], d[70]
         self.dictionary_id = struct.unpack_from("<I", d, 72)[0]
         if self.dictionary_id:
             raise Refused("dictionary", "format 4 has no dictionary")
@@ -572,7 +570,6 @@ def reading(path: Path) -> dict:
             "origin": c.origin,
             "network": c.network,
             "startContext": c.start_context,
-            "recordingMode": c.recording_mode,
             "signingKey": c.signing_key.hex(),
             "captureAgent": c.capture_agent,
             "clientVersion": c.client_version,

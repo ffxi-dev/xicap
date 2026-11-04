@@ -90,7 +90,7 @@ frame, or at close if there is none.
 | 68 | 1 | `origin` | `0` unknown, `1` recorded live, `2` converted from another format |
 | 69 | 1 | `network` | `0` unknown, `1` retail, `2` private server |
 | 70 | 1 | `startContext` | `0` unknown, `1` starts at a login, `2` starts mid-session |
-| 71 | 1 | `recordingMode` | what the recorder kept of what players write: `0` default, `1` everything, `2` anonymous. See below |
+| 71 | 1 | `reserved` | |
 | 72 | 4 | `dictionaryId` | `0`. A reader refuses any other value |
 | 76 | 4 | `reserved` | |
 | 80 | 32 | `signingKey` | the signer's Ed25519 public key |
@@ -117,20 +117,7 @@ grow the header: it adds fields in the reserved bytes or after them, moves the
 CRC to the new end, and raises `headerSize`.
 
 A reader refuses the file if the magic differs, `versionMajor` is not 4,
-`headerSize` is out of range, `headerCrc` fails, `recordingMode` is above 2, or
-`dictionaryId` is not 0.
-
-`recordingMode` tells a reader whether chat is in the file and whether names
-are real:
-
-| Mode | Name | The exclusion policy | Names and player ids |
-|-----:|------|----------------------|----------------------|
-| 0 | default | removes the text of chat, as the library's default does | as the game sent them |
-| 1 | everything | has no rules: chat is kept | as the game sent them |
-| 2 | anonymous | removes the text of chat, as in mode 0 | replaced by the recorder with pseudonyms of the same length |
-
-A writer refuses mode 1 with a policy that has rules. Whether a policy removes
-enough for mode 0 or 2 is the archive's rule.
+`headerSize` is out of range, `headerCrc` fails, or `dictionaryId` is not 0.
 
 `dictionaryId` stays in the header so a later version can add a dictionary
 behind a check old readers already make.
@@ -576,7 +563,9 @@ of one file need not match byte for byte.
 
 Every capture carries the exclusion policy its writer applied, in an
 `EXCLUSION_POLICY` block. The writer applies it to each packet before
-compressing the packet, so excluded bytes never reach the file.
+compressing the packet, so excluded bytes never reach the file. A policy with no
+rules says the recorder kept everything, chat included; whether to accept that
+is the archive's rule.
 
 | Off | Size | Field |
 |----:|-----:|-------|
@@ -741,7 +730,7 @@ one packet frame, and the footer. Offsets are in hex.
 00000010  00 00 00 00 00 00 00 00 33 33 33 33 33 33 33 33  reserved; captureId
 00000020  33 33 33 33 33 33 33 33 00 00 00 00 00 00 00 00  previousCaptureId
 00000030  00 00 00 00 00 00 00 00 00 6c 50 c4 a0 01 00 00  startTimestamp
-00000040  00 00 00 01 01 01 01 00 00 00 00 00 00 00 00 00  reserved; clockSource 1 (live), origin 1 (live), network 1 (retail), startContext 1 (login), recordingMode 0 (default); dictionaryId 0; reserved
+00000040  00 00 00 01 01 01 01 00 00 00 00 00 00 00 00 00  reserved; clockSource 1 (live), origin 1 (live), network 1 (retail), startContext 1 (login), reserved; dictionaryId 0; reserved
 00000050  d7 59 79 3b bc 13 a2 81 9a 82 7c 76 ad b6 fb a8  signingKey
 00000060  a4 9a ee 00 7f 49 f2 d0 99 2d 99 b8 25 ad 2c 48
 00000070  78 69 63 61 70 5f 6d 61 6b 65 5f 76 65 63 74 6f  captureAgent

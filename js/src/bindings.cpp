@@ -160,10 +160,6 @@ public:
     {
         return static_cast<int>(reader_->startContext());
     }
-    [[nodiscard]] auto recordingMode() const -> int
-    {
-        return static_cast<int>(reader_->recordingMode());
-    }
     // JS numbers are doubles, safe up to 2^53. Unix-ms timestamps fit.
     [[nodiscard]] auto startTimestampMs() const -> double
     {
@@ -472,7 +468,6 @@ EMSCRIPTEN_BINDINGS(xicap_module)
         .function("origin", &JsReader::origin)
         .function("network", &JsReader::network)
         .function("startContext", &JsReader::startContext)
-        .function("recordingMode", &JsReader::recordingMode)
         .function("startTimestampMs", &JsReader::startTimestampMs)
         .function("endTimestampMs", &JsReader::endTimestampMs)
         .function("durationMs", &JsReader::durationMs)

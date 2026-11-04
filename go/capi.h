@@ -42,9 +42,8 @@ extern "C"
         uint8_t    origin;
         uint8_t    network;
         uint8_t    start_context;
-        uint8_t    recording_mode; // 0 default, 1 everything, 2 anonymous
-        uint16_t   start_zone_id;  // first packet frame's zone
-        uint16_t   end_zone_id;    // last packet frame's zone
+        uint16_t   start_zone_id; // first packet frame's zone
+        uint16_t   end_zone_id;   // last packet frame's zone
         uint64_t   start_timestamp;
         uint64_t   end_timestamp; // last packet read
         uint64_t   packets;
@@ -120,7 +119,6 @@ extern "C"
         uint8_t     origin;
         uint8_t     network;
         uint8_t     start_context;
-        uint8_t     recording_mode;
         uint8_t     previous_capture_id[16];
         uint8_t     signing_seed[32];
         int         preset; // 0 live, 1 archive

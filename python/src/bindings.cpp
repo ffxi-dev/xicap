@@ -287,13 +287,7 @@ PYBIND11_MODULE(_xicap, m)
         .value("WriteFailed", xicap::ErrorCode::WriteFailed)
         .value("PacketTooShort", xicap::ErrorCode::PacketTooShort)
         .value("TranscodeRefused", xicap::ErrorCode::TranscodeRefused)
-        .value("TranscodeMismatch", xicap::ErrorCode::TranscodeMismatch)
-        .value("UnknownRecordingMode", xicap::ErrorCode::UnknownRecordingMode);
-
-    py::enum_<xicap::RecordingMode>(m, "RecordingMode")
-        .value("Default", xicap::RecordingMode::Default)
-        .value("Everything", xicap::RecordingMode::Everything)
-        .value("Anonymous", xicap::RecordingMode::Anonymous);
+        .value("TranscodeMismatch", xicap::ErrorCode::TranscodeMismatch);
 
     // Map xicap::Error onto a Python exception with a .code attribute.
     static py::exception<xicap::Error> errExc(m, "Error");
