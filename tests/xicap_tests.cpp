@@ -639,8 +639,7 @@ TEST_CASE("a damaged middle frame")
     SECTION("with a footer: refused, or skipped in recovery mode")
     {
         save(tmp.path, damage(alone()));
-        Reader r(tmp.path);
-        CHECK_THROWS_AS(readAll(r), Error);
+        CHECK_THROWS_AS(readAll(tmp.path), Error);
         CHECK(readAll(tmp.path, { .recovery = true }).size() == 6);
     }
     SECTION("without a footer: the capture ends there, or recovery skips it")

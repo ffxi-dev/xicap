@@ -624,7 +624,14 @@ holds a bad frame before it is bad too, since its copies may reach back into
 the bad one.
 
 In a complete file, frames run up to `indexOffset`, and a bad frame makes the
-reader refuse the file.
+reader refuse the file. Neither the index nor the trailer is signed, yet seeks
+and zone lists follow them, so a reader also refuses a complete file unless,
+walking the frame headers from the end of the extension blocks, the last frame
+ends at `indexOffset`, the index holds exactly one entry per packet frame, in
+order, whose `fileOffset`, `timestamp`, `zoneId`, and restart bit are the
+frame's offset, `baseTimestamp`, `zoneId`, and restart bit, and the trailer's
+`frameCount` and `totalPacketCount` are the number of frames and the sum of the
+packet frames' `packetCount`. In recovery mode it reads such a file as cut off.
 
 In a cut-off file, frames run up to the first bad frame. The capture ends there,
 and the reader reports how many bytes it did not read.

@@ -256,15 +256,16 @@ public:
 private:
     friend struct internal::Access;
 
-    auto readStart() -> void;
-    auto readFooter() -> void;
-    auto scanCutOff() -> void;
-    auto readRawFrame(uint64_t offset, uint64_t limit, std::vector<uint8_t>& bytes, internal::FrameInfo& info) -> bool;
-    auto resync(uint64_t from, uint64_t limit) -> std::optional<uint64_t>;
-    auto skip(uint64_t offset, uint64_t length) -> void;
-    auto advance() -> bool;
-    auto verify3() -> Verification;
-    auto verify4() -> Verification;
+    auto               readStart() -> void;
+    auto               readFooter() -> void;
+    [[nodiscard]] auto indexDisagreement() -> const char*;
+    auto               scanCutOff() -> void;
+    auto               readRawFrame(uint64_t offset, uint64_t limit, std::vector<uint8_t>& bytes, internal::FrameInfo& info) -> bool;
+    auto               resync(uint64_t from, uint64_t limit) -> std::optional<uint64_t>;
+    auto               skip(uint64_t offset, uint64_t length) -> void;
+    auto               advance() -> bool;
+    auto               verify3() -> Verification;
+    auto               verify4() -> Verification;
 
     std::ifstream                     file_;
     ReaderOptions                     options_;

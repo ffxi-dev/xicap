@@ -52,6 +52,21 @@ Reader::Reader(const std::filesystem::path& path, ReaderOptions options)
     readFooter();
     if (complete_)
     {
+        if (const char* what = indexDisagreement())
+        {
+            if (!options_.recovery)
+            {
+                throw Error(ErrorCode::CorruptFrame, std::format("xicap: the footer's {} disagrees with the frames", what));
+            }
+            // Salvage: read the frames as a cut-off file would.
+            complete_      = false;
+            footerDamaged_ = true;
+            seal_.reset();
+            indexEntries_.clear();
+        }
+    }
+    if (complete_)
+    {
         endOffset_ = trailer_.indexOffset;
     }
     else
@@ -198,6 +213,59 @@ auto Reader::readFooter() -> void
     indexEntries_  = std::move(index);
     complete_      = true;
     footerDamaged_ = false;
+}
+
+// The index and the trailer are not signed, and seeks and zone lists follow them, so in format 4 they must agree
+// with the frames: one entry per packet frame, in order, with its offset, time, zone, and restart bit, and the
+// frame and packet counts. Reads frame headers only. Returns what disagrees, or null.
+auto Reader::indexDisagreement() -> const char*
+{
+    if (header_.versionMajor == 3)
+    {
+        return nullptr;
+    }
+    uint64_t offset  = dataStart_;
+    uint64_t entry   = 0;
+    uint64_t frames  = 0;
+    uint64_t packets = 0;
+    while (offset < trailer_.indexOffset)
+    {
+        FrameHeader h{};
+        if (offset + sizeof(h) + sizeof(uint32_t) > trailer_.indexOffset || !readPodAt(file_, offset, h) || h.magic != FRAME_MAGIC)
+        {
+            return "index offset";
+        }
+        const uint64_t size = sizeof(h) + uint64_t{ h.payloadSize } + sizeof(uint32_t);
+        if (offset + size > trailer_.indexOffset)
+        {
+            return "index offset";
+        }
+        if (h.kind == FrameKind::Packets)
+        {
+            if (entry >= indexEntries_.size())
+            {
+                return "index";
+            }
+            const auto& e = indexEntries_[entry++];
+            if (e.fileOffset != offset || e.timestamp != h.baseTimestamp || e.zoneId != h.zoneId ||
+                (e.flags & IndexFlag::Restart) != (h.frameFlags & FrameFlag::Restart))
+            {
+                return "index";
+            }
+            packets += h.packetCount;
+        }
+        frames++;
+        offset += size;
+    }
+    if (entry != indexEntries_.size())
+    {
+        return "index";
+    }
+    if (frames != trailer_.frameCount || packets != trailer_.totalPacketCount)
+    {
+        return "trailer";
+    }
+    return nullptr;
 }
 
 auto Reader::readRawFrame(uint64_t offset, uint64_t limit, std::vector<uint8_t>& bytes, internal::FrameInfo& info) -> bool
