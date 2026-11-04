@@ -151,6 +151,7 @@ type Summary struct {
 	SigningKey        [32]byte
 	SignedToEnd       bool   // the footer's signature verifies
 	VerifiedPackets   uint64 // packets covered by the last good signature
+	FirstFailure      uint64 // file offset of the first checkpoint or footer whose signature fails; 0 when none does
 	Seal              *Seal  // set on a format-4 file another program rewrote
 }
 
@@ -236,6 +237,7 @@ func Read(path string) (Summary, error) {
 		SigningKey:        *(*[32]byte)(unsafe.Pointer(&s.signing_key[0])),
 		SignedToEnd:       s.signed_to_end != 0,
 		VerifiedPackets:   uint64(s.verified_packets),
+		FirstFailure:      uint64(s.first_failure),
 	}
 	if s.sealed != 0 {
 		out.Seal = &Seal{

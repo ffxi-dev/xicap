@@ -214,6 +214,7 @@ extern "C" int xicap_read(const char* path, xicap_summary* out, char* err, size_
                        std::ranges::copy(verification.key, out->signing_key);
                        out->signed_to_end    = verification.signedToEnd ? 1 : 0;
                        out->verified_packets = verification.verifiedPackets;
+                       out->first_failure    = verification.firstFailureOffset.value_or(0);
                        if (const auto& seal = verification.seal)
                        {
                            out->sealed    = 1;
