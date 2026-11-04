@@ -50,7 +50,7 @@ auto transcode(const std::filesystem::path& src, const std::filesystem::path& ds
 // Writes the packets of source whose frame does not end within its first fromByte bytes, up to its last intact frame,
 // with the markers before them, as a new capture at out that continues source: a new capture id, source's id as
 // previousCaptureId, startContext MidSession, and source's agent, client, character, clock, origin, network,
-// exclusion policy and source block. Packets are copied as stored. Signed with seed and written with policy. Returns
+// recording mode, exclusion policy and source block. Packets are copied as stored. Signed with seed and written with policy. Returns
 // the packets written; with none, it writes no file. Throws Error, leaving out as it was. For a recorder whose upload
 // was cut off: fromByte is what the archive holds.
 auto continueFrom(const std::filesystem::path& source, uint64_t fromByte, const std::filesystem::path& out, const SecretSeed& seed, FramePolicy policy = FramePolicy::live()) -> uint64_t;

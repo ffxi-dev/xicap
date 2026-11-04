@@ -243,6 +243,7 @@ auto continueFrom(const std::filesystem::path& source, uint64_t fromByte, const 
     config.origin            = in.origin();
     config.network           = in.network();
     config.startContext      = StartContext::MidSession;
+    config.recordingMode     = in.recordingMode();
     config.previousCaptureId = in.captureId();
     config.signingSeed       = seed;
     config.policy            = in.policy();

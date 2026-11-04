@@ -94,7 +94,7 @@ func TestWriteThenRead(t *testing.T) {
 	if !s.Closed || s.Packets != 6 || s.Frames != 2 || s.VersionMajor != 4 || s.CaptureAgent != "test" ||
 		s.Character.Name != "Nouurs" || s.Character.ContentID != 0x01020304 || s.Network != NetworkRetail ||
 		s.StartContext != StartLogin || s.StartTimestamp != t0 || s.EndTimestamp != t0+1002 ||
-		s.Policy.Name != "xicap-default" || s.RuleCount != 5 || len(s.Policy.Rules) != 5 || !s.SignedToEnd || s.VerifiedPackets != 6 || s.Source != nil {
+		s.Policy.Name != "xicap-default" || s.RuleCount != 6 || len(s.Policy.Rules) != 6 || !s.SignedToEnd || s.VerifiedPackets != 6 || s.Source != nil {
 		t.Fatalf("unexpected summary %+v", s)
 	}
 }
@@ -458,6 +458,15 @@ func TestTranscode(t *testing.T) {
 		t.Fatal("a recorder's own file has a seal")
 	}
 
+	if in.RecordingMode != ModeDefault {
+		t.Fatalf("mode: %v", in.RecordingMode)
+	}
+	everything := info()
+	everything.RecordingMode = ModeEverything
+	everything.Policy = &Policy{Name: "none", Version: 1}
+	if s, err := Read(capture(t, 1, everything)); err != nil || s.RecordingMode != ModeEverything || s.RuleCount != 0 {
+		t.Fatalf("everything: %+v %v", s, err)
+	}
 	if !reflect.DeepEqual(in.Channels, []uint8{0}) {
 		t.Fatalf("channels: %v", in.Channels)
 	}

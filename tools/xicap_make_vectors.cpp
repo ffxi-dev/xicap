@@ -525,6 +525,29 @@ int main(int argc, char* argv[])
               Reader r(p);
               expect(r.source() && r.source()->signer && r.source()->signer->verifiedPackets == 2 && r.verify().signedToEnd, "converted names its source and the source's signer");
           } },
+        { "everything", [&](const fs::path& p)
+          {
+              auto cfg          = config();
+              cfg.recordingMode = RecordingMode::Everything;
+              cfg.policy        = { .name = "none", .version = 1, .rules = {} };
+              Writer w(p, cfg);
+              w.write(T0, PacketDirection::ServerToClient, zoneIn(230, 1));
+              w.write(T0 + 10, PacketDirection::ServerToClient, game(0x017, 32, 'x', 2)); // chat: kept
+              w.close();
+              Reader r(p);
+              expect(r.recordingMode() == RecordingMode::Everything && count(p) == 2, "a recording that keeps everything keeps chat");
+          } },
+        { "unknown-mode", [&](const fs::path& p)
+          {
+              session(tmp, 1, alone());
+              auto bytes           = bytesOf(tmp);
+              auto header          = podAt<Header>(bytes, 0);
+              header.recordingMode = static_cast<RecordingMode>(3);
+              header.headerCrc     = internal::crc32({ reinterpret_cast<const uint8_t*>(&header), offsetof(Header, headerCrc) });
+              std::memcpy(bytes.data(), &header, sizeof(header));
+              save(p, bytes);
+              expect(refuses(p, ErrorCode::UnknownRecordingMode), "an unknown recording mode is refused");
+          } },
         { "edited-packet", [&](const fs::path& p)
           {
               session(tmp, 3, alone());

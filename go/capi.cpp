@@ -169,6 +169,7 @@ extern "C" int xicap_read(const char* path, xicap_summary* out, char* err, size_
                        out->origin          = static_cast<uint8_t>(reader.origin());
                        out->network         = static_cast<uint8_t>(reader.network());
                        out->start_context   = static_cast<uint8_t>(reader.startContext());
+                       out->recording_mode  = static_cast<uint8_t>(reader.recordingMode());
                        out->start_timestamp = reader.startTimestamp();
                        out->end_timestamp   = out->start_timestamp;
                        copyString(out->policy_name, reader.policy().name);
@@ -252,10 +253,11 @@ extern "C" xicap_writer* xicap_writer_open(const char* path, const xicap_writer_
                                config.character.worldId     = info->world_id;
                                copyName(config.character.characterName, info->character_name);
                                copyName(config.character.worldName, info->world_name);
-                               config.clockSource  = static_cast<xicap::ClockSource>(info->clock_source);
-                               config.origin       = static_cast<xicap::Origin>(info->origin);
-                               config.network      = static_cast<xicap::Network>(info->network);
-                               config.startContext = static_cast<xicap::StartContext>(info->start_context);
+                               config.clockSource   = static_cast<xicap::ClockSource>(info->clock_source);
+                               config.origin        = static_cast<xicap::Origin>(info->origin);
+                               config.network       = static_cast<xicap::Network>(info->network);
+                               config.startContext  = static_cast<xicap::StartContext>(info->start_context);
+                               config.recordingMode = static_cast<xicap::RecordingMode>(info->recording_mode);
                                std::ranges::copy(info->previous_capture_id, config.previousCaptureId.begin());
                                std::ranges::copy(info->signing_seed, config.signingSeed.begin());
                                if (info->has_source)

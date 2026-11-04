@@ -24,11 +24,12 @@ const HeaderSize = 384
 
 // Values of the header's provenance fields. See FORMAT.md.
 type (
-	ClockSource  uint8
-	Origin       uint8
-	Network      uint8
-	StartContext uint8
-	MarkerKind   uint8
+	ClockSource   uint8
+	Origin        uint8
+	Network       uint8
+	StartContext  uint8
+	RecordingMode uint8
+	MarkerKind    uint8
 )
 
 const (
@@ -47,6 +48,11 @@ const (
 	StartUnknown    StartContext = 0
 	StartLogin      StartContext = 1
 	StartMidSession StartContext = 2
+
+	// What the recorder kept of what players write.
+	ModeDefault    RecordingMode = 0 // the exclusion policy stubs chat
+	ModeEverything RecordingMode = 1 // the exclusion policy has no rules: chat is kept
+	ModeAnonymous  RecordingMode = 2 // as ModeDefault, and names and player ids are pseudonyms
 
 	MarkerNote   MarkerKind = 0
 	MarkerLogin  MarkerKind = 1
@@ -141,6 +147,7 @@ type Summary struct {
 	Origin            Origin
 	Network           Network
 	StartContext      StartContext
+	RecordingMode     RecordingMode
 	StartZoneID       uint16 // the first packet frame's zone
 	EndZoneID         uint16 // the last packet frame's zone
 	StartTimestamp    uint64 // Unix ms
@@ -229,6 +236,7 @@ func Read(path string) (Summary, error) {
 		Origin:            Origin(s.origin),
 		Network:           Network(s.network),
 		StartContext:      StartContext(s.start_context),
+		RecordingMode:     RecordingMode(s.recording_mode),
 		StartZoneID:       uint16(s.start_zone_id),
 		EndZoneID:         uint16(s.end_zone_id),
 		StartTimestamp:    uint64(s.start_timestamp),
@@ -329,6 +337,7 @@ type WriterInfo struct {
 	Origin            Origin
 	Network           Network
 	StartContext      StartContext
+	RecordingMode     RecordingMode // ModeEverything takes a Policy with no rules
 	PreviousCaptureID [16]byte
 	SigningSeed       [32]byte // the recorder's Ed25519 seed
 	Source            *Source  // required with OriginConverted
@@ -375,6 +384,7 @@ func Create(path string, info WriterInfo) (*Writer, error) {
 		origin:         C.uint8_t(info.Origin),
 		network:        C.uint8_t(info.Network),
 		start_context:  C.uint8_t(info.StartContext),
+		recording_mode: C.uint8_t(info.RecordingMode),
 	}
 	ci.preset = C.int(info.Preset)
 	ci.level = C.int(info.Level)

@@ -52,6 +52,14 @@ enum class StartContext : uint8_t
     MidSession = 2,
 };
 
+// What the recorder kept of what players write. Readers refuse a mode they do not know. See FORMAT.md, Header.
+enum class RecordingMode : uint8_t
+{
+    Default    = 0, // the exclusion policy stubs chat
+    Everything = 1, // the exclusion policy has no rules: chat is kept
+    Anonymous  = 2, // as Default, and names and player ids are pseudonyms
+};
+
 // Channel numbers come from the registry in FORMAT.md. Readers pass on
 // packets of channels this enum does not name.
 enum class Channel : uint8_t
@@ -123,7 +131,7 @@ struct Header
     Origin                                   origin;
     Network                                  network;
     StartContext                             startContext;
-    uint8_t                                  reserved2;
+    RecordingMode                            recordingMode;
     uint32_t                                 dictionaryId;
     uint32_t                                 reserved3;
     PublicKey                                signingKey;
@@ -137,6 +145,7 @@ static_assert(sizeof(Header) == 384);
 static_assert(offsetof(Header, startTimestamp) == 56);
 static_assert(offsetof(Header, clockSource) == 67);
 static_assert(offsetof(Header, startContext) == 70);
+static_assert(offsetof(Header, recordingMode) == 71);
 static_assert(offsetof(Header, dictionaryId) == 72);
 static_assert(offsetof(Header, signingKey) == 80);
 static_assert(offsetof(Header, captureAgent) == 112);
@@ -404,6 +413,7 @@ enum class ErrorCode
     PacketTooShort,
     TranscodeRefused,
     TranscodeMismatch,
+    UnknownRecordingMode,
 };
 
 class Error : public std::runtime_error

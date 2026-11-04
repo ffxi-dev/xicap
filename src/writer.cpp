@@ -346,15 +346,16 @@ auto defaultExclusionPolicy() -> const ExclusionPolicy&
 {
     // Packets carrying text players write to each other, from LandSandBoat's
     // definitions after atom0s's XiPackets: chat in every channel (0x017 in,
-    // 0x0B5 out), tells (0x0B6 out), and the linkshell message board (0x0CC in,
-    // 0x0E2 out).
+    // 0x0B5 out), tells (0x0B6 out), the Assist Channel (0x0B7 out), and the
+    // linkshell message board (0x0CC in, 0x0E2 out).
     static const ExclusionPolicy policy{
         .name    = "xicap-default",
-        .version = 1,
+        .version = 2,
         .rules   = {
             { .channel = 0, .direction = ExclusionDirection::ServerToClient, .action = ExclusionAction::Stub, .opcode = 0x017, .ranges = {} },
             { .channel = 0, .direction = ExclusionDirection::ClientToServer, .action = ExclusionAction::Stub, .opcode = 0x0B5, .ranges = {} },
             { .channel = 0, .direction = ExclusionDirection::ClientToServer, .action = ExclusionAction::Stub, .opcode = 0x0B6, .ranges = {} },
+            { .channel = 0, .direction = ExclusionDirection::ClientToServer, .action = ExclusionAction::Stub, .opcode = 0x0B7, .ranges = {} },
             { .channel = 0, .direction = ExclusionDirection::ServerToClient, .action = ExclusionAction::Stub, .opcode = 0x0CC, .ranges = {} },
             { .channel = 0, .direction = ExclusionDirection::ClientToServer, .action = ExclusionAction::Stub, .opcode = 0x0E2, .ranges = {} },
         },
@@ -373,6 +374,14 @@ Writer::Writer(const std::filesystem::path& path, WriterConfig config, FramePoli
         })
 {
     validatePolicy(config_.policy);
+    if (config_.recordingMode == RecordingMode::Everything && !config_.policy.rules.empty())
+    {
+        throw Error(ErrorCode::InvalidPolicy, "xicap: a recording that keeps everything has a policy with no rules");
+    }
+    if (static_cast<uint8_t>(config_.recordingMode) > static_cast<uint8_t>(RecordingMode::Anonymous))
+    {
+        throw Error(ErrorCode::UnknownRecordingMode, "xicap: unknown recording mode");
+    }
     if ((config_.origin == Origin::Converted) != config_.source.has_value())
     {
         throw Error(ErrorCode::InvalidExtension, "xicap: a source block goes with converted captures, and only them");
@@ -647,6 +656,7 @@ auto Writer::writeStart() -> void
         header.origin             = config_.origin;
         header.network            = config_.network;
         header.startContext       = config_.startContext;
+        header.recordingMode      = config_.recordingMode;
         header.dictionaryId       = 0;
         header.signingKey         = key_->publicKey();
         header.character          = config_.character;

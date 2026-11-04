@@ -45,6 +45,7 @@ inline auto errorName(xicap::ErrorCode code) -> std::string
         "PacketTooShort",
         "TranscodeRefused",
         "TranscodeMismatch",
+        "UnknownRecordingMode",
     };
     return names[static_cast<size_t>(code)];
 }
@@ -71,6 +72,7 @@ inline auto refusalClass(xicap::ErrorCode code) -> std::string
             return "dictionary";
         case xicap::ErrorCode::UnknownFrameKind:
         case xicap::ErrorCode::UnknownPacketFlag:
+        case xicap::ErrorCode::UnknownRecordingMode:
             return "unknown-required";
         default:
             return "frame";
@@ -140,7 +142,7 @@ inline auto normalReading(const std::filesystem::path& path) -> std::string
     const auto&   c = r.character();
     out += std::format("  \"result\": \"ok\",\n");
     out += std::format("  \"header\": {{\"version\": \"{}.{}\", \"captureId\": {}, \"previousCaptureId\": {}, \"startTimestamp\": {}, "
-                       "\"clockSource\": {}, \"origin\": {}, \"network\": {}, \"startContext\": {}, \"signingKey\": {}, "
+                       "\"clockSource\": {}, \"origin\": {}, \"network\": {}, \"startContext\": {}, \"recordingMode\": {}, \"signingKey\": {}, "
                        "\"captureAgent\": {}, \"clientVersion\": {}, \"character\": [{}, {}, {}, {}, {}]}},\n",
                        r.versionMajor(),
                        r.versionMinor(),
@@ -151,6 +153,7 @@ inline auto normalReading(const std::filesystem::path& path) -> std::string
                        static_cast<int>(r.origin()),
                        static_cast<int>(r.network()),
                        static_cast<int>(r.startContext()),
+                       static_cast<int>(r.recordingMode()),
                        hex(r.signingKey()),
                        str(r.captureAgent()),
                        str(r.clientVersion()),

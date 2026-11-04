@@ -291,6 +291,7 @@ TEST_CASE("the default policy stubs every chat opcode")
         { 0x017, PacketDirection::ServerToClient },
         { 0x0B5, PacketDirection::ClientToServer },
         { 0x0B6, PacketDirection::ClientToServer },
+        { 0x0B7, PacketDirection::ClientToServer },
         { 0x0CC, PacketDirection::ServerToClient },
         { 0x0E2, PacketDirection::ClientToServer },
     };
@@ -306,14 +307,15 @@ TEST_CASE("the default policy stubs every chat opcode")
         w.close();
     }
     const auto packets = readAll(tmp.path);
-    REQUIRE(packets.size() == 7);
+    REQUIRE(packets.size() == 8);
     for (size_t i = 0; i < chat.size(); ++i)
     {
         CHECK(packets[i].flags & PacketFlag::Excluded);
         CHECK(packets[i].data.size() == 4);
     }
-    CHECK(packets[5].data.size() == 64);
     CHECK(packets[6].data.size() == 64);
+    CHECK(packets[7].data.size() == 64);
+    CHECK(defaultExclusionPolicy().version == 2);
 }
 
 TEST_CASE("redaction zeroes byte ranges and keeps the length")
