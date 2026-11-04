@@ -534,7 +534,7 @@ type TranscodeOptions struct {
 
 // Transcode rewrites src as format 4 at dst with the archive preset, then reads dst back and checks that it holds
 // the same packets and markers as src and that its signatures verify. On any difference it returns an error and
-// leaves no file at dst.
+// leaves dst as it was.
 func Transcode(src, dst string, opt TranscodeOptions) error {
 	s, d, a := C.CString(src), C.CString(dst), C.CString(opt.Agent)
 	defer C.free(unsafe.Pointer(s))

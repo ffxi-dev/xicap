@@ -963,6 +963,34 @@ TEST_CASE("the writer stores text as UTF-8, and copies keep markers whole")
     CHECK(readAll(dst.path)[0].markers[0].text == longText);
 }
 
+TEST_CASE("transcode writes dst whole or not at all")
+{
+    TempCapture src;
+    TempCapture dst;
+    writeFrames(src.path, 3);
+    writeFrames(dst.path, 1);
+    const auto before = bytesOf(dst.path);
+
+    SECTION("a refused transcode leaves dst as it was")
+    {
+        CHECK(refusal([&]
+                      {
+                          transcode(fs::path(XICAP_VECTORS_DIR) / "clean.xicap", dst.path, mogsafe());
+                      }) == ErrorCode::TranscodeRefused);
+        CHECK(bytesOf(dst.path) == before);
+    }
+    SECTION("a transcode never writes over its own src")
+    {
+        // dst + ".tmp" was the fixed work file: here it is src.
+        const auto work = fs::path(dst.path).concat(".tmp");
+        fs::copy_file(src.path, work);
+        const auto original = readAll(work);
+        transcode(work, dst.path, mogsafe());
+        CHECK(readAll(dst.path) == original);
+        CHECK(fs::exists(work));
+    }
+}
+
 TEST_CASE("a cut carries the scene from before its range")
 {
     TempCapture src;
