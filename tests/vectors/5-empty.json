@@ -1,0 +1,101 @@
+{
+  "refused": false,
+  "complete": true,
+  "endTimestamp": 0,
+  "packetCount": 0,
+  "metadata": {
+    "captureId": "33333333333333333333333333333333",
+    "previousCaptureId": "00000000000000000000000000000000",
+    "startTimestamp": 0,
+    "origin": 1,
+    "network": 1,
+    "captureAgent": "xicap tests",
+    "clientVersion": "30251101_2",
+    "character": {
+      "contentId": 16909060,
+      "characterId": 168496141,
+      "name": "Nouurs",
+      "world": "Asura"
+    },
+    "policy": {
+      "name": "xicap-default",
+      "version": 2,
+      "rules": [
+        {
+          "channel": 0,
+          "direction": 0,
+          "action": 2,
+          "opcode": 23,
+          "ranges": [
+            [
+              23,
+              4294967295
+            ]
+          ]
+        },
+        {
+          "channel": 0,
+          "direction": 1,
+          "action": 2,
+          "opcode": 181,
+          "ranges": [
+            [
+              6,
+              4294967295
+            ]
+          ]
+        },
+        {
+          "channel": 0,
+          "direction": 1,
+          "action": 2,
+          "opcode": 182,
+          "ranges": [
+            [
+              21,
+              4294967295
+            ]
+          ]
+        },
+        {
+          "channel": 0,
+          "direction": 1,
+          "action": 2,
+          "opcode": 183,
+          "ranges": [
+            [
+              21,
+              4294967295
+            ]
+          ]
+        },
+        {
+          "channel": 0,
+          "direction": 0,
+          "action": 2,
+          "opcode": 204,
+          "ranges": [
+            [
+              8,
+              128
+            ]
+          ]
+        },
+        {
+          "channel": 0,
+          "direction": 1,
+          "action": 2,
+          "opcode": 226,
+          "ranges": [
+            [
+              16,
+              128
+            ]
+          ]
+        }
+      ]
+    },
+    "source": null
+  },
+  "packets": []
+}

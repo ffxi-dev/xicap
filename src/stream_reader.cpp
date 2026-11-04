@@ -1,16 +1,45 @@
 #include "xicap/stream_reader.h"
-#include "internal/crc32.h"
-#include "internal/decoder.h"
+#include "crc32.h"
+#include "frame_decoder.h"
+#include "metadata_codec.h"
 
-#include <algorithm>
 #include <cstring>
+#include <optional>
 
 namespace xicap
 {
 
+struct StreamReader::State
+{
+    enum class Stage
+    {
+        Header,
+        Blocks,
+        Frames,
+        Complete,
+        Stopped,
+    };
+
+    auto parse() -> void;
+    auto parseFrame(std::span<const uint8_t> avail) -> bool;
+
+    Stage                                 stage{ Stage::Header };
+    std::vector<uint8_t>                  buffer;
+    size_t                                pos{};
+    uint64_t                              dropped{}; // bytes read and erased from the front of buffer
+    Metadata                              metadata;
+    uint8_t                               blocksLeft{};
+    int                                   policies{};
+    int                                   sources{};
+    std::optional<internal::FrameDecoder> decoder;
+    internal::DecodedFrame                frame;
+    size_t                                nextPacket{};
+    uint64_t                              packets{};
+    uint64_t                              lastTimestamp{};
+};
+
 StreamReader::StreamReader()
-: start_(std::make_unique<internal::Start>())
-, frame_(std::make_unique<internal::DecodedFrame>())
+: state_(std::make_unique<State>())
 {
 }
 
@@ -18,113 +47,93 @@ StreamReader::~StreamReader() = default;
 
 auto StreamReader::ready() const noexcept -> bool
 {
-    return decoder_ != nullptr;
+    return state_->decoder.has_value();
+}
+
+auto StreamReader::complete() const noexcept -> bool
+{
+    return state_->stage == State::Stage::Complete;
 }
 
 auto StreamReader::stopped() const noexcept -> bool
 {
-    return state_ == State::Stopped;
+    return state_->stage == State::Stage::Stopped;
 }
 
-auto StreamReader::unreadBytes() const noexcept -> uint64_t
+auto StreamReader::metadata() const noexcept -> const Metadata&
 {
-    return buffer_.size() - pos_ + dropped_;
+    return state_->metadata;
 }
 
-auto StreamReader::header() const noexcept -> const Header&
+auto StreamReader::bytesRead() const noexcept -> uint64_t
 {
-    return start_->header;
+    return state_->dropped + state_->pos;
 }
 
-auto StreamReader::clientVersion() const -> std::string
+auto StreamReader::push(std::span<const std::byte> bytes) -> void
 {
-    const auto& f = start_->header.clientVersion;
-    return { f.begin(), std::find(f.begin(), f.end(), '\0') };
-}
-
-auto StreamReader::captureAgent() const -> std::string
-{
-    const auto& f = start_->header.captureAgent;
-    return { f.begin(), std::find(f.begin(), f.end(), '\0') };
-}
-
-auto StreamReader::policy() const noexcept -> const ExclusionPolicy&
-{
-    return start_->policy;
-}
-
-auto StreamReader::push(std::span<const uint8_t> bytes) -> void
-{
-    if (state_ == State::Stopped)
+    auto& s = *state_;
+    if (s.stage == State::Stage::Stopped || bytes.empty())
     {
-        dropped_ += bytes.size(); // counted, not kept: nothing after a stop is read
         return;
     }
-    // Drop what has been read once it is most of the buffer, so each byte moves a bounded number of times.
-    if (pos_ > 0 && pos_ >= buffer_.size() / 2)
+    // Erase what was read once it is most of the buffer, so each byte moves a bounded number of times.
+    if (s.pos > s.buffer.size() / 2)
     {
-        buffer_.erase(buffer_.begin(), buffer_.begin() + static_cast<std::ptrdiff_t>(pos_));
-        pos_ = 0;
+        s.buffer.erase(s.buffer.begin(), s.buffer.begin() + static_cast<std::ptrdiff_t>(s.pos));
+        s.dropped += s.pos;
+        s.pos = 0;
     }
-    buffer_.insert(buffer_.end(), bytes.begin(), bytes.end());
-    parse();
+    const auto* p = reinterpret_cast<const uint8_t*>(bytes.data());
+    s.buffer.insert(s.buffer.end(), p, p + bytes.size());
+    s.parse();
 }
 
-auto StreamReader::next(ReadPacket& packet) -> bool
+auto StreamReader::next(Packet& packet) -> bool
 {
-    if (packetPos_ >= frame_->packets.size())
+    auto& s = *state_;
+    if (s.nextPacket >= s.frame.packets.size())
     {
-        parse();
-        if (packetPos_ >= frame_->packets.size())
+        s.parse();
+        if (s.nextPacket >= s.frame.packets.size())
         {
             return false;
         }
     }
-    const auto& p    = frame_->packets[packetPos_++];
-    packet.timestamp = p.timestamp;
-    packet.channel   = p.channel;
-    packet.opcode    = p.opcode;
-    packet.flags     = p.flags;
-    packet.direction = (p.flags & PacketFlag::ClientToServer) ? PacketDirection::ClientToServer : PacketDirection::ServerToClient;
-    packet.data      = { reinterpret_cast<const std::byte*>(frame_->bytes.data() + p.offset), p.length };
-    packet.markers   = { frame_->markers.data() + p.firstMarker, p.markerCount };
+    packet = s.frame.packet(s.nextPacket++);
     return true;
 }
 
-// Reads as far as the bytes allow, stopping once a packet frame is decoded and waiting to be read.
-auto StreamReader::parse() -> void
+// Reads as far as the bytes allow, and stops once a frame is decoded and waiting to be read.
+auto StreamReader::State::parse() -> void
 {
     while (true)
     {
-        const std::span<const uint8_t> avail{ buffer_.data() + pos_, buffer_.size() - pos_ };
-        switch (state_)
+        const auto avail = std::span{ buffer }.subspan(pos);
+        switch (stage)
         {
-            case State::Header:
-            {
-                if (avail.size() < HEADER_SIZE)
+            case Stage::Header:
+                if (avail.size() < sizeof(format::Header))
                 {
                     return;
                 }
-                const auto size = internal::headerSize(avail.first(HEADER_SIZE));
-                if (avail.size() < size)
-                {
-                    return;
-                }
-                internal::readHeader(avail.first(size), *start_);
-                pos_ += size;
-                state_ = State::Blocks;
+                blocksLeft = internal::readHeader(avail, metadata);
+                pos += sizeof(format::Header);
+                stage = Stage::Blocks;
                 break;
-            }
-            case State::Blocks:
+            case Stage::Blocks:
             {
-                if (nextBlock_ == start_->header.extensionCount)
+                if (blocksLeft == 0)
                 {
-                    internal::finishBlocks(*start_);
-                    decoder_ = std::make_unique<internal::Decoder>();
-                    state_   = State::Frames;
+                    if (policies != 1)
+                    {
+                        throw Error("xicap: no exclusion policy block");
+                    }
+                    decoder.emplace();
+                    stage = Stage::Frames;
                     break;
                 }
-                if (avail.size() < sizeof(ExtensionBlockHeader))
+                if (avail.size() < sizeof(format::BlockHeader))
                 {
                     return;
                 }
@@ -133,80 +142,110 @@ auto StreamReader::parse() -> void
                 {
                     return;
                 }
-                internal::readBlock(avail.first(static_cast<size_t>(size)), nextBlock_++, *start_);
-                start_->blocks.clear(); // only the reader's verify needs them
-                pos_ += static_cast<size_t>(size);
+                const auto type = internal::readBlock(avail.first(static_cast<size_t>(size)), metadata);
+                policies += static_cast<int>(type == format::BLOCK_POLICY);
+                sources += static_cast<int>(type == format::BLOCK_SOURCE);
+                if (policies > 1 || sources > 1)
+                {
+                    throw Error("xicap: a second exclusion policy or source block");
+                }
+                pos += static_cast<size_t>(size);
+                blocksLeft--;
                 break;
             }
-            case State::Frames:
-            {
-                if (packetPos_ < frame_->packets.size())
+            case Stage::Frames:
+                if (nextPacket < frame.packets.size() || !parseFrame(avail))
                 {
                     return;
                 }
-                frame_->clear();
-                packetPos_                     = 0;
-                constexpr auto      headerSize = sizeof(FrameHeader);
-                internal::FrameInfo info;
-                if (avail.size() < headerSize)
-                {
-                    if (avail.size() >= 4 && std::memcmp(avail.data(), "XCFR", 4) != 0)
-                    {
-                        state_ = State::Stopped;
-                    }
-                    return;
-                }
-                if (!internal::parseFrameHeader(avail, info) || info.payloadSize > internal::MAX_PAYLOAD_SIZE)
-                {
-                    state_ = State::Stopped;
-                    return;
-                }
-                const uint64_t size = headerSize + uint64_t{ info.payloadSize } + sizeof(uint32_t);
-                if (avail.size() < size)
-                {
-                    return;
-                }
-                const auto frame  = avail.first(static_cast<size_t>(size));
-                uint32_t   stored = 0;
-                std::memcpy(&stored, frame.data() + frame.size() - sizeof(stored), sizeof(stored));
-                if (internal::crc32(frame.first(frame.size() - sizeof(stored))) != stored)
-                {
-                    state_ = State::Stopped;
-                    return;
-                }
-                internal::checkKind(info.kind);
-                if (info.kind == FrameKind::Packets)
-                {
-                    try
-                    {
-                        decoder_->decode(info, frame.subspan(headerSize, info.payloadSize), *frame_);
-                    }
-                    catch (const Error& error)
-                    {
-                        if (error.code() == ErrorCode::UnknownPacketFlag)
-                        {
-                            throw;
-                        }
-                        frame_->clear();
-                        state_ = State::Stopped;
-                        return;
-                    }
-                }
-                pos_ += frame.size();
-                for (const auto& p : frame_->packets)
-                {
-                    if (internal::namesOtherCharacter(start_->header, p, { frame_->bytes.data() + p.offset, p.length }))
-                    {
-                        characterMismatch_ = true;
-                    }
-                }
-                packetPos_ = 0;
                 break;
-            }
-            case State::Stopped:
+            case Stage::Complete:
+                if (!avail.empty())
+                {
+                    throw Error("xicap: bytes after the trailer");
+                }
+                return;
+            case Stage::Stopped:
                 return;
         }
     }
+}
+
+// Reads the frame or trailer at the start of avail. False when it needs more bytes, or stops.
+auto StreamReader::State::parseFrame(std::span<const uint8_t> avail) -> bool
+{
+    uint32_t magic = 0;
+    if (avail.size() < sizeof(magic))
+    {
+        return false;
+    }
+    std::memcpy(&magic, avail.data(), sizeof(magic));
+    const auto stop = [this]
+    {
+        stage = Stage::Stopped;
+        frame.packets.clear();
+        return false;
+    };
+
+    if (magic == format::TRAILER_MAGIC)
+    {
+        format::Trailer t{};
+        if (avail.size() < sizeof(t))
+        {
+            return false;
+        }
+        std::memcpy(&t, avail.data(), sizeof(t));
+        if (internal::crc32(avail.first(offsetof(format::Trailer, crc))) != t.crc)
+        {
+            return stop();
+        }
+        if (t.packetCount != packets || t.endTimestamp != lastTimestamp)
+        {
+            throw Error("xicap: the trailer disagrees with the frames");
+        }
+        pos += sizeof(t);
+        stage = Stage::Complete;
+        return false;
+    }
+
+    format::FrameHeader h{};
+    if (magic != format::FRAME_MAGIC)
+    {
+        return stop();
+    }
+    if (avail.size() < sizeof(h))
+    {
+        return false;
+    }
+    std::memcpy(&h, avail.data(), sizeof(h));
+    if (h.payloadSize > format::MAX_PAYLOAD_SIZE)
+    {
+        return stop();
+    }
+    const auto size = sizeof(h) + size_t{ h.payloadSize } + sizeof(uint32_t);
+    if (avail.size() < size)
+    {
+        return false;
+    }
+    uint32_t crc = 0;
+    std::memcpy(&crc, avail.data() + size - sizeof(crc), sizeof(crc));
+    if (internal::crc32(avail.first(size - sizeof(crc))) != crc)
+    {
+        return stop();
+    }
+    try
+    {
+        decoder->decode(h, avail.subspan(sizeof(h), h.payloadSize), frame);
+    }
+    catch (const Error&)
+    {
+        return stop();
+    }
+    pos += size;
+    nextPacket = 0;
+    packets += frame.packets.size();
+    lastTimestamp = frame.packets.back().timestamp;
+    return true;
 }
 
 } // namespace xicap

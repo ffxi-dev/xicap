@@ -1,55 +1,8 @@
-# Build directories
 build*/
 cmake-build-*/
-
-# IDE / tooling
 .idea/
-.claude/settings.local.json
-.claude/worktrees/
 .vscode/
-
-# Prerequisites
-*.d
-
-# Compiled Object files
-*.slo
-*.lo
-*.o
-*.obj
-
-# Precompiled Headers
-*.gch
-*.pch
-
-# Linker files
-*.ilk
-
-# Debugger Files
-*.pdb
-
-# Compiled Dynamic libraries
-*.so
-*.dylib
-*.dll
-
-# Fortran module files
-*.mod
-*.smod
-!go.mod
-
-# Compiled Static libraries
-*.lai
-*.la
-*.a
-*.lib
-
-# Executables
-*.exe
-*.out
-*.app
-
-# debug information files
-*.dwo
-.claude/settings.local.json
-.claude/worktrees/
-ruvector.db
+js/dist/
+node_modules/
+__pycache__/
+.pytest_cache/
