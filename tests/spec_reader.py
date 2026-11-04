@@ -193,6 +193,12 @@ class Capture:
         self.skipped: dict[int, int] = {}
         self.unread = 0
         self.mismatch = False
+        if self.complete and self.v4:
+            what = self.index_disagreement()
+            if what and not recovery:
+                raise Refused("frame", f"the footer's {what} disagrees with the frames")
+            if what:
+                self.complete, self.footer_damaged = False, True
         if self.complete:
             self.end = self.index_offset
         else:
@@ -334,6 +340,32 @@ class Capture:
         self.complete, self.footer_damaged = True, False
         self.end_timestamp, self.total_packets = end_ts, total
         self.index_offset, self.index, self.trailer = index_offset, index, t
+
+    def index_disagreement(self):
+        """What in the footer disagrees with the frame headers, or None."""
+        d, offset, entry, frames, packets = self.data, self.data_start, 0, 0, 0
+        entries = len(self.index) // INDEX_ENTRY
+        while offset < self.index_offset:
+            if offset + 36 > self.index_offset or d[offset : offset + 4] != FRAME_MAGIC:
+                return "index offset"
+            _, kind, flags, _, payload_size, packet_count, base, zone = struct.unpack_from("<4sBBHIIQH", d, offset)
+            end = offset + 32 + payload_size + 4
+            if end > self.index_offset:
+                return "index offset"
+            if kind == KIND_PACKETS:
+                if entry >= entries:
+                    return "index"
+                ts, at, z, f = struct.unpack_from("<QQHB", self.index, entry * INDEX_ENTRY)
+                if (ts, at, z, f & RESTART) != (base, offset, zone, flags & RESTART):
+                    return "index"
+                entry, packets = entry + 1, packets + packet_count
+            frames, offset = frames + 1, end
+        if entry != entries:
+            return "index"
+        frame_count = struct.unpack_from("<I", self.trailer, 36)[0]
+        if frames != frame_count or packets != self.total_packets:
+            return "trailer"
+        return None
 
     # Frames -----------------------------------------------------------------
     def raw_frame(self, offset: int, limit: int):

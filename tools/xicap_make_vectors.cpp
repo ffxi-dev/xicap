@@ -385,6 +385,21 @@ int main(int argc, char* argv[])
               Reader r(p);
               expect(!r.complete() && r.footerDamaged() && count(p) == 9, "an unknown trailer flag reads as cut off");
           } },
+        { "index-disagrees", [&](const fs::path& p)
+          {
+              session(tmp, 3, shortStreams());
+              auto       bytes   = bytesOf(tmp);
+              auto       trailer = podAt<FooterTrailer>(bytes, bytes.size() - sizeof(FooterTrailer));
+              auto       entry   = podAt<FooterIndexEntry>(bytes, trailer.indexOffset);
+              const auto size    = size_t{ trailer.entryCount } * sizeof(FooterIndexEntry);
+              entry.zoneId ^= 1; // the CRCs hold, but the index names another zone than the frame does
+              std::memcpy(bytes.data() + trailer.indexOffset, &entry, sizeof(entry));
+              trailer.indexCrc   = internal::crc32({ bytes.data() + trailer.indexOffset, size });
+              trailer.trailerCrc = internal::crc32({ reinterpret_cast<const uint8_t*>(&trailer), offsetof(FooterTrailer, trailerCrc) });
+              std::memcpy(bytes.data() + bytes.size() - sizeof(trailer), &trailer, sizeof(trailer));
+              save(p, bytes);
+              expect(refuses(p, ErrorCode::CorruptFrame) && count(p, { .recovery = true }) == 9, "an index that disagrees with the frames is refused");
+          } },
         { "damaged-stream-complete", [&](const fs::path& p)
           {
               session(tmp, 8, shortStreams());

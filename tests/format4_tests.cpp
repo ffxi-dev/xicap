@@ -561,6 +561,61 @@ TEST_CASE("one changed packet fails the footer, and every packet still reads")
     }
 }
 
+TEST_CASE("a complete file's index and trailer must agree with its frames")
+{
+    TempCapture src;
+    TempCapture other;
+    writeFrames(src.path, 3);
+    const auto                    bytes   = bytesOf(src.path);
+    auto                          trailer = podAt<FooterTrailer>(bytes, bytes.size() - sizeof(FooterTrailer));
+    std::vector<FooterIndexEntry> index(trailer.entryCount);
+    std::memcpy(index.data(), bytes.data() + trailer.indexOffset, index.size() * sizeof(FooterIndexEntry));
+    std::vector<uint8_t> frames(bytes.begin(), bytes.begin() + static_cast<std::ptrdiff_t>(trailer.indexOffset));
+
+    SECTION("a frame hidden in a frame readers skip, which the index sends seeks to")
+    {
+        // The packet the recorder never wrote, in a frame of its own stream.
+        {
+            Writer w(other.path, config(), alone());
+            w.write(T0 + 5000, PacketDirection::ServerToClient, gamePacket(0x1FF, 16, 0xEE));
+            w.close();
+        }
+        const auto forged     = bytesOf(other.path);
+        const auto inner      = packetFrames(forged).at(0);
+        const auto innerBytes = std::span{ forged }.subspan(inner.offset, inner.size);
+        const auto wrapper    = frameBytes(FrameHeader{ .magic = FRAME_MAGIC, .kind = static_cast<FrameKind>(0x02), .frameFlags = 0, .markerCount = 0, .payloadSize = static_cast<uint32_t>(innerBytes.size()), .packetCount = 0, .baseTimestamp = 0, .zoneId = 0, .reserved = 0, .plainSize = 0 }, innerBytes);
+        index.push_back({ .timestamp = T0 + 5000, .fileOffset = frames.size() + sizeof(FrameHeader), .zoneId = 0, .flags = IndexFlag::Restart, .reserved = {} });
+        frames.insert(frames.end(), wrapper.begin(), wrapper.end());
+        trailer.frameCount++;
+    }
+    SECTION("an index entry naming another zone")
+    {
+        index[1].zoneId = 99;
+    }
+    SECTION("a trailer counting other packets")
+    {
+        trailer.totalPacketCount++;
+    }
+    const auto* entries = reinterpret_cast<const uint8_t*>(index.data());
+    const auto  size    = index.size() * sizeof(FooterIndexEntry);
+    trailer.indexOffset = frames.size();
+    trailer.entryCount  = static_cast<uint32_t>(index.size());
+    trailer.indexCrc    = internal::crc32({ entries, size });
+    trailer.trailerCrc  = internal::crc32({ reinterpret_cast<const uint8_t*>(&trailer), offsetof(FooterTrailer, trailerCrc) });
+    frames.insert(frames.end(), entries, entries + size);
+    const auto* t = reinterpret_cast<const uint8_t*>(&trailer);
+    frames.insert(frames.end(), t, t + sizeof(trailer));
+    save(src.path, frames);
+
+    CHECK(refusal([&]
+                  {
+                      Reader r(src.path);
+                  }) == ErrorCode::CorruptFrame);
+    Reader salvage(src.path, { .recovery = true });
+    CHECK_FALSE(salvage.complete());
+    CHECK(readAll(salvage).size() == 9);
+}
+
 TEST_CASE("the footer reports seals, unsigned ends, and damage")
 {
     TempCapture src;
