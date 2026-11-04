@@ -61,10 +61,6 @@ extern "C"
         char       source_format[16];
         char       source_format_version[16];
         uint32_t   skipped_records;
-        int        has_source_signer; // the source was a signed capture
-        uint8_t    source_signing_key[32];
-        int        source_signed_to_end;
-        uint64_t   source_verified_packets;
         uint8_t    channels[32]; // bit c of byte c/8: a packet on channel c
         uint8_t    signing_key[32];
         int        signed_to_end;
@@ -164,15 +160,9 @@ extern "C"
 
     typedef struct
     {
-        int         seal;  // 1: keep the signer's signature and add a seal; 0: reissue, signed by the file's own signer
         int         level; // zstd level; 0 for the archive preset's 19
-        const char* agent;
+        const char* agent; // the seal's agent
         uint8_t     seed[32];
-        // Reissue: the source signer to write, when has_signer is set.
-        int      has_signer;
-        uint8_t  signer_key[32];
-        int      signer_signed_to_end;
-        uint64_t signer_verified_packets;
     } xicap_transcode_info;
 
     // Rewrites src at dst with the archive preset, then reads dst back and checks its packets, markers, and signatures

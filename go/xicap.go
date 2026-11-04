@@ -117,14 +117,6 @@ type SourceSummary struct {
 	Format        string
 	FormatVersion string
 	Skipped       uint32
-	Signer        *SourceSigner // set when the source was a signed capture
-}
-
-// SourceSigner is a signed source's signer, and what its signatures covered when its packets were taken.
-type SourceSigner struct {
-	Key             [32]byte
-	SignedToEnd     bool
-	VerifiedPackets uint64
 }
 
 // Summary describes a capture after reading every frame and checking its
@@ -265,13 +257,6 @@ func Read(path string) (Summary, error) {
 			Format:        C.GoString(&s.source_format[0]),
 			FormatVersion: C.GoString(&s.source_format_version[0]),
 			Skipped:       uint32(s.skipped_records),
-		}
-		if s.has_source_signer != 0 {
-			out.Source.Signer = &SourceSigner{
-				Key:             *(*[32]byte)(unsafe.Pointer(&s.source_signing_key[0])),
-				SignedToEnd:     s.source_signed_to_end != 0,
-				VerifiedPackets: uint64(s.source_verified_packets),
-			}
 		}
 	}
 	for c := 0; c < 256; c++ {
@@ -518,16 +503,13 @@ func (w *Writer) Close() error {
 	return nil
 }
 
-// TranscodeOptions says how Transcode signs and compresses.
+// TranscodeOptions says how Transcode seals and compresses: it keeps the signer's signatures and adds a seal made
+// with Seed, for a file complete and signed to the end, cut off, or sealed with its end unsigned, and none whose
+// signature fails.
 type TranscodeOptions struct {
-	// Seal keeps the signer's signatures and adds a seal made with Seed: a file complete and signed to the end, cut
-	// off, or sealed with its end unsigned, and none whose signature fails. Without it, Transcode reissues a file
-	// signed to the end whose own signer Seed is, writing Signer as its source signer when set.
-	Seal   bool
-	Level  int // zstd level; 0 for the archive preset's 19
-	Agent  string
-	Seed   [32]byte
-	Signer *SourceSigner // without Seal: the file must have a source block
+	Level int // zstd level; 0 for the archive preset's 19
+	Agent string
+	Seed  [32]byte // the sealer's
 }
 
 // Transcode rewrites src at dst with the archive preset, then reads dst back and checks that it holds the same
@@ -539,18 +521,7 @@ func Transcode(src, dst string, opt TranscodeOptions) error {
 	defer C.free(unsafe.Pointer(d))
 	defer C.free(unsafe.Pointer(a))
 	ci := C.xicap_transcode_info{level: C.int(opt.Level), agent: a}
-	if opt.Seal {
-		ci.seal = 1
-	}
 	*(*[32]byte)(unsafe.Pointer(&ci.seed[0])) = opt.Seed
-	if g := opt.Signer; g != nil {
-		ci.has_signer = 1
-		*(*[32]byte)(unsafe.Pointer(&ci.signer_key[0])) = g.Key
-		ci.signer_verified_packets = C.uint64_t(g.VerifiedPackets)
-		if g.SignedToEnd {
-			ci.signer_signed_to_end = 1
-		}
-	}
 	var msg [256]C.char
 	if C.xicap_transcode(s, d, &ci, &msg[0], C.size_t(len(msg))) != 0 {
 		return cerr(&msg)

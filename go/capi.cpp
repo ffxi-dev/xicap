@@ -192,13 +192,6 @@ extern "C" int xicap_read(const char* path, xicap_summary* out, char* err, size_
                            copyString(out->source_format, source->format);
                            copyString(out->source_format_version, source->formatVersion);
                            out->skipped_records = source->skippedRecords;
-                           if (const auto& signer = source->signer)
-                           {
-                               out->has_source_signer       = 1;
-                               out->source_signed_to_end    = signer->signedToEnd ? 1 : 0;
-                               out->source_verified_packets = signer->verifiedPackets;
-                               std::ranges::copy(signer->key, out->source_signing_key);
-                           }
                        }
 
                        xicap::ReadPacket packet{};
@@ -370,23 +363,15 @@ extern "C" int xicap_transcode(const char* src, const char* dst, const xicap_tra
     return guarded(err, errlen, [&]
                    {
                        xicap::TranscodeOptions options{
-                           .policy  = xicap::FramePolicy::archive(),
-                           .signing = info->seal ? xicap::Signing::Seal : xicap::Signing::Reissue,
-                           .seed    = {},
-                           .agent   = info->agent ? info->agent : "",
-                           .signer  = {},
+                           .policy = xicap::FramePolicy::archive(),
+                           .seed   = {},
+                           .agent  = info->agent ? info->agent : "",
                        };
                        if (info->level != 0)
                        {
                            options.policy.compressionLevel = info->level;
                        }
                        std::ranges::copy(info->seed, options.seed.begin());
-                       if (info->has_signer)
-                       {
-                           xicap::SourceSigner signer{ .key = {}, .signedToEnd = info->signer_signed_to_end != 0, .verifiedPackets = info->signer_verified_packets };
-                           std::ranges::copy(info->signer_key, signer.key.begin());
-                           options.signer = signer;
-                       }
                        xicap::transcode(src, dst, options);
                    });
 }

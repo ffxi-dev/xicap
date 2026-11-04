@@ -140,15 +140,6 @@ public:
         out["utcOffsetSeconds"] = s->utcOffsetSeconds;
         out["sourceHash"]       = toBytes(s->sourceHash);
         out["metadata"]         = toBytes(s->metadata);
-        out["signer"]           = py::none();
-        if (s->signer)
-        {
-            py::dict signer;
-            signer["key"]             = toBytes(s->signer->key);
-            signer["signedToEnd"]     = s->signer->signedToEnd;
-            signer["verifiedPackets"] = s->signer->verifiedPackets;
-            out["signer"]             = signer;
-        }
         return out;
     }
 
@@ -443,7 +434,7 @@ PYBIND11_MODULE(_xicap, m)
 
     m.def(
         "transcode",
-        [](const std::filesystem::path& src, const std::filesystem::path& dst, bool seal, const py::bytes& seed, const std::string& agent, int level, const py::object& signer)
+        [](const std::filesystem::path& src, const std::filesystem::path& dst, const py::bytes& seed, const std::string& agent, int level)
         {
             const auto take = [](const py::bytes& b, auto& out, const char* what)
             {
@@ -455,18 +446,8 @@ PYBIND11_MODULE(_xicap, m)
                 std::memcpy(out.data(), view.data(), out.size());
             };
             xicap::TranscodeOptions options{};
-            options.signing = seal ? xicap::Signing::Seal : xicap::Signing::Reissue;
-            options.agent   = agent;
+            options.agent = agent;
             take(seed, options.seed, "seed");
-            if (!signer.is_none())
-            {
-                const auto          d = signer.cast<py::dict>();
-                xicap::SourceSigner out{};
-                take(d["key"].cast<py::bytes>(), out.key, "signer key");
-                out.signedToEnd     = d["signedToEnd"].cast<bool>();
-                out.verifiedPackets = d["verifiedPackets"].cast<uint64_t>();
-                options.signer      = out;
-            }
             if (level != 0)
             {
                 options.policy.compressionLevel = level;
@@ -486,12 +467,9 @@ PYBIND11_MODULE(_xicap, m)
         py::arg("src"),
         py::arg("dst"),
         py::kw_only(),
-        py::arg("seal"),
         py::arg("seed"),
         py::arg("agent"),
-        py::arg("level")  = 0,
-        py::arg("signer") = py::none(),
-        "Rewrites src at dst with the archive preset and checks it against src. seal=True keeps the signer's "
-        "signatures and adds a seal made with seed; seal=False reissues a file its own signer's seed signs, with the "
-        "source signer given as {key, signedToEnd, verifiedPackets}.");
+        py::arg("level") = 0,
+        "Rewrites src at dst with the archive preset and checks it against src: it keeps the signer's signatures and "
+        "adds a seal made with seed.");
 }

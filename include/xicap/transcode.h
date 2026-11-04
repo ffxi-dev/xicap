@@ -5,32 +5,19 @@
 
 #include <cstdint>
 #include <filesystem>
-#include <optional>
 #include <string>
 
 namespace xicap
 {
 
-// How a transcode signs what it writes. See FORMAT.md, Rewriting a capture.
-enum class Signing
-{
-    // Keep the signer's header, blocks, and signatures; add a seal made with the seed. Takes a file complete and
-    // signed to the end, a cut-off one, or a sealed one whose end was never signed; refuses one with a signature that
-    // fails.
-    Seal,
-    // The signer writes its own file again: the seed must be the one the header's key comes from. Takes a file
-    // complete and signed to the end. With signer set, the file's SOURCE_SIGNER block becomes that one.
-    Reissue,
-};
-
+// A transcode seals what it writes: it keeps the signer's header, blocks, and signatures, and adds a seal made with
+// the seed. It takes a file complete and signed to the end, a cut-off one, or a sealed one whose end was never signed,
+// and refuses one with a signature that fails. See FORMAT.md, Rewriting a capture.
 struct TranscodeOptions
 {
-    FramePolicy policy  = FramePolicy::archive();
-    Signing     signing = Signing::Seal;
-    SecretSeed  seed{}; // the transcoder's Ed25519 seed
-    std::string agent;  // Seal: the seal's agent, the transcoder with its version
-    // Reissue: the signed capture the file's packets came from. The file must have a SOURCE block.
-    std::optional<SourceSigner> signer;
+    FramePolicy policy = FramePolicy::archive();
+    SecretSeed  seed{}; // the sealer's Ed25519 seed
+    std::string agent;  // the seal's agent, the sealer with its version
 };
 
 struct TranscodeResult

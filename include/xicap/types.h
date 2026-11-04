@@ -268,30 +268,15 @@ struct SourceHeader
 };
 static_assert(sizeof(SourceHeader) == 108);
 
-// The SOURCE_SIGNER block's payload.
-struct SourceSignerBlock
-{
-    PublicKey              signingKey;
-    uint64_t               verifiedPackets;
-    uint8_t                flags; // SourceSignerFlag
-    std::array<uint8_t, 7> reserved;
-};
-static_assert(sizeof(SourceSignerBlock) == 48);
-
-namespace SourceSignerFlag
-{
-inline constexpr uint8_t SignedToEnd = 0x01;
-} // namespace SourceSignerFlag
-
 #pragma pack(pop)
 
 // Well-known extension block types. 0x0001 to 0x0008 held client memory copies
-// and a zstd dictionary in earlier formats and are retired.
+// and a zstd dictionary in earlier formats, and 0x000B a signed source's verdict
+// in a draft of format 4; all are retired.
 enum ExtensionType : uint32_t
 {
     EXT_EXCLUSION_POLICY = 0x0009,
     EXT_SOURCE           = 0x000A,
-    EXT_SOURCE_SIGNER    = 0x000B,
 };
 
 enum class ExclusionDirection : uint8_t
@@ -329,24 +314,15 @@ struct ExclusionPolicy
     std::vector<ExclusionRule> rules;
 };
 
-// A source that was a signed capture: its signer, and what its signatures covered when its packets were taken.
-struct SourceSigner
-{
-    PublicKey key{};
-    bool      signedToEnd{};
-    uint64_t  verifiedPackets{};
-};
-
 // Metadata a converted capture carries about its source.
 struct SourceInfo
 {
-    std::string                 format;
-    std::string                 formatVersion;
-    uint32_t                    skippedRecords{};
-    int32_t                     utcOffsetSeconds{};
-    std::array<uint8_t, 64>     sourceHash{};
-    std::vector<uint8_t>        metadata;
-    std::optional<SourceSigner> signer; // the SOURCE_SIGNER block, when the source was signed
+    std::string             format;
+    std::string             formatVersion;
+    uint32_t                skippedRecords{};
+    int32_t                 utcOffsetSeconds{};
+    std::array<uint8_t, 64> sourceHash{};
+    std::vector<uint8_t>    metadata;
 };
 
 struct ReadMarker

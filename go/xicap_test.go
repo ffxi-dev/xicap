@@ -2,8 +2,10 @@ package xicap
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"hash/crc32"
 	"math"
 	"os"
 	"path/filepath"
@@ -443,7 +445,7 @@ func TestTranscode(t *testing.T) {
 	src := capture(t, 4, info())
 	dst := filepath.Join(t.TempDir(), "sealed.xicap")
 	mogsafe := [32]byte{9}
-	if err := Transcode(src, dst, TranscodeOptions{Seal: true, Agent: "mogsafe test", Seed: mogsafe}); err != nil {
+	if err := Transcode(src, dst, TranscodeOptions{Agent: "mogsafe test", Seed: mogsafe}); err != nil {
 		t.Fatal(err)
 	}
 	in, _ := Read(src)
@@ -468,28 +470,16 @@ func TestTranscode(t *testing.T) {
 		t.Fatalf("channels: %v", in.Channels)
 	}
 
-	// The signer writes its own converted file again, naming a signed source.
-	ci := info()
-	ci.Origin = OriginConverted
-	ci.Source = &Source{Format: "xicap", FormatVersion: "3.0", Metadata: []byte("x")}
-	conv := capture(t, 2, ci)
-	reissued := filepath.Join(t.TempDir(), "reissued.xicap")
-	signer := SourceSigner{Key: [32]byte{5}, VerifiedPackets: 6}
-	if err := Transcode(conv, reissued, TranscodeOptions{Seed: ci.SigningSeed, Signer: &signer}); err != nil {
-		t.Fatal(err)
-	}
-	s, err = Read(reissued)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !s.SignedToEnd || s.Seal != nil || s.Source == nil || s.Source.Signer == nil || *s.Source.Signer != signer {
-		t.Fatalf("reissued: %+v %+v", s, s.Source)
-	}
-
-	// Another signer's seed is refused and leaves no file.
+	// A file whose signature fails is refused and leaves no file.
+	b, _ := os.ReadFile(src)
+	at := len(b) - 112
+	b[at+40] ^= 1 // the footer's signature, with the trailer's CRC put right
+	binary.LittleEndian.PutUint32(b[at+104:], crc32.ChecksumIEEE(b[at:at+104]))
+	bad := filepath.Join(t.TempDir(), "bad.xicap")
+	os.WriteFile(bad, b, 0o600)
 	refused := filepath.Join(t.TempDir(), "refused.xicap")
-	if err := Transcode(conv, refused, TranscodeOptions{Seed: mogsafe, Signer: &signer}); err == nil {
-		t.Fatal("reissued another signer's file")
+	if err := Transcode(bad, refused, TranscodeOptions{Seed: mogsafe}); err == nil {
+		t.Fatal("sealed a file whose signature fails")
 	}
 	if _, err := os.Stat(refused); !os.IsNotExist(err) {
 		t.Fatal("a refused transcode left a file")

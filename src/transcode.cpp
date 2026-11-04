@@ -30,35 +30,6 @@ namespace
     throw Error(ErrorCode::TranscodeMismatch, "xicap: transcode check failed: " + why);
 }
 
-auto blockType(const std::vector<uint8_t>& block) -> uint32_t
-{
-    uint32_t type = 0;
-    std::memcpy(&type, block.data(), sizeof(type));
-    return type;
-}
-
-// Reissue with a signer: the blocks lose any SOURCE_SIGNER and gain the given one after SOURCE; the header counts them.
-auto restateSigner(const SourceSigner& signer, std::vector<uint8_t>& header, std::vector<std::vector<uint8_t>>& blocks) -> void
-{
-    std::erase_if(blocks, [](const std::vector<uint8_t>& block)
-                  {
-                      return blockType(block) == EXT_SOURCE_SIGNER;
-                  });
-    const auto source = std::ranges::find_if(blocks, [](const std::vector<uint8_t>& block)
-                                             {
-                                                 return blockType(block) == EXT_SOURCE;
-                                             });
-    if (source == blocks.end())
-    {
-        refuse("a source signer needs a SOURCE block");
-    }
-    blocks.insert(std::next(source), encodeBlock(EXT_SOURCE_SIGNER, encodeSourceSigner(signer)));
-    const auto count = static_cast<uint32_t>(blocks.size());
-    std::memcpy(header.data() + offsetof(Header, extensionCount), &count, sizeof(count));
-    const auto crc = crc32({ header.data(), header.size() - sizeof(uint32_t) });
-    std::memcpy(header.data() + header.size() - sizeof(crc), &crc, sizeof(crc));
-}
-
 // A file beside dst that no other call names, and that becomes dst only once whole: a failed call leaves dst as it
 // was, and no call can write over its own src.
 class Staged
@@ -127,8 +98,7 @@ auto compare(const std::filesystem::path& src, const std::filesystem::path& dst)
 auto transcode(const std::filesystem::path& src, const std::filesystem::path& dst, const TranscodeOptions& options, const TranscodeHooks& hooks) -> TranscodeResult
 {
     Reader     in(src);
-    const auto v    = in.verify();
-    const bool seal = options.signing == Signing::Seal;
+    const auto v = in.verify();
     // A sealed file whose end was never signed stands for the cut-off recording it was made from.
     const bool cutOff = !in.complete() || (Access::trailer(in).trailerFlags & TrailerFlag::EndUnsigned) != 0;
     if (v.firstFailureOffset)
@@ -142,24 +112,9 @@ auto transcode(const std::filesystem::path& src, const std::filesystem::path& ds
 
     auto header = Access::headerBytes(in);
     auto blocks = Access::blockBytes(in);
-    if (!seal)
-    {
-        if (!v.signedToEnd)
-        {
-            refuse("a reissue takes a file signed to the end");
-        }
-        if (SigningKey(options.seed).publicKey() != in.signingKey())
-        {
-            refuse("a reissue is signed by the file's own signer");
-        }
-        if (options.signer)
-        {
-            restateSigner(*options.signer, header, blocks);
-        }
-    }
     // A cut-off file keeps the last checkpoint that verifies.
     std::optional<CheckpointPayload> kept;
-    if (seal && cutOff && v.verifiedPackets > 0)
+    if (cutOff && v.verifiedPackets > 0)
     {
         kept = CheckpointPayload{ .packets = v.verifiedPackets, .digest = v.checkpointDigest, .signature = v.checkpointSignature };
     }
@@ -167,20 +122,17 @@ auto transcode(const std::filesystem::path& src, const std::filesystem::path& ds
     Staged          tmp(dst);
     TranscodeResult result{ .packets = 0, .markers = 0, .bytesIn = std::filesystem::file_size(src), .bytesOut = 0 };
     {
-        const auto writer = Access::rewriter(tmp.path(), options.policy, std::move(header), std::move(blocks), seal ? nullptr : &options.seed);
-        if (seal)
+        const auto writer = Access::rewriter(tmp.path(), options.policy, std::move(header), std::move(blocks), nullptr);
+        if (cutOff)
         {
-            if (cutOff)
-            {
-                Access::endUnsigned(*writer);
-            }
-            else
-            {
-                Access::copyFooter(*writer, Access::trailer(in).signature);
-            }
-            const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-            Access::seal(*writer, options.seed, options.agent, hooks.sealedAt != 0 ? hooks.sealedAt : static_cast<uint64_t>(now));
+            Access::endUnsigned(*writer);
         }
+        else
+        {
+            Access::copyFooter(*writer, Access::trailer(in).signature);
+        }
+        const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+        Access::seal(*writer, options.seed, options.agent, hooks.sealedAt != 0 ? hooks.sealedAt : static_cast<uint64_t>(now));
         ReadPacket   p{};
         CopiedPacket copy;
         while (in.next(p))
@@ -208,8 +160,7 @@ auto transcode(const std::filesystem::path& src, const std::filesystem::path& ds
         Reader     out(tmp.path());
         const auto w    = out.verify();
         const bool good = out.complete() && !w.firstFailureOffset &&
-                          (seal ? (cutOff ? w.verifiedPackets == (kept ? kept->packets : 0) : w.signedToEnd) && w.seal && w.seal->good
-                                : w.signedToEnd);
+                          (cutOff ? w.verifiedPackets == (kept ? kept->packets : 0) : w.signedToEnd) && w.seal && w.seal->good;
         if (!good)
         {
             mismatch("its signatures do not verify as expected");

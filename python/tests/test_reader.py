@@ -130,7 +130,7 @@ def test_conformance_set(path):
 
 def test_transcode_seal(tmp_path):
     out = tmp_path / "sealed.xicap"
-    result = xicap.transcode(FIXTURE, out, seal=True, seed=bytes([9] * 32), agent="mogsafe test")
+    result = xicap.transcode(FIXTURE, out, seed=bytes([9] * 32), agent="mogsafe test")
     assert result["packets"] == 51
     v = xicap.Reader(out).verify()
     assert v["signedToEnd"] is True
@@ -140,23 +140,16 @@ def test_transcode_seal(tmp_path):
     assert xicap.Reader(FIXTURE).verify()["seal"] is None
 
 
-def test_transcode_reissue(tmp_path):
-    out = tmp_path / "reissued.xicap"
-    signer = {"key": bytes([5] * 32), "signedToEnd": True, "verifiedPackets": 51}
-    # The fixture is not converted, so it has no source block for a signer.
-    with pytest.raises(xicap.Error) as exc_info:
-        xicap.transcode(FIXTURE, out, seal=False, seed=bytes([0x22] * 32), agent="x", signer=signer)
-    assert exc_info.value.code == xicap.ErrorCode.TranscodeRefused
-    xicap.transcode(FIXTURE, out, seal=False, seed=bytes([0x22] * 32), agent="x")
-    r = xicap.Reader(out)
-    assert r.verify()["signedToEnd"] is True
-    assert [p.data for p in r] == [p.data for p in xicap.Reader(FIXTURE)]
-
-
 def test_transcode_refuses_and_leaves_nothing(tmp_path):
+    bad = tmp_path / "bad.xicap"
+    data = bytearray(FIXTURE.read_bytes())
+    trailer = len(data) - 112
+    data[trailer + 40] ^= 1  # the footer's signature, with the trailer's CRC put right
+    data[trailer + 104 : trailer + 108] = struct.pack("<I", zlib.crc32(bytes(data[trailer : trailer + 104])) & 0xFFFFFFFF)
+    bad.write_bytes(bytes(data))
     out = tmp_path / "refused.xicap"
     with pytest.raises(xicap.Error) as exc_info:
-        xicap.transcode(FIXTURE, out, seal=False, seed=bytes(32), agent="x")
+        xicap.transcode(bad, out, seed=bytes(32), agent="x")
     assert exc_info.value.code == xicap.ErrorCode.TranscodeRefused
     assert not out.exists()
 

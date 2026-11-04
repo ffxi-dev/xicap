@@ -172,12 +172,7 @@ inline auto normalReading(const std::filesystem::path& path) -> std::string
     out += std::format("  \"policy\": [{}, {}, [{}]],\n", str(r.policy().name), r.policy().version, rules);
     if (const auto& s = r.source())
     {
-        std::string signer = "null";
-        if (s->signer)
-        {
-            signer = std::format("[{}, {}, {}]", hex(s->signer->key), s->signer->signedToEnd, s->signer->verifiedPackets);
-        }
-        out += std::format("  \"source\": [{}, {}, {}, {}, {}, {}, {}],\n", str(s->format), str(s->formatVersion), s->skippedRecords, s->utcOffsetSeconds, hex(s->sourceHash), hex(s->metadata), signer);
+        out += std::format("  \"source\": [{}, {}, {}, {}, {}, {}],\n", str(s->format), str(s->formatVersion), s->skippedRecords, s->utcOffsetSeconds, hex(s->sourceHash), hex(s->metadata));
     }
     else
     {

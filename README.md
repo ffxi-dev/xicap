@@ -3,7 +3,7 @@
 Binary capture format and C++23 library for Final Fantasy XI network packets.
 
 A capture is a header written once, format-level extension blocks (the
-exclusion policy, the source of converted captures and its signer), packet
+exclusion policy, the source of converted captures), packet
 frames, and a footer index once the capture is closed. Packet frames hold their packets in columns,
 compressed as one zstd stream that runs across frames and restarts every 4 MiB.
 The file only ever grows, and each frame is decodable the moment it is written,
@@ -49,13 +49,10 @@ const auto v = r.verify();   // v.signedToEnd, v.verifiedPackets, v.seal
 
 // Rewrite a capture at archive size and check it packet by packet. Seal keeps
 // the recorder's signatures and adds the archive's seal, which also covers the
-// recorder's footer signature and kept checkpoint. Reissue lets a signer write
-// its own file again, naming a signed source in a SOURCE_SIGNER block. A
-// rewrite keeps the packets and the capture id; its bytes depend on the zstd
+// recorder's footer signature and kept checkpoint. A rewrite keeps the packets and the capture id; its bytes depend on the zstd
 // version.
 xicap::transcode("upload.xicap", "archived.xicap",
                  { .policy = xicap::FramePolicy::archive(),
-                   .signing = xicap::Signing::Seal,
                    .seed = archiveSeed, .agent = "mogsafe 2026.11.4" });
 
 // The archive cut an upload off after its first `held` bytes: write the rest
@@ -90,7 +87,7 @@ via FetchContent). Run via `ctest` or the produced `xicap_tests` executable.
   WebAssembly via Emscripten + Embind. Works in browsers and Node.
 * **Go** — see [`go/`](go/). cgo wrapper that builds the C++ reader in place;
   needs a C++23 compiler and libzstd (`apt install libzstd-dev`). Import
-  `github.com/ffxi-dev/xicap/v5/go`.
+  `github.com/ffxi-dev/xicap/v6/go`.
 
 ## License
 

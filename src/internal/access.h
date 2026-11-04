@@ -17,7 +17,6 @@ namespace xicap::internal
 // A whole extension block, from type to crc. Defined in writer.cpp.
 auto encodeBlock(uint32_t type, std::span<const uint8_t> payload) -> std::vector<uint8_t>;
 auto encodeSource(const SourceInfo& source) -> std::vector<uint8_t>;
-auto encodeSourceSigner(const SourceSigner& signer) -> std::vector<uint8_t>;
 
 struct Access
 {
