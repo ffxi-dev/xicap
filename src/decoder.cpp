@@ -93,17 +93,6 @@ auto parseSource(std::span<const uint8_t> payload) -> SourceInfo
     };
 }
 
-auto parseSourceSigner(std::span<const uint8_t> payload) -> SourceSigner
-{
-    size_t            pos = 0;
-    SourceSignerBlock block{};
-    if (!pop(payload, pos, block) || pos != payload.size())
-    {
-        throw Error(ErrorCode::InvalidExtension, "xicap: malformed source signer block");
-    }
-    return { .key = block.signingKey, .signedToEnd = (block.flags & SourceSignerFlag::SignedToEnd) != 0, .verifiedPackets = block.verifiedPackets };
-}
-
 } // namespace
 
 auto parseFrameHeader(std::span<const uint8_t> bytes, FrameInfo& out) noexcept -> bool
@@ -201,13 +190,6 @@ auto readBlock(std::span<const uint8_t> block, uint32_t index, Start& start) -> 
                 throw Error(ErrorCode::InvalidExtension, "xicap: two source blocks");
             }
             start.source = parseSource(payload);
-            break;
-        case EXT_SOURCE_SIGNER:
-            if (!start.source || start.source->signer)
-            {
-                throw Error(ErrorCode::InvalidExtension, "xicap: a source signer block goes once, after the source block");
-            }
-            start.source->signer = parseSourceSigner(payload);
             break;
         default:
             start.extensions.push_back({ hdr.type, { payload.begin(), payload.end() } });

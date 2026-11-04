@@ -151,7 +151,7 @@ auto cutOff(const fs::path& path) -> std::vector<uint8_t>
 
 auto mogsafe() -> TranscodeOptions
 {
-    TranscodeOptions o{ .policy = FramePolicy::archive(), .signing = Signing::Seal, .seed = {}, .agent = "mogsafe vectors", .signer = {} };
+    TranscodeOptions o{ .policy = FramePolicy::archive(), .seed = {}, .agent = "mogsafe vectors" };
     o.seed.fill(0x99);
     return o;
 }
@@ -514,16 +514,15 @@ int main(int argc, char* argv[])
               auto cfg        = config();
               cfg.origin      = Origin::Converted;
               cfg.clockSource = ClockSource::Converted;
-              cfg.source      = SourceInfo{ .format = "xicap", .formatVersion = "3.0", .skippedRecords = 2, .utcOffsetSeconds = -3600, .sourceHash = {}, .metadata = { 'c', 'a', 'p', 't', 'u', 'r', 'e', ' ', 'x' }, .signer = SourceSigner{ .key = {}, .signedToEnd = false, .verifiedPackets = 2 } };
+              cfg.source      = SourceInfo{ .format = "xicap", .formatVersion = "3.0", .skippedRecords = 2, .utcOffsetSeconds = -3600, .sourceHash = {}, .metadata = { 'c', 'a', 'p', 't', 'u', 'r', 'e', ' ', 'x' } };
               cfg.source->sourceHash.fill(0xAB);
-              cfg.source->signer->key.fill(0xCD);
               Writer w(p, cfg);
               w.write(T0, PacketDirection::ServerToClient, zoneIn(230, 1));
               w.write(T0 + 10, PacketDirection::ServerToClient, game(0x0DF, 16, 1, 2));
               w.write(T0 + 20, PacketDirection::ServerToClient, game(0x0DF, 16, 2, 3));
               w.close();
               Reader r(p);
-              expect(r.source() && r.source()->signer && r.source()->signer->verifiedPackets == 2 && r.verify().signedToEnd, "converted names its source and the source's signer");
+              expect(r.source() && r.source()->skippedRecords == 2 && r.verify().signedToEnd, "converted names its source");
           } },
         { "chat-kept", [&](const fs::path& p)
           {

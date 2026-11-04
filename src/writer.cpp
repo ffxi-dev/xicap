@@ -247,13 +247,6 @@ auto encodeSource(const SourceInfo& source) -> std::vector<uint8_t>
     return out;
 }
 
-auto encodeSourceSigner(const SourceSigner& signer) -> std::vector<uint8_t>
-{
-    std::vector<uint8_t> out;
-    appendPod(out, SourceSignerBlock{ .signingKey = signer.key, .verifiedPackets = signer.verifiedPackets, .flags = signer.signedToEnd ? SourceSignerFlag::SignedToEnd : uint8_t{ 0 }, .reserved = {} });
-    return out;
-}
-
 } // namespace
 
 namespace internal
@@ -271,11 +264,6 @@ auto encodeBlock(uint32_t type, std::span<const uint8_t> payload) -> std::vector
 auto encodeSource(const SourceInfo& source) -> std::vector<uint8_t>
 {
     return xicap::encodeSource(source);
-}
-
-auto encodeSourceSigner(const SourceSigner& signer) -> std::vector<uint8_t>
-{
-    return xicap::encodeSourceSigner(signer);
 }
 
 } // namespace internal
@@ -669,7 +657,7 @@ auto Writer::writeStart() -> void
         header.versionMajor       = VERSION_MAJOR;
         header.versionMinor       = VERSION_MINOR;
         header.headerSize         = HEADER_SIZE;
-        header.extensionCount     = static_cast<uint32_t>(extensions_.size() + 1U + (config_.source ? 1U : 0U) + (config_.source && config_.source->signer ? 1U : 0U));
+        header.extensionCount     = static_cast<uint32_t>(extensions_.size() + 1U + (config_.source ? 1U : 0U));
         header.captureId          = captureId_;
         header.previousCaptureId  = config_.previousCaptureId;
         header.startTimestamp     = totalPackets_ > 0 ? firstTimestamp_ : 0;
@@ -694,10 +682,6 @@ auto Writer::writeStart() -> void
         if (config_.source)
         {
             addBlock(EXT_SOURCE, encodeSource(*config_.source));
-            if (config_.source->signer)
-            {
-                addBlock(EXT_SOURCE_SIGNER, encodeSourceSigner(*config_.source->signer));
-            }
         }
         for (const auto& ext : extensions_)
         {

@@ -29,7 +29,7 @@ TRAILER, INDEX_ENTRY, SEAL, CHECKPOINT = 112, 24, 160, 136
 MAX_PACKETS, MAX_WINDOW = 1024 * 1024, 1 << 23
 MAX_CONTENT = 16 * 1024 * 1024
 MAX_EXTENSION = 16 * 1024 * 1024
-EXT_POLICY, EXT_SOURCE, EXT_SOURCE_SIGNER = 0x0009, 0x000A, 0x000B
+EXT_POLICY, EXT_SOURCE = 0x0009, 0x000A
 FRAME_HEADER = 32
 KIND_CHECKPOINT, KIND_PACKETS = 0x01, 0x80
 RESTART, SEALED, END_UNSIGNED = 0x01, 0x01, 0x02
@@ -278,11 +278,6 @@ class Capture:
                 if self.source is not None:
                     raise Refused("extension", "two sources")
                 self.source = self.parse_source(payload)
-            elif type_ == EXT_SOURCE_SIGNER:
-                # Once, after the source block: the source's key, verifiedPackets, and flags (bit 0 signed to the end).
-                if self.source is None or self.source[6] is not None or len(payload) != 48:
-                    raise Refused("extension", "misplaced or malformed source signer")
-                self.source[6] = [payload[0:32].hex(), bool(payload[40] & 1), struct.unpack_from("<Q", payload, 32)[0]]
             else:
                 self.extensions.append([type_, payload.hex()])
         if self.policy is None:
@@ -314,7 +309,7 @@ class Capture:
         if len(p) < 108 or len(p) - 108 != struct.unpack_from("<I", p, 104)[0]:
             raise Refused("extension", "malformed source")
         skipped, offset = struct.unpack_from("<Ii", p, 32)
-        return [text(p[0:16]), text(p[16:32]), skipped, offset, p[40:104].hex(), p[108:].hex(), None]
+        return [text(p[0:16]), text(p[16:32]), skipped, offset, p[40:104].hex(), p[108:].hex()]
 
     # Footer -----------------------------------------------------------------
     def read_footer(self) -> None:

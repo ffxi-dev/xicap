@@ -13,7 +13,7 @@ Example
 ...     pass
 >>> r.verify()["signedToEnd"]
 True
->>> xicap.transcode("session.xicap", "archived.xicap", seal=True, seed=key, agent="mogsafe 2026.11.4")
+>>> xicap.transcode("session.xicap", "archived.xicap", seed=key, agent="mogsafe 2026.11.4")
 {'packets': ..., 'markers': ..., 'bytesIn': ..., 'bytesOut': ...}
 """
 

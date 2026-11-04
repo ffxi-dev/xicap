@@ -108,7 +108,7 @@ auto shortStreams() -> FramePolicy
 
 auto mogsafe() -> TranscodeOptions
 {
-    return { .policy = FramePolicy::archive(), .signing = Signing::Seal, .seed = seed(9), .agent = "mogsafe test", .signer = {} };
+    return { .policy = FramePolicy::archive(), .seed = seed(9), .agent = "mogsafe test" };
 }
 
 auto key(const SecretSeed& s) -> PublicKey
@@ -1052,52 +1052,6 @@ TEST_CASE("transcode")
         REQUIRE(v.seal);
         CHECK_FALSE(v.seal->good);
     }
-    SECTION("Reissue writes the signer's own file again with a source signer")
-    {
-        auto cfg   = config();
-        cfg.origin = Origin::Converted;
-        cfg.source = SourceInfo{ .format = "xicap", .formatVersion = "3.0", .skippedRecords = 0, .utcOffsetSeconds = 0, .sourceHash = { 1, 2, 3 }, .metadata = { 'x' }, .signer = {} };
-        {
-            Writer w(src.path, cfg);
-            w.write(T0, PacketDirection::ServerToClient, gamePacket(0x0DF, 16));
-            w.close();
-        }
-        auto options    = mogsafe();
-        options.signing = Signing::Reissue;
-        options.seed    = cfg.signingSeed;
-        options.signer  = SourceSigner{ .key = key(seed(3)), .signedToEnd = false, .verifiedPackets = 41 };
-        transcode(src.path, dst.path, options);
-        Reader r(dst.path);
-        CHECK(r.verify().signedToEnd);
-        CHECK_FALSE(r.verify().seal);
-        CHECK(r.captureId() == Reader(src.path).captureId());
-        REQUIRE(r.source());
-        CHECK(r.source()->metadata == std::vector<uint8_t>{ 'x' });
-        REQUIRE(r.source()->signer);
-        CHECK(r.source()->signer->key == key(seed(3)));
-        CHECK(r.source()->signer->verifiedPackets == 41);
-        CHECK_FALSE(r.source()->signer->signedToEnd);
-
-        // Again: the block is replaced, not added.
-        TempCapture twice;
-        options.signer->signedToEnd = true;
-        transcode(dst.path, twice.path, options);
-        CHECK(Reader(twice.path).source()->signer->signedToEnd);
-        CHECK(internal::Access::blockBytes(Reader(twice.path)).size() == 3);
-
-        // Another signer's seed, and a file without a source block, are refused.
-        options.seed = seed(11);
-        CHECK(refusal([&]
-                      {
-                          transcode(src.path, twice.path, options);
-                      }) == ErrorCode::TranscodeRefused);
-        session(src.path, 2);
-        options.seed = config().signingSeed;
-        CHECK(refusal([&]
-                      {
-                          transcode(src.path, twice.path, options);
-                      }) == ErrorCode::TranscodeRefused);
-    }
     SECTION("a difference leaves no file at dst")
     {
         session(src.path, 3);
@@ -1141,14 +1095,17 @@ TEST_CASE("the writer stores text as UTF-8, and copies keep markers whole")
     // A marker of 2,000 bytes, which the format allows though this writer's mark() cuts at 1,024.
     const std::string longText(2000, 'x');
     TempCapture       long_;
-    auto              options = mogsafe();
-    options.signing           = Signing::Reissue;
-    options.seed              = config().signingSeed;
-    internal::transcode(src.path, long_.path, options, { .edit = [&](uint64_t, internal::CopiedPacket& p)
-                                                         {
-                                                             p.markers[0].text = longText;
-                                                         },
-                                                         .check = false });
+    {
+        Reader     in(src.path);
+        const auto signer = config().signingSeed;
+        const auto writer = internal::Access::rewriter(long_.path, FramePolicy::live(), internal::Access::headerBytes(in), internal::Access::blockBytes(in), &signer);
+        ReadPacket p{};
+        REQUIRE(in.next(p));
+        const std::vector<ReadMarker> marker{ { MarkerKind::Note, longText } };
+        p.markers = marker;
+        internal::Access::add(*writer, p);
+        writer->close();
+    }
     REQUIRE(readAll(long_.path)[0].markers[0].text == longText);
     transcode(long_.path, dst.path, mogsafe());
     CHECK(readAll(dst.path)[0].markers[0].text == longText);
@@ -1164,11 +1121,16 @@ TEST_CASE("transcode writes dst whole or not at all")
 
     SECTION("a refused transcode leaves dst as it was")
     {
-        auto reissue    = mogsafe();
-        reissue.signing = Signing::Reissue; // with a seed that did not sign src
+        // A footer whose signature fails, with the trailer's CRC put right.
+        auto bytes   = bytesOf(src.path);
+        auto trailer = podAt<FooterTrailer>(bytes, bytes.size() - sizeof(FooterTrailer));
+        trailer.signature[0] ^= 1;
+        trailer.trailerCrc = internal::crc32({ reinterpret_cast<const uint8_t*>(&trailer), offsetof(FooterTrailer, trailerCrc) });
+        std::memcpy(bytes.data() + bytes.size() - sizeof(FooterTrailer), &trailer, sizeof(trailer));
+        save(src.path, bytes);
         CHECK(refusal([&]
                       {
-                          transcode(src.path, dst.path, reissue);
+                          transcode(src.path, dst.path, mogsafe());
                       }) == ErrorCode::TranscodeRefused);
         CHECK(bytesOf(dst.path) == before);
     }
@@ -1325,33 +1287,6 @@ TEST_CASE("a cut-off file's index stops at its first bad frame")
     CHECK(r.totalFrames() == 2);
     CHECK(r.seekToFrame(3) == SeekResult::OutOfRange);
     CHECK(r.seekToFrame(1) == SeekResult::Ok);
-}
-
-TEST_CASE("a source signer block goes once, after the source block")
-{
-    TempCapture tmp;
-    auto        cfg = config();
-    cfg.origin      = Origin::Converted;
-    cfg.source      = SourceInfo{ .format = "xicap", .formatVersion = "3.0", .skippedRecords = 0, .utcOffsetSeconds = 0, .sourceHash = {}, .metadata = {}, .signer = SourceSigner{ .key = key(seed(3)), .signedToEnd = true, .verifiedPackets = 9 } };
-    writeFrames(tmp.path, 1);
-    {
-        Writer w(tmp.path, cfg);
-        w.write(T0, PacketDirection::ServerToClient, gamePacket(0x0DF, 16));
-        w.close();
-    }
-    REQUIRE(Reader(tmp.path).source()->signer->verifiedPackets == 9);
-    // Swap the two blocks: the signer comes first.
-    auto       bytes  = bytesOf(tmp.path);
-    const auto blocks = internal::Access::blockBytes(Reader(tmp.path));
-    REQUIRE(blocks.size() == 3);
-    std::vector<uint8_t> swapped = blocks[0];
-    swapped.insert(swapped.end(), blocks[2].begin(), blocks[2].end());
-    swapped.insert(swapped.end(), blocks[1].begin(), blocks[1].end());
-    save(tmp.path, splice(bytes, HEADER_SIZE, swapped.size(), swapped));
-    CHECK(refusal([&]
-                  {
-                      Reader r(tmp.path);
-                  }) == ErrorCode::InvalidExtension);
 }
 
 #ifdef __linux__

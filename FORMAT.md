@@ -152,10 +152,10 @@ A reader refuses a block whose CRC fails or whose length is over 16 MiB.
 |-----:|------|----------|---------|
 | `0x0009` | `EXCLUSION_POLICY` | always, exactly once | [Exclusion](#exclusion) |
 | `0x000A` | `SOURCE` | when `origin` is 2; at most once | [Source](#source) |
-| `0x000B` | `SOURCE_SIGNER` | when the source was a signed capture; at most once, right after `SOURCE` | [Source signer](#source-signer) |
 
 Ids `0x0001` to `0x0008` held client memory copies and a zstd dictionary in
-earlier formats and are retired: never reuse them. A capture's context is its
+earlier formats, and `0x000B` a signed source's verdict in a draft of format 4;
+all are retired: never reuse them. A capture's context is its
 packets, never a copy of client state.
 
 | Range | Use |
@@ -181,21 +181,6 @@ one.
 | 40 | 64 | `sourceHash` | SHA-512 of the source file as uploaded |
 | 104 | 4 | `metadataLength` | |
 | 108 | `metadataLength` | `metadata` | the source's metadata as found, such as captain's `manifest.txt` |
-
-### Source signer
-
-When the packets came from a capture its own signer signed, this block names
-that signer and what its signatures covered when the packets were taken, so the
-source's verdict outlives its file. It follows the `SOURCE` block; a reader
-refuses one with no `SOURCE` block before it, a second one, or one whose
-payload is not 48 bytes, and reports it with the source.
-
-| Off | Size | Field | Notes |
-|----:|-----:|-------|-------|
-| 0 | 32 | `signingKey` | the source's signer's Ed25519 public key |
-| 32 | 8 | `verifiedPackets` | packets the source's signatures covered |
-| 40 | 1 | `flags` | bit 0: the source was signed to the end. Other bits reserved |
-| 41 | 7 | `reserved` | |
 
 ## Frames
 
@@ -533,8 +518,7 @@ A reader computes the stream from the packets it reads and reports:
   fails. Checkpoints sit outside the signed stream, so a failed one does not stop
   a later checkpoint or the footer from counting;
 - for a sealed file, the seal's key, agent, and time, and whether its signature
-  verifies;
-- the source signer, if the file names one.
+  verifies.
 
 A failed signature never stops a reader from reading packets.
 
@@ -555,9 +539,6 @@ of one file need not match byte for byte.
   sets bit 0. `D(k)` does not depend on frames, so the kept checkpoint and the
   footer signature still verify. A rewriter does not seal a file with a
   signature that fails.
-- **Reissuing.** A signer may write its own file again, signing it with the
-  same key. It keeps the header and the blocks, except that it may add or
-  replace the `SOURCE_SIGNER` block, which changes `extensionCount`.
 
 ## Exclusion
 

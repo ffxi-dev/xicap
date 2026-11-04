@@ -42,10 +42,7 @@ r.seek_to_time(1_700_000_500_000)
 v = r.verify()   # v["signedToEnd"], v["seal"]
 
 # Rewrite at archive size; checked packet by packet before dst appears
-xicap.transcode("upload.xicap", "archived.xicap", seal=True, seed=seed32, agent="mogsafe 2026.11.4")
-# Reissue a file its own signer's seed signed, naming a signed source
-xicap.transcode("converted.xicap", "again.xicap", seal=False, seed=seed32, agent="mogsafe",
-                signer={"key": key32, "signedToEnd": True, "verifiedPackets": 1200})
+xicap.transcode("upload.xicap", "archived.xicap", seed=seed32, agent="mogsafe 2026.11.4")
 ```
 
 ## API

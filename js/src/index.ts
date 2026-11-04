@@ -147,13 +147,6 @@ export interface ExclusionPolicy {
     }[];
 }
 
-// A source that was a signed capture: its signer, and what its signatures covered.
-export interface SourceSigner {
-    key: Uint8Array;
-    signedToEnd: boolean;
-    verifiedPackets: number;
-}
-
 export interface SourceInfo {
     format: string;
     formatVersion: string;
@@ -161,7 +154,6 @@ export interface SourceInfo {
     utcOffsetSeconds: number;
     sourceHash: Uint8Array;
     metadata: Uint8Array;
-    signer: SourceSigner | null;
 }
 
 // The seal of a program that rewrote the file.
