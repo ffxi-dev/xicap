@@ -107,7 +107,7 @@ extern "C" int xicap_markers(const char* path, xicap_marker** out, size_t* count
                                             throw std::bad_alloc();
                                         }
                                         std::memcpy(text, m.text.c_str(), m.text.size() + 1);
-                                        markers.push_back({ .kind = static_cast<uint8_t>(m.kind), .text = text, .packet = index, .timestamp = packet.timestamp });
+                                        markers.push_back({ .kind = static_cast<uint8_t>(m.kind), .text = text, .text_size = m.text.size(), .packet = index, .timestamp = packet.timestamp });
                                     }
                                 }
                                            });
@@ -324,11 +324,11 @@ extern "C" int xicap_writer_write(xicap_writer* w, uint64_t timestamp, int clien
                    });
 }
 
-extern "C" int xicap_writer_mark(xicap_writer* w, uint8_t kind, const char* text, char* err, size_t errlen)
+extern "C" int xicap_writer_mark(xicap_writer* w, uint8_t kind, const char* text, size_t text_size, char* err, size_t errlen)
 {
     return guarded(err, errlen, [&]
                    {
-                       w->writer.mark(static_cast<xicap::MarkerKind>(kind), text ? text : "");
+                       w->writer.mark(static_cast<xicap::MarkerKind>(kind), text ? std::string_view{ text, text_size } : std::string_view{});
                    });
 }
 

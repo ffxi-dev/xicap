@@ -286,7 +286,7 @@ func Markers(path string) ([]Marker, error) {
 	defer C.xicap_free_markers(list, n)
 	out := make([]Marker, 0, int(n))
 	for _, m := range unsafe.Slice(list, int(n)) {
-		out = append(out, Marker{Kind: MarkerKind(m.kind), Text: C.GoString(m.text), Packet: uint64(m.packet), Timestamp: uint64(m.timestamp)})
+		out = append(out, Marker{Kind: MarkerKind(m.kind), Text: C.GoStringN(m.text, C.int(m.text_size)), Packet: uint64(m.packet), Timestamp: uint64(m.timestamp)})
 	}
 	return out, nil
 }
@@ -465,7 +465,7 @@ func (w *Writer) Mark(kind MarkerKind, text string) error {
 	t := C.CString(text)
 	defer C.free(unsafe.Pointer(t))
 	var msg [256]C.char
-	if C.xicap_writer_mark(w.w, C.uint8_t(kind), t, &msg[0], C.size_t(len(msg))) != 0 {
+	if C.xicap_writer_mark(w.w, C.uint8_t(kind), t, C.size_t(len(text)), &msg[0], C.size_t(len(msg))) != 0 {
 		return cerr(&msg)
 	}
 	return nil

@@ -87,8 +87,9 @@ extern "C"
 
     typedef struct
     {
-        uint8_t  kind;      // 0 note, 1 login, 2 logout
-        char*    text;      // NUL-terminated
+        uint8_t  kind; // 0 note, 1 login, 2 logout
+        char*    text; // text_size bytes, then a NUL; the text itself may hold NULs
+        size_t   text_size;
         uint64_t packet;    // index of the packet the marker precedes
         uint64_t timestamp; // that packet's, Unix ms
     } xicap_marker;
@@ -146,7 +147,7 @@ extern "C"
     int xicap_writer_write(xicap_writer* w, uint64_t timestamp, int client_to_server, uint8_t channel, uint16_t opcode, uint16_t provenance, const uint8_t* data, size_t size, char* err, size_t errlen);
 
     // Places a marker (0 note, 1 login, 2 logout) before the next packet.
-    int xicap_writer_mark(xicap_writer* w, uint8_t kind, const char* text, char* err, size_t errlen);
+    int xicap_writer_mark(xicap_writer* w, uint8_t kind, const char* text, size_t text_size, char* err, size_t errlen);
 
     int xicap_writer_flush(xicap_writer* w, char* err, size_t errlen);
 

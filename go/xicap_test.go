@@ -402,6 +402,7 @@ func TestMarkers(t *testing.T) {
 	step(w.Write(t0+20, false, pkt))
 	step(w.Flush())
 	step(w.Mark(MarkerNote, "cap stop quest"))
+	step(w.Mark(MarkerNote, "approved\x00revoked")) // marker text is length-delimited: a NUL is text
 	step(w.Mark(MarkerLogout, ""))
 	step(w.Write(t0+30, false, pkt))
 	step(w.Close())
@@ -414,6 +415,7 @@ func TestMarkers(t *testing.T) {
 		{MarkerLogin, "", 0, t0},
 		{MarkerNote, "cap start quest", 1, t0 + 10},
 		{MarkerNote, "cap stop quest", 3, t0 + 30},
+		{MarkerNote, "approved\x00revoked", 3, t0 + 30},
 		{MarkerLogout, "", 3, t0 + 30},
 	}
 	if !reflect.DeepEqual(got, want) {
