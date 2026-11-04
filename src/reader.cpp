@@ -24,7 +24,7 @@ Reader::Reader(const std::filesystem::path& path)
         file_.seekg(static_cast<std::streamoff>(size - sizeof(t)));
         file_.read(reinterpret_cast<char*>(&t), sizeof(t));
         const auto bytes = std::span{ reinterpret_cast<const uint8_t*>(&t), offsetof(format::Trailer, crc) };
-        complete_        = file_ && t.magic == format::TRAILER_MAGIC && internal::crc32(bytes) == t.crc;
+        complete_        = file_ && t.magic == format::TRAILER_MAGIC && internal::crcMatches(bytes, t.crc);
         if (complete_)
         {
             endTimestamp_ = t.endTimestamp;

@@ -195,7 +195,7 @@ auto StreamReader::State::parseFrame(std::span<const uint8_t> avail) -> bool
             return false;
         }
         std::memcpy(&t, avail.data(), sizeof(t));
-        if (internal::crc32(avail.first(offsetof(format::Trailer, crc))) != t.crc)
+        if (!internal::crcMatches(avail.first(offsetof(format::Trailer, crc)), t.crc))
         {
             return stop();
         }
@@ -229,7 +229,7 @@ auto StreamReader::State::parseFrame(std::span<const uint8_t> avail) -> bool
     }
     uint32_t crc = 0;
     std::memcpy(&crc, avail.data() + size - sizeof(crc), sizeof(crc));
-    if (internal::crc32(avail.first(size - sizeof(crc))) != crc)
+    if (!internal::crcMatches(avail.first(size - sizeof(crc)), crc))
     {
         return stop();
     }

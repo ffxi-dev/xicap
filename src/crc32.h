@@ -33,4 +33,14 @@ inline constexpr auto CRC32_TABLE = []
     return state ^ 0xFFFFFFFFU;
 }
 
+// Fuzzing builds skip the check, so mutated input reaches the decoders behind it.
+[[nodiscard]] inline auto crcMatches(std::span<const uint8_t> data, uint32_t stored) noexcept -> bool
+{
+#ifdef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
+    return true;
+#else
+    return crc32(data) == stored;
+#endif
+}
+
 } // namespace xicap::internal

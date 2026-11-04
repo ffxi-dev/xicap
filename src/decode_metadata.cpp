@@ -27,7 +27,7 @@ auto endsWithCrc(std::span<const uint8_t> bytes) -> bool
 {
     uint32_t stored = 0;
     std::memcpy(&stored, bytes.data() + bytes.size() - sizeof(stored), sizeof(stored));
-    return crc32(bytes.first(bytes.size() - sizeof(stored))) == stored;
+    return crcMatches(bytes.first(bytes.size() - sizeof(stored)), stored);
 }
 
 auto readPolicy(std::span<const uint8_t> payload) -> ExclusionPolicy
