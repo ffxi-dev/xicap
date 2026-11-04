@@ -561,3 +561,52 @@ func TestArchivePreset(t *testing.T) {
 		t.Fatalf("archive preset: %+v", s)
 	}
 }
+
+func TestPseudonymizer(t *testing.T) {
+	key := DeriveKey([32]byte{1, 2, 3}, PseudonymKeyLabel)
+	if key == DeriveKey([32]byte{1, 2, 3}, AnonymousSigningLabel) {
+		t.Fatal("two labels gave one key")
+	}
+	p := NewPseudonymizer(key)
+	defer p.Close()
+
+	real := Character{ContentID: 23773279, CharacterID: 701980, WorldID: 119, Name: "Firemarshal", World: "Ragnarok"}
+	fake := p.Character(real)
+	if fake.Name == real.Name || len(fake.Name) != len(real.Name) || fake.CharacterID == real.CharacterID || fake.CharacterID >= 0x01000000 || fake.ContentID < 0x80000000 || fake.World != real.World {
+		t.Fatalf("character %+v", fake)
+	}
+
+	// A zone-in: UniqueNo at 4, the name at 132.
+	zoneIn := make([]byte, 148)
+	zoneIn[0], zoneIn[1] = 0x0A, 37<<1
+	zoneIn[4], zoneIn[5], zoneIn[6] = 0x1C, 0xB6, 0x0A // 701980
+	copy(zoneIn[132:], real.Name)
+	p.Packet(Packet{Data: zoneIn})
+
+	wi := info()
+	wi.Character = fake
+	pol := AnonymousPolicy()
+	if pol.Name != "xicap-anonymous" || pol.Action(ChannelGame, DirServerToClient, 0x017) != ActionStub || pol.Action(ChannelSearch, DirServerToClient, 0x80) != ActionZeroRange {
+		t.Fatalf("policy %+v", pol)
+	}
+	wi.Policy = &pol
+	wi.SigningSeed = DeriveKey(wi.SigningSeed, AnonymousSigningLabel)
+	path := filepath.Join(t.TempDir(), "a.xicap")
+	w, err := Create(path, wi)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Write(t0, false, zoneIn); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Read(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.CharacterMismatch || s.Character.Name != fake.Name || bytes.Contains(zoneIn, []byte(real.Name)) {
+		t.Fatalf("summary %+v", s)
+	}
+}

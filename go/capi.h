@@ -176,6 +176,25 @@ extern "C"
     // signatures against src. On any difference it fails and leaves no file at dst.
     int xicap_transcode(const char* src, const char* dst, const xicap_transcode_info* info, char* err, size_t errlen);
 
+    typedef struct xicap_pseudonymizer xicap_pseudonymizer;
+
+    // A pseudonymizer keyed by key (xicap::Pseudonymizer). Free it with xicap_pseudonymizer_free.
+    xicap_pseudonymizer* xicap_pseudonymizer_new(const uint8_t key[32]);
+    void                 xicap_pseudonymizer_free(xicap_pseudonymizer* p);
+
+    // Replaces the player names and ids in a packet, in place.
+    void xicap_pseudonymize(xicap_pseudonymizer* p, uint8_t channel, uint8_t direction, uint8_t* data, size_t size);
+
+    // Replaces a header character's content id, character id, and NUL-padded name with their pseudonyms.
+    void xicap_pseudonymize_character(xicap_pseudonymizer* p, uint32_t* content_id, uint32_t* character_id, char name[16]);
+
+    // A key for one use, named by label, derived from seed (xicap::deriveKey).
+    void xicap_derive_key(const uint8_t seed[32], const char* label, uint8_t out[32]);
+
+    // The anonymous exclusion policy: its name and version, and its rule count. Fills at most rule_cap rules and
+    // range_cap ranges; each rule takes range_count ranges from ranges, in order.
+    size_t xicap_anonymous_policy(char name[32], uint32_t* version, xicap_rule* rules, size_t rule_cap, xicap_range* ranges, size_t range_cap);
+
 #ifdef __cplusplus
 }
 #endif

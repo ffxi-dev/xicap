@@ -1,6 +1,7 @@
 #include "capi.h"
 
 #include "internal/decoder.h"
+#include "xicap/pseudonym.h"
 #include "xicap/reader.h"
 #include "xicap/transcode.h"
 #include "xicap/writer.h"
@@ -394,4 +395,67 @@ extern "C" int xicap_transcode(const char* src, const char* dst, const xicap_tra
                        }
                        xicap::transcode(src, dst, options);
                    });
+}
+
+struct xicap_pseudonymizer
+{
+    xicap::Pseudonymizer p;
+};
+
+extern "C" xicap_pseudonymizer* xicap_pseudonymizer_new(const uint8_t key[32])
+{
+    xicap::PseudonymKey k{};
+    std::copy_n(key, k.size(), k.begin());
+    return new xicap_pseudonymizer{ xicap::Pseudonymizer(k) };
+}
+
+extern "C" void xicap_pseudonymizer_free(xicap_pseudonymizer* p)
+{
+    delete p;
+}
+
+extern "C" void xicap_pseudonymize(xicap_pseudonymizer* p, uint8_t channel, uint8_t direction, uint8_t* data, size_t size)
+{
+    p->p.packet(channel, static_cast<xicap::PacketDirection>(direction), { reinterpret_cast<std::byte*>(data), size });
+}
+
+extern "C" void xicap_pseudonymize_character(xicap_pseudonymizer* p, uint32_t* content_id, uint32_t* character_id, char name[16])
+{
+    xicap::CharacterIdentity c{};
+    c.contentId   = *content_id;
+    c.characterId = *character_id;
+    std::memcpy(c.characterName.data(), name, c.characterName.size());
+    c             = p->p.character(c);
+    *content_id   = c.contentId;
+    *character_id = c.characterId;
+    std::memcpy(name, c.characterName.data(), c.characterName.size());
+}
+
+extern "C" void xicap_derive_key(const uint8_t seed[32], const char* label, uint8_t out[32])
+{
+    xicap::SecretSeed s{};
+    std::copy_n(seed, s.size(), s.begin());
+    const auto key = xicap::deriveKey(s, label);
+    std::copy(key.begin(), key.end(), out);
+}
+
+extern "C" size_t xicap_anonymous_policy(char name[32], uint32_t* version, xicap_rule* rules, size_t rule_cap, xicap_range* ranges, size_t range_cap)
+{
+    const auto& policy = xicap::anonymousExclusionPolicy();
+    std::snprintf(name, 32, "%s", policy.name.c_str());
+    *version     = policy.version;
+    size_t range = 0;
+    for (size_t i = 0; i < std::min(rule_cap, policy.rules.size()); ++i)
+    {
+        const auto& r = policy.rules[i];
+        rules[i]      = { .channel = r.channel, .direction = static_cast<uint8_t>(r.direction), .action = static_cast<uint8_t>(r.action), .opcode = r.opcode, .range_count = static_cast<uint16_t>(r.ranges.size()) };
+        for (const auto& br : r.ranges)
+        {
+            if (range < range_cap)
+            {
+                ranges[range++] = { .offset = br.offset, .length = br.length };
+            }
+        }
+    }
+    return policy.rules.size();
 }

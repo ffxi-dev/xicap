@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"strings"
 	"unsafe"
 )
 
@@ -556,4 +557,84 @@ func Transcode(src, dst string, opt TranscodeOptions) error {
 		return cerr(&msg)
 	}
 	return nil
+}
+
+// Labels for DeriveKey: the key a recorder makes pseudonyms with when no account key is at hand, and the seed that signs
+// its anonymous captures.
+const (
+	PseudonymKeyLabel     = "xicap pseudonym key"
+	AnonymousSigningLabel = "xicap anonymous signing"
+)
+
+// DeriveKey returns a 32-byte key for one use, named by label, derived from seed.
+func DeriveKey(seed [32]byte, label string) (out [32]byte) {
+	l := C.CString(label)
+	defer C.free(unsafe.Pointer(l))
+	C.xicap_derive_key((*C.uint8_t)(unsafe.Pointer(&seed[0])), l, (*C.uint8_t)(unsafe.Pointer(&out[0])))
+	return out
+}
+
+// AnonymousPolicy is the exclusion policy of anonymous captures: the default, plus stubs for the packets whose player
+// names the pseudonymizer cannot place, and zeroes for the search packets it cannot read.
+func AnonymousPolicy() Policy {
+	var name [32]C.char
+	var version C.uint32_t
+	var rules [256]C.xicap_rule
+	var ranges [256]C.xicap_range
+	n := int(C.xicap_anonymous_policy(&name[0], &version, &rules[0], C.size_t(len(rules)), &ranges[0], C.size_t(len(ranges))))
+	p := Policy{Name: C.GoString(&name[0]), Version: uint32(version)}
+	at := 0
+	for _, r := range rules[:min(n, len(rules))] {
+		rule := Rule{Channel: uint8(r.channel), Direction: uint8(r.direction), Action: uint8(r.action), Opcode: uint16(r.opcode)}
+		for range int(r.range_count) {
+			rule.Ranges = append(rule.Ranges, [2]uint32{uint32(ranges[at].offset), uint32(ranges[at].length)})
+			at++
+		}
+		p.Rules = append(p.Rules, rule)
+	}
+	return p
+}
+
+// Pseudonymizer replaces player names and ids with pseudonyms keyed by its key: the same name or id always gets the
+// same pseudonym. Give it every packet of a capture, in order, before the writer. Close it when done; it is not safe
+// for concurrent use.
+type Pseudonymizer struct{ p *C.xicap_pseudonymizer }
+
+// NewPseudonymizer makes a pseudonymizer keyed by key.
+func NewPseudonymizer(key [32]byte) *Pseudonymizer {
+	return &Pseudonymizer{C.xicap_pseudonymizer_new((*C.uint8_t)(unsafe.Pointer(&key[0])))}
+}
+
+// Close frees the pseudonymizer.
+func (p *Pseudonymizer) Close() {
+	C.xicap_pseudonymizer_free(p.p)
+	p.p = nil
+}
+
+// Packet rewrites pk.Data in place.
+func (p *Pseudonymizer) Packet(pk Packet) {
+	if len(pk.Data) == 0 {
+		return
+	}
+	dir := C.uint8_t(0)
+	if pk.ClientToServer {
+		dir = 1
+	}
+	C.xicap_pseudonymize(p.p, C.uint8_t(pk.Channel), dir, (*C.uint8_t)(unsafe.Pointer(&pk.Data[0])), C.size_t(len(pk.Data)))
+}
+
+// Character returns c with its content id, character id, and name replaced by their pseudonyms.
+func (p *Pseudonymizer) Character(c Character) Character {
+	var name [16]C.char
+	for i := 0; i < len(c.Name) && i < len(name); i++ {
+		name[i] = C.char(c.Name[i])
+	}
+	content, id := C.uint32_t(c.ContentID), C.uint32_t(c.CharacterID)
+	C.xicap_pseudonymize_character(p.p, &content, &id, &name[0])
+	c.ContentID, c.CharacterID = uint32(content), uint32(id)
+	c.Name = C.GoStringN(&name[0], C.int(len(name)))
+	if i := strings.IndexByte(c.Name, 0); i >= 0 {
+		c.Name = c.Name[:i]
+	}
+	return c
 }
