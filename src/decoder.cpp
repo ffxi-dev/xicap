@@ -304,6 +304,18 @@ auto Decoder::decode4(const FrameInfo& frame, std::span<const uint8_t> payload, 
     }
     if (frame.restart())
     {
+        // RFC 8878's frame header: a zstd frame, its descriptor without Frame_Content_Size, Single_Segment, the
+        // reserved bit, or a dictionary id, and with Content_Checksum.
+        constexpr uint32_t ZSTD_FRAME_MAGIC = 0xFD2FB528;
+        uint32_t           magic            = 0;
+        if (payload.size() >= 5)
+        {
+            std::memcpy(&magic, payload.data(), sizeof(magic));
+        }
+        if (magic != ZSTD_FRAME_MAGIC || (payload[4] & 0xEBU) != 0 || (payload[4] & 0x04U) == 0)
+        {
+            throw Error(ErrorCode::CorruptFrame, "xicap: a stream that is not a zstd frame without content size or dictionary, with checksum");
+        }
         ZSTD_DCtx_reset(dctx_.get(), ZSTD_reset_session_only);
     }
     // One byte more than expected, to catch a payload that decodes to more.
@@ -334,8 +346,13 @@ auto Decoder::decode4(const FrameInfo& frame, std::span<const uint8_t> payload, 
     {
         throw Error(ErrorCode::CorruptFrame, "xicap: payload does not decode to its plain size");
     }
+    if (frame.baseTimestamp < lastTimestamp_)
+    {
+        throw Error(ErrorCode::CorruptFrame, "xicap: a frame starts before the last packet of the frame before it");
+    }
     decodeColumns({ plain_.data(), frame.plainSize }, frame.packetCount, frame.markerCount, frame.baseTimestamp, out);
-    streamOpen_ = !ended;
+    lastTimestamp_ = out.packets.back().timestamp;
+    streamOpen_    = !ended;
 }
 
 auto Decoder::decode3(const FrameInfo& frame, std::span<const uint8_t> payload, DecodedFrame& out) -> void

@@ -154,6 +154,10 @@ auto decodeColumns(std::span<const uint8_t> plain, uint32_t packetCount, uint16_
     };
     std::vector<uint32_t> delta, flags, channel, opcode, lengths, sync;
     column(32, delta, packetCount);
+    if (delta[0] != 0)
+    {
+        bad("the first packet's deltaMs is not 0");
+    }
     column(16, flags, packetCount);
     for (const auto f : flags)
     {
@@ -270,6 +274,10 @@ auto decodeColumns(std::span<const uint8_t> plain, uint32_t packetCount, uint16_
             const auto dir = flags[i] & PacketFlag::ClientToServer;
             lastSync[dir]  = static_cast<uint16_t>(lastSync[dir] + unzigzag16(static_cast<uint16_t>(sync[game++])));
             std::memcpy(out.bytes.data() + offset + 2, &lastSync[dir], sizeof(uint16_t));
+        }
+        if (timestamp + delta[i] < timestamp)
+        {
+            bad("a timestamp past 2^64");
         }
         timestamp += delta[i];
         DecodedPacket packet{

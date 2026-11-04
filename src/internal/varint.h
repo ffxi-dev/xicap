@@ -31,7 +31,7 @@ inline auto putVarint(std::vector<uint8_t>& out, uint64_t value) -> void
 }
 
 // Reads a varint filling a field `bits` wide (8, 16, or 32). False when it runs past the end, takes more than
-// ceil(bits / 7) bytes, or holds a value too large for the field.
+// ceil(bits / 7) bytes or more bytes than its value needs, or holds a value too large for the field.
 [[nodiscard]] inline auto getVarint(std::span<const uint8_t> in, size_t& pos, unsigned bits, uint32_t& out) noexcept -> bool
 {
     const unsigned maxBytes = (bits + 6) / 7;
@@ -46,7 +46,7 @@ inline auto putVarint(std::vector<uint8_t>& out, uint64_t value) -> void
         value |= uint64_t{ b & 0x7FU } << (7 * i);
         if ((b & 0x80U) == 0)
         {
-            if (value >> bits != 0)
+            if (value >> bits != 0 || (i > 0 && b == 0))
             {
                 return false;
             }

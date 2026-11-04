@@ -197,6 +197,8 @@ TEST_CASE("varints round-trip at each length and refuse what breaks the rules")
     CHECK_FALSE(reads({ 0x80, 0x02 }, 8));                          // 256
     CHECK(reads({ 0xFF, 0x01 }, 8));                                // 255
     CHECK_FALSE(reads({ 0x80 }, 32));                               // runs past the end
+    CHECK_FALSE(reads({ 0x80, 0x00 }, 32));                         // 0 in two bytes
+    CHECK_FALSE(reads({ 0xFF, 0x80, 0x00 }, 16));                   // 127 in three bytes
 
     CHECK(internal::zigzag16(0) == 0);
     CHECK(internal::zigzag16(-1) == 1);
@@ -283,6 +285,19 @@ TEST_CASE("the column decoder refuses bad frames")
         CHECK_FALSE(bad(withMarkers({ 0x02, 0x00, 0x00 }), 1));
         CHECK(bad(withMarkers({ 0x03, 0x00, 0x00 }), 1) == ErrorCode::CorruptFrame);
         CHECK(bad(withMarkers({ 0x02, 0x00, 0x00, 0x01, 0x00, 0x00 }), 2) == ErrorCode::CorruptFrame);
+    }
+    SECTION("a first deltaMs that is not 0")
+    {
+        plain[0] = 0x01;
+        CHECK(bad(plain) == ErrorCode::CorruptFrame);
+    }
+    SECTION("a timestamp past 2^64")
+    {
+        internal::DecodedFrame frame;
+        CHECK(refusal([&]
+                      {
+                          internal::decodeColumns(plain, 3, 0, UINT64_MAX - 5, frame);
+                      }) == ErrorCode::CorruptFrame);
     }
     SECTION("a flag that must be understood")
     {
@@ -740,6 +755,7 @@ TEST_CASE("the reader reads both formats")
         auto*      cctx  = ZSTD_createCCtx();
         ZSTD_CCtx_setParameter(cctx, ZSTD_c_windowLog, 24);
         ZSTD_CCtx_setParameter(cctx, ZSTD_c_contentSizeFlag, 0);
+        ZSTD_CCtx_setParameter(cctx, ZSTD_c_checksumFlag, 1);
         std::vector<uint8_t> out(ZSTD_compressBound(plain.size()) + 64);
         ZSTD_inBuffer        in{ plain.data(), plain.size(), 0 };
         ZSTD_outBuffer       o{ out.data(), out.size(), 0 };
@@ -751,6 +767,36 @@ TEST_CASE("the reader reads both formats")
         header.payloadSize = static_cast<uint32_t>(out.size());
         save(tmp.path, splice(bytes, frames[1].offset, frames[1].size, frameBytes(header, out)));
         CHECK(readAll(tmp.path).size() == 3);
+    }
+    SECTION("it refuses a stream with a content size, a dictionary id, or no checksum")
+    {
+        writeFrames(tmp.path, 2, 3, alone());
+        auto bytes = bytesOf(tmp.path);
+        bytes.resize(footerOffset(bytes));
+        const auto frames = framesOf(bytes);
+        const auto plain  = plainOf(bytes, frames[1]);
+        const auto with   = [&](int contentSize, int checksum, bool dictId)
+        {
+            auto* cctx = ZSTD_createCCtx();
+            ZSTD_CCtx_setParameter(cctx, ZSTD_c_contentSizeFlag, contentSize);
+            ZSTD_CCtx_setParameter(cctx, ZSTD_c_checksumFlag, checksum);
+            std::vector<uint8_t> out(ZSTD_compressBound(plain.size()));
+            out.resize(ZSTD_compress2(cctx, out.data(), out.size(), plain.data(), plain.size()));
+            ZSTD_freeCCtx(cctx);
+            if (dictId)
+            {
+                out[4] |= 0x01;                    // a one-byte dictionary id
+                out.insert(out.begin() + 6, 0x2A); // after the window descriptor
+            }
+            auto header        = podAt<FrameHeader>(bytes, frames[1].offset);
+            header.payloadSize = static_cast<uint32_t>(out.size());
+            save(tmp.path, splice(bytes, frames[1].offset, frames[1].size, frameBytes(header, out)));
+            return readAll(tmp.path).size();
+        };
+        CHECK(with(0, 1, false) == 6);
+        CHECK(with(1, 1, false) == 3);
+        CHECK(with(0, 0, false) == 3);
+        CHECK(with(0, 1, true) == 3);
     }
     SECTION("a file cut off mid-stream reads up to its last whole frame")
     {

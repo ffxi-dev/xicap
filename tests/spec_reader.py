@@ -68,6 +68,8 @@ def varint(b: bytes, pos: int, bits: int) -> tuple[int, int]:
         if not byte & 0x80:
             if value >> bits:
                 raise BadFrame("varint too large for its field")
+            if i and not byte:
+                raise BadFrame("varint longer than its value needs")
             return value, pos
     raise BadFrame("varint too long")
 
@@ -89,6 +91,8 @@ def columns(plain: bytes, packet_count: int, marker_count: int, base: int) -> li
         return out
 
     delta = column(32, packet_count)
+    if delta[0]:
+        raise BadFrame("first deltaMs is not 0")
     flags = column(16, packet_count)
     if any(f & 0xFC00 for f in flags):
         raise Refused("unknown-required", "packet flags")
@@ -145,6 +149,8 @@ def columns(plain: bytes, packet_count: int, marker_count: int, base: int) -> li
             game += 1
             struct.pack_into("<H", data, 2, last_sync[d])
         ts += delta[i]
+        if ts >> 64:
+            raise BadFrame("timestamp past 2^64")
         packets.append([ts, channel[i], opcode[i], flags[i], bytes(data), []])
     if cursor != end:
         raise BadFrame("group bytes left over")
@@ -158,14 +164,20 @@ class Stream:
 
     def __init__(self) -> None:
         self.obj = None
+        self.last = 0  # the last packet's timestamp, 0 after a reset
 
     def reset(self) -> None:
         self.obj = None
+        self.last = 0
 
     def decode(self, frame: bytes, header: int) -> bytes:
         _, kind, flags, marker_count, payload_size, packet_count, base, zone, _, plain_size = struct.unpack_from("<4sBBHIIQHHI", frame, 0)
         obj, self.obj = self.obj, None
         if flags & RESTART:
+            payload = frame[header : header + payload_size]
+            # No Frame_Content_Size, Single_Segment, reserved bit or dictionary id; Content_Checksum set.
+            if payload[:4] != bytes.fromhex("28b52ffd") or len(payload) < 5 or payload[4] & 0xEB or not payload[4] & 0x04:
+                raise BadFrame("stream is not a zstd frame of the required kind")
             obj = zstandard.ZstdDecompressor(max_window_size=MAX_WINDOW).decompressobj(write_size=MAX_CONTENT + 1)
         elif obj is None:
             raise BadFrame("no stream to continue")
@@ -177,6 +189,8 @@ class Stream:
             raise BadFrame("zstd") from e
         if len(plain) != plain_size or obj.unused_data:
             raise BadFrame("payload is not plainSize bytes")
+        if base < self.last:
+            raise BadFrame("frame starts before the last packet")
         if not obj.eof:
             self.obj = obj
         return plain
@@ -413,6 +427,7 @@ class Capture:
         if self.v4:
             _, _, _, marker_count, _, packet_count, base = struct.unpack_from("<4sBBHIIQ", frame, 0)
             packets = columns(self.stream.decode(frame, self.frame_header), packet_count, marker_count, base)
+            self.stream.last = packets[-1][0]
             self.check_character(packets)
             return packets
         _, kind, _, marker_count, payload_size, packet_count, base, zone, _ = struct.unpack_from("<4sBBHIIQHH", frame, 0)
@@ -558,6 +573,7 @@ class Capture:
                 _, _, _, marker_count, _, packet_count, base = struct.unpack_from("<4sBBHIIQ", frame, 0)
                 try:
                     decoded = columns(stream.decode(frame, self.frame_header), packet_count, marker_count, base)
+                    stream.last = decoded[-1][0]
                 except (BadFrame, Refused):
                     if self.complete and failure is None:
                         failure = offset

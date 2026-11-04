@@ -102,7 +102,8 @@ public:
     // Forgets the stream: the next packet frame must start one.
     auto reset() noexcept -> void
     {
-        streamOpen_ = false;
+        streamOpen_    = false;
+        lastTimestamp_ = 0;
     }
 
 private:
@@ -111,6 +112,7 @@ private:
 
     uint8_t                                              version_;
     bool                                                 streamOpen_{ false };
+    uint64_t                                             lastTimestamp_{ 0 }; // the last packet decoded; 0 after a reset
     std::vector<uint8_t>                                 plain_;
     std::unique_ptr<ZSTD_DCtx_s, void (*)(ZSTD_DCtx_s*)> dctx_;
 };
