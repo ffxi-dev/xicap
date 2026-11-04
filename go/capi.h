@@ -3,7 +3,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
-// The C interface cgo calls. Each call that can fail returns 0, or -1 with a message in err.
+// The C interface cgo calls. Each call that can fail returns 0, or -1 with a message in err. xicap_check_header reads
+// the first 160 bytes, so it needs at least that many, and the strings in xicap_writer_info must not be null; the source
+// strings are read only when has_source is set.
 #ifdef __cplusplus
 extern "C"
 {

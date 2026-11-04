@@ -23,16 +23,6 @@ auto copyText(char (&dst)[N], const std::string& src) -> void
     dst[n] = '\0';
 }
 
-auto text(const char* s) -> std::string
-{
-    if (s == nullptr)
-    {
-        return {};
-    }
-
-    return s;
-}
-
 template <typename F>
 auto guarded(char* err, size_t errlen, F&& f) -> int
 {
@@ -111,11 +101,6 @@ extern "C"
     {
         return guarded(err, errlen, [&]
                        {
-                           if (size < sizeof(xicap::format::Header))
-                           {
-                               throw xicap::Error("xicap: short header");
-                           }
-
                            xicap::Metadata m;
                            xicap::internal::readHeader({ data, size }, m);
                        });
@@ -160,9 +145,9 @@ extern "C"
                     auto m = xicap::Metadata{
                         .origin        = static_cast<xicap::Origin>(info->origin),
                         .network       = static_cast<xicap::Network>(info->network),
-                        .captureAgent  = text(info->capture_agent),
-                        .clientVersion = text(info->client_version),
-                        .character     = { .contentId = info->content_id, .characterId = info->character_id, .name = text(info->character_name), .world = text(info->world_name) },
+                        .captureAgent  = info->capture_agent,
+                        .clientVersion = info->client_version,
+                        .character     = { .contentId = info->content_id, .characterId = info->character_id, .name = info->character_name, .world = info->world_name },
                     };
                     if (info->keep_chat != 0)
                     {
@@ -172,8 +157,8 @@ extern "C"
                     if (info->has_source != 0)
                     {
                         m.source = xicap::Source{
-                            .format         = text(info->source_format),
-                            .formatVersion  = text(info->source_format_version),
+                            .format         = info->source_format,
+                            .formatVersion  = info->source_format_version,
                             .skippedRecords = info->skipped_records,
                             .metadata       = { info->source_metadata, info->source_metadata + info->source_metadata_size },
                         };
