@@ -1,7 +1,6 @@
-﻿---
+---
 # https://clang.llvm.org/docs/ClangFormatStyleOptions.html
-# We base things of WebKit + Allman braces
-# Compatible with clang-format-20
+# LLVM style with Allman braces, written for clang-format 22.
 Language: Cpp
 
 # Access modifiers
@@ -28,8 +27,6 @@ AllowShortFunctionsOnASingleLine: None
 AllowShortIfStatementsOnASingleLine: Never
 AllowShortLambdasOnASingleLine: None
 AllowShortLoopsOnASingleLine: false
-
-# Note: LambdaBodyIndentation not available in clang-format-20
 
 # Template declarations
 AlwaysBreakTemplateDeclarations: Yes
@@ -89,8 +86,6 @@ MaxEmptyLinesToKeep: 1
 # Pointer and reference alignment
 PointerAlignment: Left
 ReferenceAlignment: Pointer
-
-# Note: QualifierAlignment not available in clang-format-20, use manual const placement
 
 # Comments
 ReflowComments: Always
