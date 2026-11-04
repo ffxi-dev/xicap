@@ -19,7 +19,7 @@ public:
     FrameDecoder();
 
     // Throws Error for a bad frame. Its CRC is already checked.
-    auto decode(const format::FrameHeader& header, std::span<const uint8_t> payload, DecodedFrame& out) -> void;
+    auto decode(const format::FrameHeader& header, std::span<const uint8_t> payload, Frame& out) -> void;
 
 private:
     struct Free

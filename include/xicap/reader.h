@@ -25,21 +25,25 @@ public:
     {
         return stream_.metadata();
     }
-    // The file ends with a valid trailer.
+
+    // True when the file ends with a valid trailer.
     [[nodiscard]] auto complete() const noexcept -> bool
     {
         return complete_;
     }
-    // From the trailer; 0 in a cut-off file.
+
+    // The trailer's end time, or 0 in a cut-off file.
     [[nodiscard]] auto endTimestamp() const noexcept -> uint64_t
     {
         return endTimestamp_;
     }
+
     [[nodiscard]] auto packetCount() const noexcept -> uint64_t
     {
         return packetCount_;
     }
-    // Through the frame of the last packet read.
+
+    // The bytes read so far, up to the end of the frame that holds the last packet read.
     [[nodiscard]] auto bytesRead() const noexcept -> uint64_t
     {
         return stream_.bytesRead();
@@ -59,15 +63,18 @@ public:
         {
             return packet_;
         }
+
         auto operator->() const noexcept -> const Packet*
         {
             return &packet_;
         }
+
         auto operator++() -> Iterator&;
         auto operator++(int) -> void
         {
             ++*this;
         }
+
         auto operator==(std::default_sentinel_t) const noexcept -> bool
         {
             return done_;
@@ -83,6 +90,7 @@ public:
     {
         return Iterator(*this);
     }
+
     auto end() const noexcept -> std::default_sentinel_t
     {
         return {};

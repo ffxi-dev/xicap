@@ -72,6 +72,7 @@ inline auto readAll(const std::filesystem::path& path) -> std::vector<Owned>
     {
         packets.emplace_back(p);
     }
+
     return packets;
 }
 
@@ -107,12 +108,12 @@ public:
     auto operator=(const TempFile&) -> TempFile& = delete;
     auto operator=(TempFile&&) -> TempFile&      = delete;
 
-    [[nodiscard]] auto path() const -> const std::filesystem::path&
+    [[nodiscard]] auto path() const noexcept -> const std::filesystem::path&
     {
         return path_;
     }
 
-    operator const std::filesystem::path&() const
+    operator const std::filesystem::path&() const noexcept
     {
         return path_;
     }

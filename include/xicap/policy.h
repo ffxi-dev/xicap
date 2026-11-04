@@ -2,9 +2,7 @@
 
 #include "types.h"
 
-#include <cstddef>
 #include <cstdint>
-#include <span>
 #include <string>
 #include <vector>
 
@@ -58,25 +56,8 @@ struct ExclusionPolicy
 // xicap-default version 2: zeroes the text of chat, keeping each packet's layout. See FORMAT.md, Exclusion.
 [[nodiscard]] auto defaultExclusionPolicy() -> const ExclusionPolicy&;
 
-struct OutPacket
-{
-    uint64_t                   timestamp{};
-    PacketDirection            direction{};
-    std::span<const std::byte> data;
-    uint8_t                    channel = static_cast<uint8_t>(Channel::Game);
-    uint16_t                   opcode{};     // ignored on the game channel, where the packet's header holds it
-    uint16_t                   provenance{}; // PacketFlag::Provenance bits
-};
-
-struct StoredPacket
-{
-    uint16_t               opcode{};
-    uint16_t               flags{};
-    std::vector<std::byte> data;
-};
-
-// The packet as a writer with this policy stores it. Throws Error for a game packet under 4 bytes or a policy a
-// writer refuses.
+// The packet as a writer with this policy stores it. The policy must be one a writer accepts. Throws Error for a game
+// packet under 4 bytes.
 [[nodiscard]] auto applyPolicy(const ExclusionPolicy& policy, const OutPacket& packet) -> StoredPacket;
 
 } // namespace xicap

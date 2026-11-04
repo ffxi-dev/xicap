@@ -105,6 +105,25 @@ struct Packet
     }
 };
 
+// A packet as a writer is given it.
+struct OutPacket
+{
+    uint64_t                   timestamp{};
+    PacketDirection            direction{};
+    std::span<const std::byte> data;
+    uint8_t                    channel = static_cast<uint8_t>(Channel::Game);
+    uint16_t                   opcode{};     // ignored on the game channel, where the packet's header holds it
+    uint16_t                   provenance{}; // PacketFlag::Provenance bits
+};
+
+// A packet as a writer stores it, after its exclusion policy.
+struct StoredPacket
+{
+    uint16_t               opcode{};
+    uint16_t               flags{};
+    std::vector<std::byte> data;
+};
+
 class Error : public std::runtime_error
 {
 public:

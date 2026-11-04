@@ -26,16 +26,18 @@ auto compare(const std::filesystem::path& src, const std::filesystem::path& dst)
     {
         throw Error("xicap: transcode changed the metadata");
     }
+
     Packet pa;
     Packet pb;
     for (uint64_t i = 0;; ++i)
     {
-        const bool na = a.next(pa);
-        const bool nb = b.next(pb);
+        const auto na = a.next(pa);
+        const auto nb = b.next(pb);
         if (na != nb || (na && !same(pa, pb)))
         {
             throw Error(std::format("xicap: transcode changed packet {}", i));
         }
+
         if (!na)
         {
             return;
@@ -56,8 +58,10 @@ auto transcode(const std::filesystem::path& src, const std::filesystem::path& ds
         {
             out.copy(p);
         }
+
         out.close();
     }
+
     compare(src, tmp.path());
     tmp.publish();
 }
@@ -78,17 +82,21 @@ auto continueFrom(const std::filesystem::path& source, uint64_t fromByte, const 
         {
             continue;
         }
+
         if (!writer)
         {
             writer.emplace(tmp.path(), metadata, policy);
         }
+
         writer->copy(p);
         packets++;
     }
+
     if (!writer)
     {
         return 0;
     }
+
     writer->close();
     writer.reset();
     tmp.publish();

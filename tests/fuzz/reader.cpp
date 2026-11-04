@@ -12,6 +12,7 @@ extern "C" auto LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) -> int
     {
         return 0;
     }
+
     const auto bytes = std::as_bytes(std::span{ data, size });
     const auto split = std::min<size_t>(data[0] * 64, size);
     try
@@ -22,6 +23,7 @@ extern "C" auto LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) -> int
         while (s.next(p))
         {
         }
+
         s.push(bytes.subspan(split));
         while (s.next(p))
         {
@@ -30,5 +32,6 @@ extern "C" auto LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) -> int
     catch (const xicap::Error&)
     {
     }
+
     return 0;
 }

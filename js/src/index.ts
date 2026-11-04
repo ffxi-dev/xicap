@@ -68,9 +68,9 @@ export class Reader {
         this.metadata = native.metadata();
     }
 
-    /** The file ends with a valid trailer. */
+    /** True when the file ends with a valid trailer. */
     get complete(): boolean { return this.native.complete(); }
-    /** From the trailer; 0 in a cut-off file. */
+    /** The trailer's end time, or 0 in a cut-off file. */
     get endTimestamp(): number { return this.native.endTimestamp(); }
     get packetCount(): number { return this.native.packetCount(); }
 
@@ -96,12 +96,12 @@ export class StreamReader {
 
     /** The packets whose frames these bytes completed. Throws for a capture that must be refused. */
     push(chunk: Uint8Array): Packet[] { return this.native.push(chunk); }
-    /** The header and blocks are read: metadata holds them. */
+    /** True once the header and blocks are read, so that metadata holds them. */
     get ready(): boolean { return this.native.ready(); }
     get metadata(): Metadata { return this.native.metadata(); }
-    /** The trailer is read: every packet has been. */
+    /** True once the trailer is read, which comes after every packet. */
     get complete(): boolean { return this.native.complete(); }
-    /** The reader met bytes that are neither a whole frame nor the trailer, and reads nothing more. */
+    /** True once the reader has met bytes that are neither a whole, valid frame nor a trailer; it reads nothing more. */
     get stopped(): boolean { return this.native.stopped(); }
 
     close(): void {

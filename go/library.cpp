@@ -3,6 +3,7 @@
 #include "../src/decode_metadata.cpp"
 #include "../src/encode_columns.cpp"
 #include "../src/encode_metadata.cpp"
+#include "../src/frame.cpp"
 #include "../src/frame_decoder.cpp"
 #include "../src/policy.cpp"
 #include "../src/reader.cpp"

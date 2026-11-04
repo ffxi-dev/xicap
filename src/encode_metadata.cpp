@@ -7,18 +7,6 @@ namespace xicap::internal
 namespace
 {
 
-template <typename T>
-auto append(std::vector<uint8_t>& out, const T& value) -> void
-{
-    const auto* p = reinterpret_cast<const uint8_t*>(&value);
-    out.insert(out.end(), p, p + sizeof(T));
-}
-
-auto appendCrc(std::vector<uint8_t>& out, size_t from) -> void
-{
-    append(out, crc32(std::span{ out }.subspan(from)));
-}
-
 auto appendBlock(std::vector<uint8_t>& out, uint32_t type, const std::vector<uint8_t>& payload) -> void
 {
     const auto start = out.size();
@@ -81,7 +69,7 @@ auto encodeMetadata(const Metadata& m) -> std::vector<uint8_t>
     std::vector<uint8_t> out;
     append(out, header);
     out.resize(out.size() - sizeof(header.crc));
-    appendCrc(out, 0);
+    appendCrc(out);
     appendBlock(out, format::BLOCK_POLICY, encodePolicy(m.policy));
     if (m.source)
     {

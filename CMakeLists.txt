@@ -37,6 +37,7 @@ add_library(xicap STATIC
     src/decode_metadata.cpp
     src/encode_columns.cpp
     src/encode_metadata.cpp
+    src/frame.cpp
     src/frame_decoder.cpp
     src/policy.cpp
     src/reader.cpp

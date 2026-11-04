@@ -31,6 +31,7 @@ auto packet(const xicap::Packet& p) -> py::object
     {
         markers.append(py::make_tuple(m.kind, str(m.text)));
     }
+
     static const auto make = py::module_::import("types").attr("SimpleNamespace");
     return make(py::arg("timestamp") = p.timestamp, py::arg("flags") = p.flags, py::arg("channel") = p.channel, py::arg("opcode") = p.opcode, py::arg("direction") = p.direction(), py::arg("data") = bytes(p.data), py::arg("markers") = markers);
 }
@@ -150,6 +151,7 @@ PYBIND11_MODULE(xicap, m)
                  {
                      throw py::stop_iteration();
                  }
+
                  return packet(p);
              });
 }

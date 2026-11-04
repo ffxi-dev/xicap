@@ -54,6 +54,7 @@ auto metadata(const xicap::Metadata& m) -> em::val
         source.set("skippedRecords", m.source->skippedRecords);
         source.set("metadata", bytes(m.source->metadata));
     }
+
     auto o = em::val::object();
     o.set("captureId", bytes(m.captureId));
     o.set("previousCaptureId", bytes(m.previousCaptureId));
@@ -78,6 +79,7 @@ auto packet(const xicap::Packet& p) -> em::val
         marker.set("text", m.text);
         markers.call<void>("push", marker);
     }
+
     auto o = em::val::object();
     o.set("timestamp", static_cast<double>(p.timestamp));
     o.set("flags", p.flags);
@@ -103,18 +105,22 @@ public:
     {
         return ::metadata(reader_->metadata());
     }
+
     auto complete() const -> bool
     {
         return reader_->complete();
     }
+
     auto endTimestamp() const -> double
     {
         return static_cast<double>(reader_->endTimestamp());
     }
+
     auto packetCount() const -> double
     {
         return static_cast<double>(reader_->packetCount());
     }
+
     // The next packet, or undefined at the end.
     auto next() -> em::val
     {
@@ -125,6 +131,7 @@ public:
                          {
                              return em::val::undefined();
                          }
+
                          return packet(p);
                      });
     }
@@ -150,21 +157,26 @@ public:
                          {
                              out.call<void>("push", packet(p));
                          }
+
                          return out;
                      });
     }
+
     auto metadata() const -> em::val
     {
         return ::metadata(reader_.metadata());
     }
+
     auto ready() const -> bool
     {
         return reader_.ready();
     }
+
     auto complete() const -> bool
     {
         return reader_.complete();
     }
+
     auto stopped() const -> bool
     {
         return reader_.stopped();

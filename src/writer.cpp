@@ -6,7 +6,6 @@
 #include "policy_check.h"
 
 #include <algorithm>
-#include <cstring>
 #include <format>
 #include <fstream>
 #include <random>
@@ -26,44 +25,17 @@ auto randomCaptureId() -> CaptureId
 {
     std::random_device rd;
     CaptureId          id{};
-    while (id == CaptureId{})
-    {
-        std::ranges::generate(id, [&]
-                              {
-                                  return static_cast<uint8_t>(rd());
-                              });
-    }
-
+    std::ranges::generate(id, [&]
+                          {
+                              return static_cast<uint8_t>(rd());
+                          });
     return id;
-}
-
-template <typename T>
-auto append(std::vector<uint8_t>& out, const T& value) -> void
-{
-    const auto* p = reinterpret_cast<const uint8_t*>(&value);
-    out.insert(out.end(), p, p + sizeof(T));
 }
 
 } // namespace
 
 struct Writer::State
 {
-    struct FramePacket
-    {
-        uint64_t timestamp{};
-        uint16_t flags{};
-        uint8_t  channel{};
-        uint16_t opcode{};
-        size_t   offset{};
-        size_t   length{};
-    };
-
-    struct FrameMarker
-    {
-        uint32_t packetIndex{};
-        Marker   marker;
-    };
-
     struct FreeCCtx
     {
         auto operator()(ZSTD_CCtx* c) const noexcept -> void
@@ -74,7 +46,7 @@ struct Writer::State
 
     auto usable() const -> void;
     auto start() -> void;
-    auto add(uint64_t timestamp, uint16_t flags, uint8_t channel, uint16_t opcode, std::span<const uint8_t> data) -> void;
+    auto add(Packet packet) -> void;
     auto endFrame() -> void;
     auto writeFrame() -> void;
     auto emit(std::span<const uint8_t> bytes) -> void;
@@ -87,15 +59,12 @@ struct Writer::State
     bool                                 closed{ false };
     bool                                 failed{ false }; // a write failed: nothing more may follow
 
-    std::vector<uint8_t>     frameBytes;
-    std::vector<FramePacket> framePackets;
-    std::vector<FrameMarker> frameMarkers;
-    std::vector<Marker>      pendingMarkers;
-    size_t                   frameSize{}; // plaintext, at most
-    size_t                   pendingMarkerSize{};
-    uint64_t                 lastTimestamp{};
-    uint64_t                 packets{};
-    std::vector<uint8_t>     out;
+    internal::Frame     frame;
+    size_t              frameSize{}; // plaintext, at most
+    std::vector<Marker> pendingMarkers;
+    size_t              pendingMarkerSize{};
+    uint64_t            lastTimestamp{};
+    uint64_t            packets{};
 };
 
 Writer::Writer(const std::filesystem::path& path, Metadata metadata, FramePolicy policy)
@@ -109,6 +78,7 @@ Writer::Writer(const std::filesystem::path& path, Metadata metadata, FramePolicy
     {
         s.metadata.captureId = randomCaptureId();
     }
+
     policy.maxFrameSize       = std::min<size_t>(policy.maxFrameSize, format::MAX_PLAIN_SIZE);
     policy.maxPacketsPerFrame = std::clamp<uint32_t>(policy.maxPacketsPerFrame, 1, format::MAX_PACKETS);
     policy.windowLog          = std::clamp(policy.windowLog, 10, format::MAX_WINDOW_LOG);
@@ -117,6 +87,7 @@ Writer::Writer(const std::filesystem::path& path, Metadata metadata, FramePolicy
     {
         throw Error("xicap: cannot create a zstd compressor");
     }
+
     ZSTD_CCtx_setParameter(s.cctx.get(), ZSTD_c_compressionLevel, policy.compressionLevel);
     ZSTD_CCtx_setParameter(s.cctx.get(), ZSTD_c_windowLog, policy.windowLog);
     ZSTD_CCtx_setParameter(s.cctx.get(), ZSTD_c_hashLog, policy.hashLog);
@@ -148,21 +119,23 @@ auto Writer::write(const OutPacket& packet) -> void
 {
     state_->usable();
     const auto stored = applyPolicy(state_->metadata.policy, packet);
-    state_->add(packet.timestamp, stored.flags, packet.channel, stored.opcode, { reinterpret_cast<const uint8_t*>(stored.data.data()), stored.data.size() });
+    state_->add({ .timestamp = packet.timestamp, .flags = stored.flags, .channel = packet.channel, .opcode = stored.opcode, .data = stored.data, .markers = {} });
 }
 
 auto Writer::copy(const Packet& packet) -> void
 {
     state_->usable();
-    if (internal::isGame(packet.channel) && packet.data.size() < format::GAME_HEADER_SIZE)
+    if (internal::isGame(packet.channel) && (packet.data.size() < format::GAME_HEADER_SIZE || format::gameId(packet.data) != packet.opcode))
     {
-        throw Error("xicap: a game packet is at least 4 bytes");
+        throw Error("xicap: a game packet is at least 4 bytes and its header holds its opcode");
     }
+
     for (const auto& m : packet.markers)
     {
         mark(m.kind, m.text);
     }
-    state_->add(packet.timestamp, packet.flags, packet.channel, packet.opcode, { reinterpret_cast<const uint8_t*>(packet.data.data()), packet.data.size() });
+
+    state_->add(packet);
 }
 
 auto Writer::mark(MarkerKind kind, std::string_view text) -> void
@@ -173,6 +146,7 @@ auto Writer::mark(MarkerKind kind, std::string_view text) -> void
     {
         throw Error("xicap: marker text over 65,535 bytes");
     }
+
     s.pendingMarkers.push_back({ kind, std::string(text) });
     s.pendingMarkerSize += MARKER_OVERHEAD + text.size();
 }
@@ -190,11 +164,14 @@ auto Writer::close() -> void
     {
         return;
     }
+
     s.endFrame();
     s.start();
-    auto t = format::Trailer{ .magic = format::TRAILER_MAGIC, .endTimestamp = s.lastTimestamp, .packetCount = s.packets, .crc = 0 };
-    t.crc  = internal::crc32({ reinterpret_cast<const uint8_t*>(&t), offsetof(format::Trailer, crc) });
-    s.emit({ reinterpret_cast<const uint8_t*>(&t), sizeof(t) });
+    std::vector<uint8_t> trailer;
+    internal::append(trailer, format::Trailer{ .magic = format::TRAILER_MAGIC, .endTimestamp = s.lastTimestamp, .packetCount = s.packets, .crc = 0 });
+    trailer.resize(trailer.size() - sizeof(uint32_t));
+    internal::appendCrc(trailer);
+    s.emit(trailer);
     s.closed = true;
     s.file.close();
 }
@@ -205,6 +182,7 @@ auto Writer::State::usable() const -> void
     {
         throw Error("xicap: the writer is closed");
     }
+
     if (failed)
     {
         throw Error("xicap: an earlier write failed");
@@ -221,47 +199,47 @@ auto Writer::State::start() -> void
     }
 }
 
-auto Writer::State::add(uint64_t timestamp, uint16_t flags, uint8_t channel, uint16_t opcode, std::span<const uint8_t> data) -> void
+auto Writer::State::add(Packet packet) -> void
 {
-    // Timestamps never go backwards.
     if (packets > 0)
     {
-        timestamp = std::max(timestamp, lastTimestamp);
+        packet.timestamp = std::max(packet.timestamp, lastTimestamp);
     }
-    const auto added = PACKET_OVERHEAD + data.size() + pendingMarkerSize;
+
+    const auto added = PACKET_OVERHEAD + packet.data.size() + pendingMarkerSize;
     if (added > format::MAX_PLAIN_SIZE)
     {
         throw Error("xicap: a packet and the markers before it are over 16 MiB");
     }
-    if (!framePackets.empty() &&
-        (framePackets.size() >= policy.maxPacketsPerFrame || frameSize + added > policy.maxFrameSize ||
-         timestamp - framePackets.front().timestamp >= policy.maxFrameTimeMs || timestamp - lastTimestamp > UINT32_MAX))
+
+    if (!frame.packets.empty() &&
+        (frame.packets.size() >= policy.maxPacketsPerFrame || frameSize + added > policy.maxFrameSize ||
+         packet.timestamp - frame.packets.front().timestamp >= policy.maxFrameTimeMs || packet.timestamp - lastTimestamp > UINT32_MAX))
     {
         endFrame();
     }
+
     if (packets == 0)
     {
-        metadata.startTimestamp = timestamp;
+        metadata.startTimestamp = packet.timestamp;
     }
-    for (auto& marker : pendingMarkers)
-    {
-        frameMarkers.push_back({ static_cast<uint32_t>(framePackets.size()), std::move(marker) });
-    }
+
+    packet.markers = pendingMarkers;
+    frame.add(packet);
     pendingMarkers.clear();
     pendingMarkerSize = 0;
-    framePackets.push_back({ .timestamp = timestamp, .flags = flags, .channel = channel, .opcode = opcode, .offset = frameBytes.size(), .length = data.size() });
-    frameBytes.insert(frameBytes.end(), data.begin(), data.end());
     frameSize += added;
-    lastTimestamp = timestamp;
+    lastTimestamp = packet.timestamp;
     packets++;
 }
 
 auto Writer::State::endFrame() -> void
 {
-    if (framePackets.empty())
+    if (frame.packets.empty())
     {
         return;
     }
+
     try
     {
         writeFrame();
@@ -276,22 +254,10 @@ auto Writer::State::endFrame() -> void
 auto Writer::State::writeFrame() -> void
 {
     start();
-    std::vector<internal::Record> records;
-    for (const auto& p : framePackets)
-    {
-        records.push_back({ .timestamp = p.timestamp, .flags = p.flags, .channel = p.channel, .opcode = p.opcode, .data = std::span{ frameBytes }.subspan(p.offset, p.length) });
-    }
-    std::vector<internal::MarkerRecord> markers;
-    for (const auto& m : frameMarkers)
-    {
-        markers.push_back({ .packetIndex = m.packetIndex, .kind = m.marker.kind, .text = m.marker.text });
-    }
-    const auto plain = internal::encodeColumns(records, markers);
-
-    constexpr auto head = sizeof(format::FrameHeader);
-    out.resize(head + ZSTD_compressBound(plain.size()));
-    auto in  = ZSTD_inBuffer{ plain.data(), plain.size(), 0 };
-    auto buf = ZSTD_outBuffer{ out.data() + head, out.size() - head, 0 };
+    const auto           plain = internal::encodeColumns(frame);
+    std::vector<uint8_t> payload(ZSTD_compressBound(plain.size()));
+    auto                 in  = ZSTD_inBuffer{ plain.data(), plain.size(), 0 };
+    auto                 buf = ZSTD_outBuffer{ payload.data(), payload.size(), 0 };
     // Flushed, so the frame decodes as soon as it is on disk.
     while (true)
     {
@@ -300,30 +266,31 @@ auto Writer::State::writeFrame() -> void
         {
             throw Error(std::format("xicap: zstd: {}", ZSTD_getErrorName(rc)));
         }
+
         if (rc == 0)
         {
             break;
         }
-        out.resize(out.size() * 2);
-        buf.dst  = out.data() + head;
-        buf.size = out.size() - head;
-    }
-    const auto header = format::FrameHeader{
-        .magic         = format::FRAME_MAGIC,
-        .payloadSize   = static_cast<uint32_t>(buf.pos),
-        .plainSize     = static_cast<uint32_t>(plain.size()),
-        .packetCount   = static_cast<uint32_t>(framePackets.size()),
-        .markerCount   = static_cast<uint32_t>(frameMarkers.size()),
-        .baseTimestamp = framePackets.front().timestamp,
-    };
-    std::memcpy(out.data(), &header, head);
-    out.resize(head + buf.pos);
-    append(out, internal::crc32(out));
-    emit(out);
 
-    frameBytes.clear();
-    framePackets.clear();
-    frameMarkers.clear();
+        payload.resize(payload.size() * 2);
+        buf.dst  = payload.data();
+        buf.size = payload.size();
+    }
+
+    payload.resize(buf.pos);
+    std::vector<uint8_t> out;
+    internal::append(out, format::FrameHeader{
+                              .magic         = format::FRAME_MAGIC,
+                              .payloadSize   = static_cast<uint32_t>(payload.size()),
+                              .plainSize     = static_cast<uint32_t>(plain.size()),
+                              .packetCount   = static_cast<uint32_t>(frame.packets.size()),
+                              .markerCount   = static_cast<uint32_t>(frame.markers.size()),
+                              .baseTimestamp = frame.packets.front().timestamp,
+                          });
+    out.insert(out.end(), payload.begin(), payload.end());
+    internal::appendCrc(out);
+    emit(out);
+    frame.clear();
     frameSize = 0;
 }
 

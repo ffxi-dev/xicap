@@ -29,6 +29,7 @@ auto text(const char* s) -> std::string
     {
         return {};
     }
+
     return s;
 }
 
@@ -86,9 +87,11 @@ auto summarize(const char* path, xicap_summary& s) -> void
             std::memcpy(t, marker.text.data(), marker.text.size());
             markers.push_back({ static_cast<uint8_t>(marker.kind), t, marker.text.size(), s.packets, p.timestamp });
         }
+
         s.end_timestamp = p.timestamp;
         s.packets++;
     }
+
     s.complete     = r.complete();
     s.markers      = static_cast<xicap_marker*>(std::malloc(markers.size() * sizeof(xicap_marker) + 1));
     s.marker_count = markers.size();
@@ -112,6 +115,7 @@ extern "C"
                            {
                                throw xicap::Error("xicap: short header");
                            }
+
                            xicap::Metadata m;
                            xicap::internal::readHeader({ data, size }, m);
                        });
@@ -140,6 +144,7 @@ extern "C"
         {
             std::free(s->markers[i].text);
         }
+
         std::free(s->markers);
         std::free(s->source_metadata);
         s->markers         = nullptr;
@@ -163,6 +168,7 @@ extern "C"
                     {
                         m.policy = {};
                     }
+
                     if (info->has_source != 0)
                     {
                         m.source = xicap::Source{
@@ -172,11 +178,13 @@ extern "C"
                             .metadata       = { info->source_metadata, info->source_metadata + info->source_metadata_size },
                         };
                     }
+
                     auto policy = xicap::FramePolicy::live();
                     if (info->archive != 0)
                     {
                         policy = xicap::FramePolicy::archive();
                     }
+
                     w = new xicap_writer{ xicap::Writer(path, std::move(m), policy) };
                 });
         return w;

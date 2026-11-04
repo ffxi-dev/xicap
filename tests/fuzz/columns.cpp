@@ -12,15 +12,17 @@ extern "C" auto LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) -> int
     {
         return 0;
     }
-    const uint32_t packets = data[0] | (data[1] << 8);
-    const uint32_t markers = data[2] | (data[3] << 8);
+
+    const auto packets = static_cast<uint32_t>(data[0] | (data[1] << 8));
+    const auto markers = static_cast<uint32_t>(data[2] | (data[3] << 8));
     try
     {
-        xicap::internal::DecodedFrame frame;
+        xicap::internal::Frame frame;
         xicap::internal::decodeColumns({ data + 4, size - 4 }, packets, markers, 0, frame);
     }
     catch (const xicap::Error&)
     {
     }
+
     return 0;
 }

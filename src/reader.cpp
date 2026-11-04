@@ -2,7 +2,7 @@
 #include "crc32.h"
 #include "format.h"
 
-#include <cstring>
+#include <array>
 #include <format>
 
 namespace xicap
@@ -16,23 +16,26 @@ Reader::Reader(const std::filesystem::path& path)
     {
         throw Error("xicap: cannot open " + path.string());
     }
+
     // A valid trailer at the end makes the file complete; a bad frame then refuses it, rather than ending it.
     const auto size = std::filesystem::file_size(path);
     if (size >= sizeof(format::Header) + sizeof(format::Trailer))
     {
-        format::Trailer t{};
-        file_.seekg(static_cast<std::streamoff>(size - sizeof(t)));
-        file_.read(reinterpret_cast<char*>(&t), sizeof(t));
-        const auto bytes = std::span{ reinterpret_cast<const uint8_t*>(&t), offsetof(format::Trailer, crc) };
-        complete_        = file_ && t.magic == format::TRAILER_MAGIC && internal::crcMatches(bytes, t.crc);
+        std::array<uint8_t, sizeof(format::Trailer)> raw{};
+        file_.seekg(static_cast<std::streamoff>(size - raw.size()));
+        file_.read(reinterpret_cast<char*>(raw.data()), raw.size());
+        const auto t = internal::load<format::Trailer>(std::span{ raw });
+        complete_    = file_ && t.magic == format::TRAILER_MAGIC && internal::endsWithCrc(raw);
         if (complete_)
         {
             endTimestamp_ = t.endTimestamp;
             packetCount_  = t.packetCount;
         }
+
         file_.clear();
         file_.seekg(0);
     }
+
     while (!stream_.ready())
     {
         if (!pushChunk())
@@ -58,12 +61,14 @@ auto Reader::next(Packet& packet) -> bool
         {
             return false;
         }
+
         if (stream_.stopped() || !pushChunk())
         {
             if (complete_)
             {
                 throw Error(std::format("xicap: bad frame at byte {}", stream_.bytesRead()));
             }
+
             return false;
         }
     }
