@@ -217,7 +217,7 @@ auto StreamReader::State::parseFrame(std::span<const uint8_t> avail) -> bool
 
         pos += sizeof(t);
         stage = Stage::Complete;
-        return false;
+        return true;
     }
 
     if (magic != format::FRAME_MAGIC)

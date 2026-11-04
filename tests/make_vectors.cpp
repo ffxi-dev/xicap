@@ -202,6 +202,21 @@ auto main(int argc, char** argv) -> int
 
     {
         auto b = packets;
+        b.push_back(0);
+        writeVector(dir, "5-bytes-after-trailer", b);
+    }
+
+    {
+        // A second trailer, whose packet count is wrong, after the right one.
+        auto b = packets;
+        b.insert(b.end(), packets.end() - sizeof(format::Trailer), packets.end());
+        put(b, b.size() - 12, internal::load<uint64_t>(std::span{ b }, b.size() - 12) + 1);
+        fixCrc(b, b.size() - sizeof(format::Trailer), b.size());
+        writeVector(dir, "5-trailer-twice", b);
+    }
+
+    {
+        auto b = packets;
         b[60] ^= 1;
         writeVector(dir, "5-bad-header-crc", b);
     }

@@ -50,9 +50,10 @@ format 4, and readers of format 5 read no earlier format.
 ```
 
 A writer only appends, and never changes what it has written, so every copy of
-a file being recorded is a prefix of the finished file. A file that ends with
-a valid trailer is **complete**. A file without one is **cut off**: the
-recorder crashed, or is still recording.
+a file being recorded is a prefix of the finished file. A file whose last 24
+bytes are a valid trailer is **complete**. A file without one is **cut off**:
+the recorder crashed, or is still recording. A trailer whose CRC fails is not a
+valid trailer, so a file that ends with one is cut off.
 
 ## Header
 
@@ -326,8 +327,8 @@ A reader refuses the file, wherever it meets the cause, when:
 - a policy block's rules and ranges do not end exactly at the end of its
   payload, or a source block's payload is under 36 bytes;
 - the file is complete and holds a bad frame;
-- its trailer's `packetCount` or `endTimestamp` differs from the packets read,
-  or bytes follow its trailer.
+- its frames end at a valid trailer that is not the file's last 24 bytes, or
+  the trailer's `packetCount` or `endTimestamp` differs from the packets read.
 
 A reader that has already passed on packets reports the refusal, and its
 caller drops them.
@@ -352,9 +353,10 @@ out of range, makes the zstd decoder fail, does not decode to exactly
 Since a frame decodes only after the frames before it, the frames after a bad
 one cannot be read. A cut-off file ends at its first bad frame.
 
-A reader of a file that arrives as it downloads reads frames up to the bytes
-that start with `XCPF`, the trailer, or up to the first bytes that are not a
-whole, valid frame, and stops there.
+A reader of a file that arrives as it downloads reads frames until it meets a
+valid trailer, or bytes that are neither a whole, valid frame nor a valid
+trailer, and stops there. It refuses the file if more bytes arrive after a
+valid trailer.
 
 ## Writer rules
 
