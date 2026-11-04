@@ -510,14 +510,18 @@ class Capture:
                     failure = offset
                 break
             payload = frame[self.frame_header : -4]
-            if frame[4] == KIND_CHECKPOINT and len(payload) == 136:
-                count, digest, signature = struct.unpack_from("<Q", payload)[0], payload[8:72], payload[72:136]
-                ok = count == packets and digest == s.copy().digest() and self.check(b"xicap/4 checkpoint", digest, signature)
-                if failure is None:
-                    if ok:
-                        good, verified = good + 1, packets
-                    else:
-                        failure = offset
+            if frame[4] not in (KIND_PACKETS, KIND_CHECKPOINT) and frame[4] >= 0x80:
+                raise Refused("unknown-required", f"frame kind {frame[4]:#x}")
+            if frame[4] == KIND_CHECKPOINT:
+                # A failed checkpoint is reported; a later good signature still counts.
+                ok = len(payload) == 136
+                if ok:
+                    count, digest, signature = struct.unpack_from("<Q", payload)[0], payload[8:72], payload[72:136]
+                    ok = count == packets and digest == s.copy().digest() and self.check(b"xicap/4 checkpoint", digest, signature)
+                if ok:
+                    good, verified = good + 1, packets
+                elif failure is None:
+                    failure = offset
             elif frame[4] == KIND_PACKETS:
                 _, _, _, marker_count, _, packet_count, base = struct.unpack_from("<4sBBHIIQ", frame, 0)
                 try:
@@ -538,12 +542,10 @@ class Capture:
             s.update(b"E" + struct.pack("<QQ", self.total_packets, self.end_timestamp))
             end = s.digest()
             if not self.trailer_flags & END_UNSIGNED:
-                ok = self.check(b"xicap/4 footer", end, self.trailer[40:104])
-                if failure is None:
-                    if ok:
-                        signed_to_end, verified = True, packets
-                    else:
-                        failure = self.index_offset
+                if self.check(b"xicap/4 footer", end, self.trailer[40:104]):
+                    signed_to_end, verified = True, packets
+                elif failure is None:
+                    failure = self.index_offset
             if self.seal:
                 key, signature = self.seal[16:48], self.seal[80:144]
                 try:

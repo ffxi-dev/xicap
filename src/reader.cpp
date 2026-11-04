@@ -629,17 +629,19 @@ auto Reader::verify4() -> Verification
             }
             break;
         }
+        internal::checkKind(info.kind);
         const auto payload = std::span{ frame }.subspan(sizeof(FrameHeader), info.payloadSize);
-        if (info.kind == FrameKind::Checkpoint && info.payloadSize == sizeof(CheckpointPayload))
+        // Checkpoints sit outside the signed stream, so a bad one is reported but does not stop a later signature
+        // from counting.
+        if (info.kind == FrameKind::Checkpoint)
         {
             CheckpointPayload checkpoint{};
-            std::memcpy(&checkpoint, payload.data(), sizeof(checkpoint));
-            const bool good = checkpoint.packets == packets && checkpoint.digest == stream.digest() &&
-                              checkSignature(header_.signingKey, checkpoint.signature, signedMessage(internal::CHECKPOINT_PREFIX, checkpoint.digest));
-            if (result.firstFailureOffset)
+            if (info.payloadSize == sizeof(CheckpointPayload))
             {
-                continue;
+                std::memcpy(&checkpoint, payload.data(), sizeof(checkpoint));
             }
+            const bool good = info.payloadSize == sizeof(CheckpointPayload) && checkpoint.packets == packets && checkpoint.digest == stream.digest() &&
+                              checkSignature(header_.signingKey, checkpoint.signature, signedMessage(internal::CHECKPOINT_PREFIX, checkpoint.digest));
             if (!good)
             {
                 failAt(offset);
@@ -689,7 +691,7 @@ auto Reader::verify4() -> Verification
         {
             failAt(trailer_.indexOffset);
         }
-        else if (!result.firstFailureOffset)
+        else
         {
             result.signedToEnd     = true;
             result.verifiedPackets = packets;
