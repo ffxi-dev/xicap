@@ -339,7 +339,7 @@ bytes the addon injected.
 
 In an anonymous capture, one whose exclusion policy is `xicap-anonymous`, the
 writer's caller replaced players' names and ids with pseudonyms first: see
-[Exclusion](#exclusion).
+[Anonymous captures](#anonymous-captures).
 
 #### Example
 
@@ -608,23 +608,97 @@ channel's packets that carry text players write to each other:
 Opcodes and meanings follow atom0s's XiPackets. Public text, such as search and
 bazaar comments, is kept.
 
-The library's anonymous policy, `xicap-anonymous`, goes with packets whose
-player names and ids the library's pseudonymizer has replaced. It holds the
-default policy's rules, then stubs game packets that carry text players write or
-names the pseudonymizer cannot place (`0x014`, `0x016`, `0x048`, `0x078`,
-`0x079`, and `0x0E6` to the client; `0x0A0`, `0x0A1`, `0x0B7`, and `0x0D3` from
-the client), and zeroes from byte 12 on the search packets it cannot read
-(request types `0x00`, `0x02`, `0x03`, `0x05`, `0x06`, `0x08`, and their replies,
-the type with bit 7 set). Its version is the version of the pseudonymizer's
-field map.
+### Anonymous captures
 
-A pseudonym is keyed: the same name or id under one key always gives the same
-pseudonym, and without the key no one can tell which real name gave it. A name
-keeps its length and stays letters, the first a capital; a player id stays below
-`0x01000000`, where NPC and mob ids never are, and keeps bits 20 to 23; the
-header's `contentId` gets bit 31 set, which real content ids never have. The
-header's `character` and the zone-ins carry the same pseudonyms, so the check in
-[Game channel](#game-channel) still holds.
+An anonymous capture names no player, its recorder included, and keeps every
+packet's layout. Before the writer takes a packet, the library's pseudonymizer
+replaces each player name and player id in it with a pseudonym, in place; the
+writer then applies the anonymous policy, `xicap-anonymous`. That policy holds
+the default policy's rules, then zeroes the text players write that the default
+keeps; it stubs nothing the default does not. Its version is the version of the
+field map below.
+
+A pseudonym is keyed with 32 bytes: the same name or id under one key always
+gives the same pseudonym, and without the key no one can tell which real name
+gave it.
+
+- A name keeps its length and becomes letters, the first a capital. The bytes
+  of its field after the name are zeroed.
+- A player id is below `0x01000000`; NPC and mob ids are not, and stay. The
+  pseudonym keeps bits 20 to 23 and replaces bits 0 to 19, never with 0, by a
+  keyed permutation, so two players never share one. Where only 20 bits are
+  sent, they get the same 20 bits.
+- The header's `contentId` gets bit 31 set, which real content ids never have.
+  The header's `character` and the zone-ins carry the same pseudonyms, so the
+  check in [Game channel](#game-channel) still holds.
+
+The pseudonymizer changes only these bytes:
+
+1. **Fixed fields.** `pseudonym_fields.tsv`, beside this file, lists every one:
+   channel, direction, opcode, byte offset, size, count and stride, kind (`id`,
+   `name`, `signature`), and a condition on a u16 of the packet. An `id` field
+   changes only if it holds a player id. A `name` field changes only if it holds
+   1 to 15 letters before its first NUL. A `signature` is an item's 24 bytes of
+   extra data: bytes 12 to 23 change only if they hold a crafter's name of 3 to
+   15 letters, the first a capital, as 6-bit codes, most significant bit first
+   (1 to 10 digits, 11 to 36 capitals, 37 to 62 small letters), ending in 0 bits.
+2. **Walkers**, for fields whose place depends on the packet. Bit streams of
+   the game channel run least significant bit first; the search channel's run
+   most significant bit first.
+   - Action, `0x028` to the client: the actor, 32 bits at bit 40; a 6-bit
+     target count at bit 72; from bit 150, each target's 32-bit id, a 4-bit
+     result count, and per result 85 bits, a flag followed by 37 more bits when
+     set, and a flag followed by 34 more bits when set. The ids change.
+   - Call for a GM, `0x0D3` from the client: byte 7 counts the blocks from byte
+     8. A block is a type byte, a length byte counting its 4-byte header, and 2
+     more bytes. In a string block (type 3), text `KEY:value`, the bytes after
+     the colon are zeroed unless the key starts with `GENERIC.`, `GAME.` or
+     `EXEC.`; with no colon, the whole text. A lobby block (type 4) holds 28-byte
+     entries: the u32 at 8 changes as a player id, or as a content id when
+     `0x01000000` or above, and the 16 bytes at 12 as a name. Types 0 to 2 stay;
+     any other type is zeroed after its header, and so is everything after a
+     block whose length is under 4 or runs past the packet.
+   - Search, types `0x00` and `0x03` from the client: byte `0x10` counts the
+     bytes of tags from `0x11`. Each tag is 5 bits; all but `0x0B`, `0x0C`,
+     `0x11`, `0x13`, `0x14`, `0x16`, `0x18` then carry a sort bit and a presence
+     bit. A present name (`0x00`) is a 5-bit length and 7-bit characters: they
+     change as a name, or are zeroed if not letters. The other tags' bits stay:
+     zone `0x01` 10 bits, nation `0x02` 2, job `0x03` 5, race `0x05` 4, levels
+     `0x04`, flags `0x06`, master levels `0x07` and ranks `0x10` 16 when
+     present; `0x0B`, `0x11`, `0x13`, `0x14`, `0x16` 32; `0x0C`, `0x18` none.
+     From any other tag on, the bits are zeroed.
+   - Search, replies `0x80` to `0x83`: entries from `0x18` to the u16 length at
+     `0x08`, each a size byte and then tags of 5 bits. A name (`0x00`) is a
+     4-bit length and 7-bit characters, which change as a name; an id (`0x08`)
+     is 20 bits, which change as a player id's bits 0 to 19. The other tags'
+     bits stay: `0x01`, `0x03` 10; `0x02` 2; `0x04`, `0x06`, `0x17` 16; `0x05`
+     4; `0x07`, `0x0D`, `0x10` 8; `0x0A`, `0x0B`, `0x0C`, `0x0E`, `0x11`,
+     `0x13`, `0x14`, `0x16` 32. From any other tag to the entry's end, the bits
+     are zeroed.
+   - Search replies `0x80` to `0x83`, `0x85`, `0x86` and `0x88`: the bytes from
+     the u16 length at `0x08` to the end, the client's hash of the plaintext, are
+     zeroed, since the hash would confirm a guessed name.
+   - Search types other than `0x00` to `0x03`, `0x05`, `0x06`, `0x08`, `0x10`,
+     `0x15`, and those with bit 7 set: zeroed from byte 12, since their layout is
+     not known.
+3. **The sweep.** Retail leaves bytes of earlier packets in fields it does not
+   fill. Every real name and id a pseudonymizer has already rewritten, in this
+   packet or an earlier one, is replaced wherever else it sits: a name as a run
+   of 3 to 15 letters starting with a capital, with no letter on either side;
+   an id from `0x10000` up as a little-endian u32 at any byte, and in `0x062` to
+   the client at any bit, least significant first, where retail leaves action
+   streams.
+
+The anonymous policy zeroes, as ranges that set the redacted flag: from byte 12
+of `0x014`, from 7 of `0x016`, from 30 of `0x078`, from 44 of `0x079`, and
+bytes 4 to 126 of `0x0CA`, to the client; from 5 of `0x0A0` from the client; and
+bytes `0x1E` to `0x98` of search replies `0x88`.
+
+What stays: linkshell names, trusts' and pets' names, and text the default
+keeps that names no one. A name's pseudonym shows its length. A player met only
+in stale bytes, before any field names them, keeps their real name or id there;
+and a number elsewhere that equals an id already met, such as an auction price,
+is replaced too.
 
 ## Reading
 

@@ -25,8 +25,15 @@ A name's pseudonym SHALL have the name's length and be letters with the first a 
 - **THEN** its size and every byte outside its id and name fields stay as they were
 
 ### Requirement: Nothing real reaches the file
-The writer's caller SHALL pseudonymize every packet and the header character before the writer takes them, under the `xicap-anonymous` policy, which stubs or zeroes what the field map cannot rewrite.
+The writer's caller SHALL pseudonymize every packet and the header character before the writer takes them, under the `xicap-anonymous` policy, which zeroes the text players write.
 
 #### Scenario: Scanning an anonymous capture
 - **WHEN** real packets are written as an anonymous capture
 - **THEN** no real name or id from them appears in the file or in any packet read back
+
+### Requirement: Every packet keeps its layout
+An anonymous capture SHALL stub no packet the default policy does not stub. The pseudonymizer SHALL change only the bytes FORMAT.md's Anonymous captures names: the fields `pseudonym_fields.tsv` lists, the fields its walkers find, and the copies its sweep finds; and the policy SHALL zero only text players write.
+
+#### Scenario: Checking a capture against the field map
+- **WHEN** a tool compares each packet of a capture with its anonymous version
+- **THEN** every byte that differs lies in a field `pseudonym_fields.tsv` or FORMAT.md names, or held a real name or id the capture met before
