@@ -337,6 +337,10 @@ Packet bytes are the packet as the client's hook delivered it, decrypted and
 decompressed, before any addon changed it. For an injected packet, they are the
 bytes the addon injected.
 
+In an anonymous capture, one whose exclusion policy is `xicap-anonymous`, the
+writer's caller replaced players' names and ids with pseudonyms first: see
+[Exclusion](#exclusion).
+
 #### Example
 
 Three game packets to the client, opcode `0x0DF`, 16 bytes each, 10 ms apart,
@@ -603,6 +607,24 @@ channel's packets that carry text players write to each other:
 
 Opcodes and meanings follow atom0s's XiPackets. Public text, such as search and
 bazaar comments, is kept.
+
+The library's anonymous policy, `xicap-anonymous`, goes with packets whose
+player names and ids the library's pseudonymizer has replaced. It holds the
+default policy's rules, then stubs game packets that carry text players write or
+names the pseudonymizer cannot place (`0x014`, `0x016`, `0x048`, `0x078`,
+`0x079`, and `0x0E6` to the client; `0x0A0`, `0x0A1`, `0x0B7`, and `0x0D3` from
+the client), and zeroes from byte 12 on the search packets it cannot read
+(request types `0x00`, `0x02`, `0x03`, `0x05`, `0x06`, `0x08`, and their replies,
+the type with bit 7 set). Its version is the version of the pseudonymizer's
+field map.
+
+A pseudonym is keyed: the same name or id under one key always gives the same
+pseudonym, and without the key no one can tell which real name gave it. A name
+keeps its length and stays letters, the first a capital; a player id stays below
+`0x01000000`, where NPC and mob ids never are, and keeps bits 20 to 23; the
+header's `contentId` gets bit 31 set, which real content ids never have. The
+header's `character` and the zone-ins carry the same pseudonyms, so the check in
+[Game channel](#game-channel) still holds.
 
 ## Reading
 
