@@ -17,12 +17,19 @@ older reader cannot follow needs a new major version.
 - Writers write `reserved` fields and bytes as zero, and readers ignore their
   value. A later minor version may give them a meaning only where an old reader
   can safely ignore it.
+- A rule that says what a field holds binds writers. A reader checks only what
+  a rule says a reader checks, and accepts any other value: an all-zero
+  `captureId`, an `origin` the table does not list, a `SOURCE` block when
+  `origin` is not 2, and so on.
 - A text field of N bytes holds UTF-8, padded with zero bytes. It holds at most
   N - 1 bytes of text, cut only between characters, so it always ends with at
-  least one zero byte.
+  least one zero byte. Its text runs to the first zero byte, or to the end of
+  the field when a reader finds none.
 - Text, in fields and markers, is UTF-8. A writer given other bytes, such as
   Shift-JIS, writes U+FFFD for each byte that does not start a valid character.
-  A reader that finds such a byte anyway does not refuse the file.
+  A reader that finds such a byte anyway does not refuse the file: it yields
+  the bytes as stored, and the signed stream holds them as stored. A binding
+  that hands out strings may show U+FFFD in their place.
 - Timestamps are milliseconds since the Unix epoch, in UTC.
 - A byte range `a..b` includes byte `a` and stops before byte `b`.
 - A **varint** is unsigned LEB128: 7 bits per byte, low bits first, the high
@@ -40,7 +47,7 @@ older reader cannot follow needs a new major version.
 |------|----------|
 | CRC-32 | Polynomial `0x04C11DB7` reflected (`0xEDB88320`), initial value `0xFFFFFFFF`, final XOR `0xFFFFFFFF` (CRC-32/ISO-HDLC, as zlib). Check value: CRC of ASCII `123456789` is `0xCBF43926`. |
 | SHA-512 | FIPS 180-4. |
-| Ed25519 | RFC 8032, pure Ed25519 (not Ed25519ph or Ed25519ctx). Writers sign as section 5.1.6 says; a reader refuses a signature whose `S` is not below the group order, as section 5.1.7 says. |
+| Ed25519 | RFC 8032, pure Ed25519 (not Ed25519ph or Ed25519ctx). Writers sign as section 5.1.6 says. Readers verify as section 5.1.7 says, with the rules in [Verifying a signature](#verifying-a-signature). |
 | zstd | RFC 8878. |
 | LEB128 | Unsigned LEB128, as DWARF and WebAssembly use it. |
 
@@ -155,27 +162,28 @@ A reader refuses a block whose CRC fails or whose length is over 16 MiB.
 
 Ids `0x0001` to `0x0008` held client memory copies and a zstd dictionary in
 earlier formats, and `0x000B` a signed source's verdict in a draft of format 4;
-all are retired: never reuse them. A capture's context is its
+all are retired: writers never reuse them. A capture's context is its
 packets, never a copy of client state.
 
 | Range | Use |
 |-------|-----|
 | `0x0000_0001` to `0x0000_7FFF` | this document |
 | `0x0000_8000` to `0xFFFF_FFFE` | other programs' metadata |
-| `0x0000_0000`, `0xFFFF_FFFF` | never used |
+| `0x0000_0000`, `0xFFFF_FFFF` | never written |
 
-Readers skip blocks of types they do not know and return them to the caller
-unchanged.
+Readers skip blocks of types they do not know, retired and never-written types
+included, and return them to the caller unchanged.
 
 ### Source
 
 Converted captures (`origin` 2) carry this block. A reader refuses a second
-one.
+one, and one whose payload is under 108 bytes or whose `metadata` does not end
+exactly at the end of the payload.
 
 | Off | Size | Field | Notes |
 |----:|-----:|-------|-------|
-| 0 | 16 | `format` | text: the source format, such as `captain`, or `xicap` for packets from another capture |
-| 16 | 16 | `formatVersion` | text: the source program's version, or for `xicap` the source file's `major.minor` |
+| 0 | 16 | `format` | text: the source format, such as `captain` |
+| 16 | 16 | `formatVersion` | text: the source program's version |
 | 32 | 4 | `skippedRecords` | source records not converted |
 | 36 | 4 | `utcOffsetSeconds` | `i32`: offset added to the source's times to get UTC |
 | 40 | 64 | `sourceHash` | SHA-512 of the source file as uploaded |
@@ -192,7 +200,7 @@ Every frame starts with the same 32-byte header and ends with a CRC.
 | 4 | 1 | `kind` | see below |
 | 5 | 1 | `frameFlags` | packet frames: bit 0 **restart**, see [Streams](#streams). Other bits reserved |
 | 6 | 2 | `markerCount` | markers in the payload; `0` for other kinds |
-| 8 | 4 | `payloadSize` | bytes between this header and the CRC |
+| 8 | 4 | `payloadSize` | bytes between this header and the CRC, at most 17 MiB for every kind |
 | 12 | 4 | `packetCount` | packets in the payload, 1 to 1,048,576; `0` for other kinds |
 | 16 | 8 | `baseTimestamp` | first packet's timestamp; for other kinds, the last packet's timestamp before the frame |
 | 24 | 2 | `zoneId` | zone named by the last zone-in at or before the frame's first packet; `0` if none. For other kinds, the zone in effect |
@@ -206,9 +214,14 @@ Every frame starts with the same 32-byte header and ends with a CRC.
 | `0x01` | checkpoint | skip it |
 | `0x80` | packets | refuse the file |
 
-A reader that does not know a kind below `0x80` may skip it after checking its
-CRC. Kinds from `0x80` must be understood: a reader refuses a file holding one
-it does not know.
+A reader checks a frame's magic, `payloadSize`, and CRC before its kind; a
+frame that fails one of them is a bad frame (see [Reading](#reading)), whatever
+its kind. A reader skips a frame that passes them and whose kind, below `0x80`,
+it does not know. Kinds from `0x80` must be understood: a reader refuses a file
+holding one it does not know.
+
+In a frame of a kind other than packets, readers use only `magic`, `kind`,
+`payloadSize`, and `crc`, and accept any value in the other fields.
 
 ### Streams
 
@@ -224,9 +237,11 @@ frame (RFC 8878) that runs across one or more packet frames:
   `Window_Size` of at most 8 MiB (2^23). In its `Frame_Header_Descriptor`, bits
   7, 6, 5, 3, 1, and 0 are clear and bit 2 is set. A frame that starts a stream
   any other way is bad.
-- Each packet frame's payload is whole zstd blocks: fed to a decoder that has
-  decoded the stream's earlier packet frames, it yields exactly `plainSize`
-  bytes, with no later input.
+- A writer ends each packet frame's payload at the end of a zstd block. A
+  reader checks only that a decoder that has decoded the stream's earlier
+  packet frames takes in the whole payload and yields exactly `plainSize`
+  bytes from it, with no later input; it does not check where blocks end.
+  Bytes after the end of the zstd frame make the frame bad.
 - The last packet frame of a stream may end the zstd frame (last block and
   checksum). A reader checks the checksum when a stream ends. After the end, the
   next packet frame must start a stream.
@@ -304,8 +319,11 @@ frame is bad if:
 - a marker's `packetIndex` is not below `packetCount`, or is below the
   previous marker's;
 - the first packet's `deltaMs` is not 0, or a timestamp passes 2^64 − 1;
-- read in file order after the frame before it, its `baseTimestamp` is earlier
-  than that frame's last packet: timestamps never go backwards.
+- read in file order after the packet frame before it, its `baseTimestamp` is
+  earlier than that frame's last packet: timestamps never go backwards. In
+  recovery mode the check starts again after a skipped region (see
+  [Reading](#reading)), so the first frame after it may start before packets
+  read before it.
 
 #### Packet flags
 
@@ -359,17 +377,21 @@ The payload is 136 bytes, not compressed:
 
 A checkpoint frame sits at a frame boundary: after the packet frame that holds
 packet `packets` − 1, counting from 0, and before the one that holds packet
-`packets`. A reader that finds one elsewhere reports it as failed.
+`packets`. With `packets` 0 it sits before the first packet frame and covers
+the header and blocks alone; writers do not write one, and readers check it
+like any other. A reader that finds a checkpoint elsewhere reports it as
+failed.
 
 ## Channels
 
 | Channel | Name | Packet bytes | `opcode` | A stub keeps |
 |--------:|------|--------------|----------|--------------|
 | 0 | game | the FFXI packet, from its 4-byte header | the header's 9-bit id | the 4-byte header |
-| 1 | search | the plaintext request or reply, from its 4-byte size | byte `0x0B`, the request type | not defined |
+| 1 | search | the plaintext request or reply, from its 4-byte size | byte `0x0B`, the request type; any value for a packet under 12 bytes | not defined |
 | 2 to 255 | reserved | | | |
 
-Channel 1 follows Memoria's hooks.
+Channel 1 follows Memoria's hooks. Readers do not check a search packet's
+`opcode` against its bytes.
 
 A reader passes on packets of a channel it does not know, with the channel's
 number, and does not refuse the file. Adding a channel is a minor version.
@@ -439,7 +461,7 @@ rewrote the file. See [Signatures](#signatures).
 |----:|-----:|-------|-------|
 | 0 | 8 | `endTimestamp` | the last packet's timestamp; `0` if none |
 | 8 | 8 | `totalPacketCount` | |
-| 16 | 4 | `trailerFlags` | bit 0: a seal precedes the trailer. Bit 1: the signer never signed the end, so `signature` is zero (a cut-off recording, rewritten). Other bits reserved |
+| 16 | 4 | `trailerFlags` | bit 0: a seal precedes the trailer. Bit 1: the end is not signed, and readers do not check `signature`, whatever it holds. A rewriter sets bit 1 when it seals a recording that was cut off, and writes a zero `signature`. Other bits reserved |
 | 20 | 4 | `entryCount` | footer index entries |
 | 24 | 8 | `indexOffset` | file offset of the first index entry |
 | 32 | 4 | `indexCrc` | CRC-32 of the whole index |
@@ -460,8 +482,9 @@ The footer is valid when all of these hold:
 - `indexCrc` is correct;
 - with bit 0 set, the seal's magic is `XCSL` and its `crc` is correct.
 
-A reader reads a file whose footer is not valid as cut off. If its last 4 bytes
-are `XCPF` anyway, the reader also reports a damaged footer.
+A reader reads a file whose footer is not valid as cut off. It reports a
+**damaged footer** when the last 4 bytes are `XCPF` anyway, and in recovery
+mode when a valid footer disagrees with the frames (see [Reading](#reading)).
 
 The last 112 bytes of a complete file start with the end time and end with
 `XCPF`, so a reader can learn the end time from them alone.
@@ -500,27 +523,63 @@ Three signatures cover the stream. The prefixes are ASCII, with no terminator.
 - The **footer**: `signature = Ed25519(signingKey, "xicap/4 footer" ‖ D(end))`.
 - The **seal**: `signature = Ed25519(key, "xicap/4 seal" ‖ D(end) ‖ F ‖ C ‖ seal bytes 0..80)`,
   where `F` is the trailer's 64-byte `signature` (zero when the end is not
-  signed) and `C` is the 136-byte payload of the file's checkpoint frame, or 136
-  zero bytes when it has none. So the seal covers the signer's evidence, its
-  footer signature and the checkpoint the rewriter kept, as well as the seal's
-  time, key, and agent: stripping either breaks it. A sealed file holds at most
-  one checkpoint frame; with more, or one whose payload is not 136 bytes, the
-  seal fails.
+  signed) and `C` is the 136-byte payload of the file's checkpoint frame as
+  stored, whether or not it verifies, or 136 zero bytes when it has none. So
+  the seal covers the signer's evidence, its footer signature and the
+  checkpoint the rewriter kept, as well as the seal's time, key, and agent:
+  stripping either breaks it. A sealed file holds at most one checkpoint frame;
+  with more, or one whose payload is not 136 bytes, the seal fails.
 
-A reader computes the stream from the packets it reads and reports:
+A reader computes the stream from the packets it reads, in file order from the
+first frame, and stops at the first bad frame (see [Reading](#reading)). It
+reports:
 
 - the signing key;
-- **signed to the end** if the footer's signature verifies;
+- **signed to the end** if it reached the end of the frames of a complete file
+  and the footer's signature verifies;
 - otherwise the last checkpoint that sits where its `packets` says, whose
   `digest` equals `D(packets)`, and whose signature verifies, and its `packets`;
-- the file offset of the first checkpoint that fails, or of the footer index if
-  the footer's signature fails. A checkpoint whose payload is not 136 bytes
-  fails. Checkpoints sit outside the signed stream, so a failed one does not stop
-  a later checkpoint or the footer from counting;
-- for a sealed file, the seal's key, agent, and time, and whether its signature
-  verifies.
+- the file offset of the **first failure** in file order: a checkpoint that
+  fails, a bad frame in a complete file, or the footer index when the footer's
+  signature fails. A checkpoint whose payload is not 136 bytes fails.
+  Checkpoints sit outside the signed stream, so a failed one does not stop a
+  later checkpoint or the footer from counting;
+- for a sealed file whose frames it read to the end, the seal's key, agent, and
+  time, and whether its signature verifies.
+
+So in recovery mode, signatures cover only the packets before the first skipped
+region: the reader reports later packets as not verified, does not report later
+checkpoints, and does not check the footer's signature or the seal. A bad frame
+in a cut-off file is where the capture ends, not a failure.
 
 A failed signature never stops a reader from reading packets.
+
+### Verifying a signature
+
+A reader verifies an Ed25519 signature `R ‖ S` by public key `A` over a message
+`M` as RFC 8032 section 5.1.7 says, with these rules. The signature fails
+when any of them does not hold:
+
+- `A` and `R` are canonical encodings of points on the curve: the low 255
+  bits, `y`, are below p = 2^255 − 19, and the sign bit is clear when `x` is 0,
+  as it is for `y` = 1 and `y` = p − 1;
+- `S` is below the group order L;
+- `A` does not have small order. The eight points of small order encode
+  canonically as:
+
+  ```
+  0000000000000000000000000000000000000000000000000000000000000000
+  0000000000000000000000000000000000000000000000000000000000000080
+  0100000000000000000000000000000000000000000000000000000000000000
+  26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05
+  26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85
+  c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a
+  c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa
+  ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f
+  ```
+
+- with `k` = SHA-512(`R ‖ A ‖ M`) as a little-endian integer mod L,
+  `[8][S]B = [8]R + [8][k]A`, the group equation with the cofactor.
 
 ### Rewriting a capture
 
@@ -611,27 +670,32 @@ A reader:
 
 A refusal is of the whole file, wherever the reader meets its cause: a reader
 that has already passed on packets reports the refusal, and its caller drops
-them. A reader checks the exclusion policy block's layout, not its rules, and
-does not refuse a file for a missing `SOURCE` block; what an archive accepts is
-the archive's rule.
+them. A reader refuses an `EXCLUSION_POLICY` block whose payload is under 40
+bytes or whose rules, with their ranges, do not end exactly at the end of the
+payload; it does not check the rules' values. It does not refuse a file for a
+missing `SOURCE` block; what an archive accepts is the archive's rule.
 
-A **bad frame** is one that is cut short, lacks the `XCFR` magic, fails its CRC,
-or breaks a rule of this document once read: a `plainSize` or `packetCount` out
-of range, a zstd error, a payload that does not decode to exactly `plainSize`
-bytes, a frame without the restart bit with no stream to continue, or a bad
-plaintext (see [Packet frames](#packet-frames)). A packet frame whose stream
-holds a bad frame before it is bad too, since its copies may reach back into
-the bad one.
+A **bad frame** is one that is cut short, lacks the `XCFR` magic, has a
+`payloadSize` over 17 MiB, fails its CRC, or breaks a rule of this document
+once read: a `plainSize` or `packetCount` out of range, a zstd error, a payload
+that the decoder does not take in whole or that does not yield exactly
+`plainSize` bytes, a frame without the restart bit with no stream to continue,
+or a bad plaintext (see [Packet frames](#packet-frames)). A packet frame whose
+stream holds a bad frame before it is bad too, since its copies may reach back
+into the bad one.
 
 In a complete file, frames run up to `indexOffset`, and a bad frame makes the
-reader refuse the file. Neither the index nor the trailer is signed, yet seeks
-and zone lists follow them, so a reader also refuses a complete file unless,
-walking the frame headers from the end of the extension blocks, the last frame
-ends at `indexOffset`, the index holds exactly one entry per packet frame, in
-order, whose `fileOffset`, `timestamp`, `zoneId`, and restart bit are the
-frame's offset, `baseTimestamp`, `zoneId`, and restart bit, and the trailer's
-`frameCount` and `totalPacketCount` are the number of frames and the sum of the
-packet frames' `packetCount`. In recovery mode it reads such a file as cut off.
+reader refuse the file. The index and the trailer are not signed, so a reader
+also refuses a complete file unless, walking the frame headers from the end of
+the extension blocks, the last frame ends at `indexOffset`, the index holds
+exactly one entry per packet frame, in order, whose `fileOffset`, `timestamp`,
+`zoneId`, and restart bit are the frame's offset, `baseTimestamp`, `zoneId`,
+and restart bit, and the trailer's `frameCount` and `totalPacketCount` are the
+number of frames and the sum of the packet frames' `packetCount`. This keeps
+the footer true to the frames, not to the packets: frame headers are not signed
+either, and a reader does not check a frame's `zoneId` against its zone-ins, so
+seeks and zone lists are only as good as the writer made them. Only the packets
+are signed.
 
 In a cut-off file, frames run up to the first bad frame. The capture ends there,
 and the reader reports how many bytes it did not read; seeks and zone lists
@@ -640,8 +704,14 @@ stop there too.
 In **recovery mode**, a reader that meets a bad frame searches forward, byte by
 byte, for the next `XCFR` whose frame passes its CRC, and goes on from there,
 skipping packet frames until one starts a stream. It reports each skipped
-region, with adjacent regions joined. Recovery mode is for salvage; Mogsafe and
-other archive checks read in the normal mode.
+region, with adjacent regions joined, and the order check of
+[Packet frames](#packet-frames) starts again after each one. A complete file
+stays complete: its frames still run up to `indexOffset`, and the reader skips
+the bad region as above. A complete file whose index or trailer disagrees with
+its frames is read as cut off, with a damaged footer. Signatures cover only the
+packets before the first skipped region (see [Signatures](#signatures)).
+Recovery mode is for salvage; Mogsafe and other archive checks read in the
+normal mode.
 
 To **seek** to a packet frame, a reader walks back through the index to the
 nearest frame with the restart bit and decodes from there.
@@ -649,7 +719,8 @@ nearest frame with the restart bit and decodes from there.
 ## Writer rules
 
 These rules are part of the format: a capture that breaks them is wrong even if
-it parses.
+it parses. Readers check only what [Reading](#reading) lists; an archive may
+check the rest.
 
 - **Timestamps never go backwards** in file order, across every channel. Equal
   timestamps are allowed. Given an earlier time than the last, a writer records
@@ -659,8 +730,9 @@ it parses.
   a packet that would push its `deltaMs` past 2^32 − 1, its `packetCount` past
   1,048,576, its markers past 65,535, or its plaintext past its frame size
   limit (at most 16 MiB), and before each zone-in the server sends, so a zone-in
-  is the first packet of its frame and a frame never spans two zones. It also ends frames by its own packet and time settings and
-  when the host asks for a flush. The library's settings:
+  is the first packet of its frame and a frame never spans two zones. It also
+  ends frames by its own packet and time settings and when the host asks for a
+  flush. The library's settings:
 
   | | live (the default) | archive |
   |---|---|---|
@@ -775,9 +847,11 @@ conformance file and that it reads them.
 | Change | Version |
 |--------|---------|
 | Layout of an existing structure changes, except the header growing as [Header](#header) allows | major |
-| A new frame kind, packet flag, channel, extension type, marker kind, trailer flag, or a field in reserved bytes that old readers can ignore | minor |
+| A new trailer flag: old readers read the file as cut off, see [Footer](#footer) | major |
+| A new frame kind, packet flag, channel, extension type, marker kind, or a field in reserved bytes that old readers can ignore | minor |
 | Anything an old reader would misread without a must-understand frame kind, flag, or check to stop it | major |
-| A new check readers make | none |
+| A new check that refuses files; readers make it only on files of that version or later | minor |
+| A new check that only reports | none |
 
 A reader refuses a major version it does not know. It reads a newer minor
 version, skipping what it does not know, unless a must-understand frame kind or

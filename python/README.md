@@ -48,8 +48,10 @@ xicap.transcode("upload.xicap", "archived.xicap", seed=seed32, agent="mogsafe 20
 ## API
 
 * `xicap.Reader(path)` — opens a `.xicap` file.
-* `xicap.Packet` — `timestamp_ms`, `opcode`, `direction`, `data: bytes`,
-  `markers: list[str]`.
+* `xicap.Packet` — `timestampMs`, `channel`, `opcode`, `flags`, `direction`,
+  `data: bytes`, `markers: list[tuple[MarkerKind, str]]`. Marker text that is
+  not UTF-8 reads with U+FFFD for each bad byte; `verify()` still checks the
+  bytes as stored.
 * `xicap.PacketDirection` — `ServerToClient` / `ClientToServer`.
 * `xicap.SeekResult` — `Ok` / `EmptyIndex` / `OutOfRange` / `NotFound`.
 * `xicap.Error` — raised on format errors; carries a `.code` of type
