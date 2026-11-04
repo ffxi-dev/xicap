@@ -11,5 +11,4 @@ jobs:
     uses: ffxi-dev/vault/.github/workflows/go.yml@ci/v1.14
     with:
       apt-packages: libzstd-dev
-      # The binding's C++ files include the library's sources from outside go/, which Go's build cache does not track.
       fresh-build-cache: true

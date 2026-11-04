@@ -81,10 +81,10 @@ auto decodeColumns(std::span<const uint8_t> plain, uint32_t packetCount, uint32_
     out.bytes.clear();
     out.packets.clear();
     out.markers.clear();
-    // Each packet takes at least one byte in each of the first five columns.
-    if (packetCount == 0 || uint64_t{ packetCount } * 5 > plain.size())
+    // Each packet takes at least one byte in each of the first five columns, and each marker three.
+    if (packetCount == 0 || uint64_t{ packetCount } * 5 + uint64_t{ markerCount } * 3 > plain.size())
     {
-        bad("packet count does not fit the plaintext");
+        bad("packet and marker counts do not fit the plaintext");
     }
     size_t     pos     = 0;
     const auto delta   = column(plain, pos, 32, packetCount);

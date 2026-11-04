@@ -11,7 +11,7 @@ env:
   PYTHONNOUSERSITE: "1"
 
 jobs:
-  build-and-test:
+  binding:
     strategy:
       fail-fast: false
       matrix:
@@ -19,39 +19,21 @@ jobs:
     runs-on: [self-hosted, lsb]
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-
       - uses: seanmiddleditch/gha-setup-ninja@v5
-
-      - name: Build fixture
-        run: |
-          cmake -S . -B build-fixture -G Ninja -DCMAKE_BUILD_TYPE=Release -DXICAP_BUILD_TOOLS=OFF -DXICAP_BUILD_FIXTURE_TOOL=ON
-          cmake --build build-fixture --target xicap_make_fixture
-        shell: bash
-
-      - name: Generate fixture
-        run: |
-          mkdir -p js/test/fixtures
-          ./build-fixture/xicap_make_fixture js/test/fixtures/sample.xicap
-        shell: bash
-
-      - name: Install package + tests
-        run: pip install ./python[test]
-
-      - name: Run pytest
-        run: python -m pytest python/tests -v
+      - run: pip install "./python[test]"
+      - run: python -m pytest python/tests
 
   spec-reader:
-    # A reader written from FORMAT.md alone must read the conformance set as recorded.
+    # A reader written from FORMAT.md alone must read every vector as its JSON says.
     runs-on: [self-hosted, lsb]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - run: pip install zstandard==0.25.0 cryptography==50.0.0
+      - run: pip install zstandard==0.25.0
       - run: python tests/spec_reader.py tests/vectors
       - run: python tests/spec_reader.py --example FORMAT.md

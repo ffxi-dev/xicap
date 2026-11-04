@@ -1,4 +1,4 @@
-name: JavaScript / Wasm
+name: JavaScript
 
 on:
   push:
@@ -11,38 +11,16 @@ jobs:
     runs-on: [self-hosted, lsb]
     steps:
       - uses: actions/checkout@v4
-
       - name: Versions agree
         run: |
           v=$(sed -n 's/^project(xicap VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
-          grep -q "^    \"version\": \"$v\"" js/package.json && grep -q "^version = \"$v\"" python/pyproject.toml || { echo "::error::CMakeLists.txt says $v; js/package.json and python/pyproject.toml must too"; exit 1; }
-
+          grep -q "\"version\": \"$v\"" js/package.json && grep -q "^version = \"$v\"" python/pyproject.toml || { echo "::error::CMakeLists.txt says $v; js/package.json and python/pyproject.toml must too"; exit 1; }
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
-
+          node-version: "22"
       - uses: seanmiddleditch/gha-setup-ninja@v5
-
-      - name: Setup Emscripten
-        uses: mymindstorm/setup-emsdk@v14
+      - uses: mymindstorm/setup-emsdk@v14
         with:
-          version: "latest"
-
-      - name: Build fixture (C++)
-        run: |
-          cmake -S . -B build-fixture -G Ninja -DCMAKE_BUILD_TYPE=Release -DXICAP_BUILD_TOOLS=OFF -DXICAP_BUILD_FIXTURE_TOOL=ON
-          cmake --build build-fixture --target xicap_make_fixture
-          mkdir -p js/test/fixtures
-          ./build-fixture/xicap_make_fixture js/test/fixtures/sample.xicap
-
-      - name: Build wasm
-        working-directory: js
-        run: node ./scripts/build-wasm.mjs
-
-      - name: Compile TypeScript
-        working-directory: js
-        run: npx -y -p typescript@5.5 tsc -p tsconfig.json
-
-      - name: Run JS tests
-        working-directory: js
-        run: node --test test/reader.test.mjs
+          version: "5.0.7"
+      - working-directory: js
+        run: npm run build && npm test
