@@ -42,8 +42,9 @@ struct TranscodeResult
 };
 
 // Rewrites src as format 4 at dst, then reads dst back and checks that it holds the same packets and markers as src
-// and that its signatures verify. Throws Error, leaving no file at dst: TranscodeRefused for a src the mode does not
-// take, TranscodeMismatch for any difference.
+// and that its signatures verify. It writes a file of its own beside dst and renames it to dst only once checked.
+// Throws Error, leaving dst as it was: TranscodeRefused for a src the mode does not take, TranscodeMismatch for any
+// difference.
 auto transcode(const std::filesystem::path& src, const std::filesystem::path& dst, const TranscodeOptions& options) -> TranscodeResult;
 
 struct CutOptions

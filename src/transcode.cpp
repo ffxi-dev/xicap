@@ -12,6 +12,7 @@
 #include <format>
 #include <map>
 #include <optional>
+#include <random>
 #include <stdexcept>
 #include <tuple>
 
@@ -85,6 +86,39 @@ auto resignStart(Reader& src, const Verification& v, const TranscodeOptions& opt
     const auto crc = crc32({ header.data(), header.size() - sizeof(uint32_t) });
     std::memcpy(header.data() + header.size() - sizeof(crc), &crc, sizeof(crc));
 }
+
+// A file beside dst that no other call names, and that becomes dst only once whole: a failed call leaves dst as it
+// was, and no call can write over its own src.
+class Staged
+{
+public:
+    explicit Staged(const std::filesystem::path& dst)
+    : dst_(dst)
+    {
+        std::random_device rd;
+        path_ = std::filesystem::path(dst).concat(std::format(".{:08x}{:08x}.tmp", rd(), rd()));
+    }
+    ~Staged()
+    {
+        std::error_code ec;
+        std::filesystem::remove(path_, ec);
+    }
+    Staged(const Staged&)                    = delete;
+    auto operator=(const Staged&) -> Staged& = delete;
+
+    [[nodiscard]] auto path() const -> const std::filesystem::path&
+    {
+        return path_;
+    }
+    auto publish() -> void
+    {
+        std::filesystem::rename(path_, dst_);
+    }
+
+private:
+    std::filesystem::path dst_;
+    std::filesystem::path path_;
+};
 
 // Reads src and dst side by side; any difference is a mismatch.
 auto compare(const std::filesystem::path& src, const std::filesystem::path& dst) -> void
@@ -263,68 +297,59 @@ auto transcode(const std::filesystem::path& src, const std::filesystem::path& ds
         carried = CheckpointPayload{ .packets = v.verifiedPackets, .digest = v.checkpointDigest, .signature = v.checkpointSignature };
     }
 
-    const auto      tmp = std::filesystem::path(dst).concat(".tmp");
+    Staged          tmp(dst);
     TranscodeResult result{ .packets = 0, .markers = 0, .bytesIn = std::filesystem::file_size(src), .bytesOut = 0 };
-    try
     {
+        const auto writer = Access::rewriter(tmp.path(), options.policy, std::move(header), std::move(blocks), seal ? nullptr : &options.seed);
+        if (seal)
         {
-            const auto writer = Access::rewriter(tmp, options.policy, std::move(header), std::move(blocks), seal ? nullptr : &options.seed);
-            if (seal)
+            if (in.complete())
             {
-                if (in.complete())
-                {
-                    Access::copyFooter(*writer, Access::trailer(in).signature);
-                }
-                else
-                {
-                    Access::endUnsigned(*writer);
-                }
-                const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-                Access::seal(*writer, options.seed, options.agent, hooks.sealedAt != 0 ? hooks.sealedAt : static_cast<uint64_t>(now));
+                Access::copyFooter(*writer, Access::trailer(in).signature);
             }
-            ReadPacket   p{};
-            CopiedPacket copy;
-            while (in.next(p))
+            else
             {
-                if (hooks.edit)
-                {
-                    const auto* d = reinterpret_cast<const uint8_t*>(p.data.data());
-                    copy          = { p.timestamp, p.flags, p.channel, p.opcode, { d, d + p.data.size() }, { p.markers.begin(), p.markers.end() } };
-                    hooks.edit(result.packets, copy);
-                    p = { .timestamp = copy.timestamp, .channel = copy.channel, .opcode = copy.opcode, .flags = copy.flags, .direction = p.direction, .data = std::as_bytes(std::span{ copy.data }), .markers = copy.markers };
-                }
-                result.markers += p.markers.size();
-                Access::add(*writer, p);
-                result.packets++;
-                if (carried && result.packets == carried->packets)
-                {
-                    Access::carry(*writer, *carried);
-                }
+                Access::endUnsigned(*writer);
             }
-            writer->close();
+            const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+            Access::seal(*writer, options.seed, options.agent, hooks.sealedAt != 0 ? hooks.sealedAt : static_cast<uint64_t>(now));
         }
-        if (hooks.check)
+        ReadPacket   p{};
+        CopiedPacket copy;
+        while (in.next(p))
         {
-            compare(src, tmp);
-            Reader     out(tmp);
-            const auto w    = out.verify();
-            const bool good = out.complete() && !w.firstFailureOffset &&
-                              (seal ? (in.complete() ? w.signedToEnd : w.verifiedPackets == (carried ? carried->packets : 0)) && w.seal && w.seal->good
-                                    : w.signedToEnd);
-            if (!good)
+            if (hooks.edit)
             {
-                mismatch("its signatures do not verify as expected");
+                const auto* d = reinterpret_cast<const uint8_t*>(p.data.data());
+                copy          = { p.timestamp, p.flags, p.channel, p.opcode, { d, d + p.data.size() }, { p.markers.begin(), p.markers.end() } };
+                hooks.edit(result.packets, copy);
+                p = { .timestamp = copy.timestamp, .channel = copy.channel, .opcode = copy.opcode, .flags = copy.flags, .direction = p.direction, .data = std::as_bytes(std::span{ copy.data }), .markers = copy.markers };
+            }
+            result.markers += p.markers.size();
+            Access::add(*writer, p);
+            result.packets++;
+            if (carried && result.packets == carried->packets)
+            {
+                Access::carry(*writer, *carried);
             }
         }
-        result.bytesOut = std::filesystem::file_size(tmp);
-        std::filesystem::rename(tmp, dst);
+        writer->close();
     }
-    catch (...)
+    if (hooks.check)
     {
-        std::error_code ec;
-        std::filesystem::remove(tmp, ec);
-        throw;
+        compare(src, tmp.path());
+        Reader     out(tmp.path());
+        const auto w    = out.verify();
+        const bool good = out.complete() && !w.firstFailureOffset &&
+                          (seal ? (in.complete() ? w.signedToEnd : w.verifiedPackets == (carried ? carried->packets : 0)) && w.seal && w.seal->good
+                                : w.signedToEnd);
+        if (!good)
+        {
+            mismatch("its signatures do not verify as expected");
+        }
     }
+    result.bytesOut = std::filesystem::file_size(tmp.path());
+    tmp.publish();
     return result;
 }
 
