@@ -72,21 +72,10 @@ auto alone() -> FramePolicy
     return p;
 }
 
-auto game(uint16_t opcode, size_t size, uint8_t fill, uint16_t sync) -> std::vector<std::byte>
-{
-    std::vector<std::byte> p(size, std::byte{ fill });
-    const auto             hdr = static_cast<uint16_t>((((size / 4) & 0x7F) << 9) | (opcode & 0x1FF));
-    p[0]                       = std::byte(hdr & 0xFF);
-    p[1]                       = std::byte(hdr >> 8);
-    p[2]                       = std::byte(sync & 0xFF);
-    p[3]                       = std::byte(sync >> 8);
-    return p;
-}
-
 // A zone-in naming the vectors' character.
 auto zoneIn(uint8_t zone, uint16_t sync) -> std::vector<std::byte>
 {
-    auto           p                    = game(FFXIPacket::LOGIN_ZONE, 160, 0, sync);
+    auto           p                    = gamePacket(FFXIPacket::LOGIN_ZONE, 160, 0, sync);
     const uint32_t id                   = 0x0A0B0C0D;
     p[FFXIPacket::LOGIN_ZONE_NO_OFFSET] = std::byte{ zone };
     std::memcpy(p.data() + FFXIPacket::LOGIN_UNIQUE_NO_OFFSET, &id, sizeof(id));
@@ -107,7 +96,7 @@ auto session(const fs::path& path, int frames, FramePolicy policy, bool close = 
             {
                 w.mark(MarkerKind::Note, "n" + std::to_string(f));
             }
-            w.write(T0 + static_cast<uint64_t>(f) * 1000 + static_cast<uint64_t>(i), i % 2 ? PacketDirection::ClientToServer : PacketDirection::ServerToClient, game(static_cast<uint16_t>(0x100 + f % 4), 16, static_cast<uint8_t>(f), static_cast<uint16_t>(f * 3 + i)));
+            w.write(T0 + static_cast<uint64_t>(f) * 1000 + static_cast<uint64_t>(i), i % 2 ? PacketDirection::ClientToServer : PacketDirection::ServerToClient, gamePacket(static_cast<uint16_t>(0x100 + f % 4), 16, static_cast<uint8_t>(f), static_cast<uint16_t>(f * 3 + i)));
         }
         w.flush();
     }
@@ -161,83 +150,6 @@ auto seal(const fs::path& src, const fs::path& dst) -> void
     internal::transcode(src, dst, mogsafe(), { .edit = {}, .check = true, .sealedAt = T0 + 86'400'000 });
 }
 
-// FORMAT.md's example plaintext: three 0x0DF packets, syncs 1 to 3.
-auto examplePlain() -> std::vector<uint8_t>
-{
-    return {
-        0x00,
-        0x0a,
-        0x0a,
-        0x00,
-        0x00,
-        0x00,
-        0x00,
-        0x00,
-        0x00,
-        0xdf,
-        0x01,
-        0xdf,
-        0x01,
-        0xdf,
-        0x01,
-        0x00,
-        0x00,
-        0x00,
-        0x02,
-        0x02,
-        0x02,
-        0x30,
-        0xdf,
-        0x08,
-        0x00,
-        0x00,
-        0x00,
-        0x00,
-        0x00,
-        0x00,
-        0x00,
-        0x00,
-        0x00,
-        0x00,
-        0x00,
-        0x00,
-        0x00,
-        0x00,
-        0xdf,
-        0x08,
-        0x00,
-        0x00,
-        0x01,
-        0x01,
-        0x01,
-        0x01,
-        0x01,
-        0x01,
-        0x01,
-        0x01,
-        0x01,
-        0x01,
-        0x01,
-        0x01,
-        0xdf,
-        0x08,
-        0x00,
-        0x00,
-        0x02,
-        0x02,
-        0x02,
-        0x02,
-        0x02,
-        0x02,
-        0x02,
-        0x02,
-        0x02,
-        0x02,
-        0x02,
-        0x02,
-    };
-}
-
 // Three frames of their own streams, the middle one replaced by a frame holding `plain` as three packets.
 auto badMiddle(const fs::path& tmp, const fs::path& p, const std::vector<uint8_t>& plain) -> void
 {
@@ -268,11 +180,11 @@ int main(int argc, char* argv[])
               Writer w(p, config());
               for (int i = 0; i < 3; ++i)
               {
-                  w.write(T0 + static_cast<uint64_t>(i) * 10, PacketDirection::ServerToClient, game(0x0DF, 16, static_cast<uint8_t>(i), static_cast<uint16_t>(i + 1)));
+                  w.write(T0 + static_cast<uint64_t>(i) * 10, PacketDirection::ServerToClient, gamePacket(0x0DF, 16, static_cast<uint8_t>(i), static_cast<uint16_t>(i + 1)));
               }
               w.close();
               const auto bytes = bytesOf(p);
-              expect(plainOf(bytes, packetFrames(bytes).at(0)) == examplePlain(), "the example frame holds FORMAT.md's plaintext");
+              expect(plainOf(bytes, packetFrames(bytes).at(0)) == fromHex(EXAMPLE_PLAIN), "the example frame holds FORMAT.md's plaintext");
           } },
         { "clean", [](const fs::path& p)
           {
@@ -285,26 +197,26 @@ int main(int argc, char* argv[])
               w.addExtension(0x8000, hello);
               w.mark(MarkerKind::Login, "start");
               w.write(T0, PacketDirection::ServerToClient, zoneIn(230, 1));
-              w.write({ .timestamp = T0 + 1, .direction = PacketDirection::ClientToServer, .data = game(0x015, 32, 7, 1), .provenance = PacketFlag::Injected | PacketFlag::FirstInChunk });
-              w.write(T0 + 2, PacketDirection::ServerToClient, game(0x017, 64, 'x', 2));  // chat: its text zeroed
-              w.write(T0 + 3, PacketDirection::ServerToClient, game(0x020, 40, 0xFF, 3)); // redacted
+              w.write({ .timestamp = T0 + 1, .direction = PacketDirection::ClientToServer, .data = gamePacket(0x015, 32, 7, 1), .provenance = PacketFlag::Injected | PacketFlag::FirstInChunk });
+              w.write(T0 + 2, PacketDirection::ServerToClient, gamePacket(0x017, 64, 'x', 2));  // chat: its text zeroed
+              w.write(T0 + 3, PacketDirection::ServerToClient, gamePacket(0x020, 40, 0xFF, 3)); // redacted
               const std::vector<std::byte> search(24, std::byte{ 0x5A });
               w.write({ .timestamp = T0 + 4, .direction = PacketDirection::ServerToClient, .data = search, .channel = 1, .opcode = 5 });
               const std::vector<std::byte> other(8, std::byte{ 0x0F });
               w.write({ .timestamp = T0 + 5, .direction = PacketDirection::ClientToServer, .data = other, .channel = 9, .opcode = 1 });
-              w.write(T0 + 3, PacketDirection::ServerToClient, game(0x0DF, 16, 1, 4)); // clock stepped back: clamped
+              w.write(T0 + 3, PacketDirection::ServerToClient, gamePacket(0x0DF, 16, 1, 4)); // clock stepped back: clamped
               for (int f = 1; f <= 4; ++f)
               {
                   for (int i = 0; i < 3; ++i)
                   {
-                      w.write(T0 + static_cast<uint64_t>(f) * 1000 + static_cast<uint64_t>(i), PacketDirection::ServerToClient, game(0x0DF, 16, static_cast<uint8_t>(f), static_cast<uint16_t>(4 + f * 3 + i)));
+                      w.write(T0 + static_cast<uint64_t>(f) * 1000 + static_cast<uint64_t>(i), PacketDirection::ServerToClient, gamePacket(0x0DF, 16, static_cast<uint8_t>(f), static_cast<uint16_t>(4 + f * 3 + i)));
                   }
                   w.flush();
               }
               w.flush(); // idle: signs
               w.mark(MarkerKind::Note, "between");
-              w.write(T0 + 6000, PacketDirection::ServerToClient, game(0x0DF, 16, 9, 0xFFFF));
-              w.write(T0 + 6001, PacketDirection::ServerToClient, game(0x0DF, 16, 9, 0x0002)); // the sync wraps
+              w.write(T0 + 6000, PacketDirection::ServerToClient, gamePacket(0x0DF, 16, 9, 0xFFFF));
+              w.write(T0 + 6001, PacketDirection::ServerToClient, gamePacket(0x0DF, 16, 9, 0x0002)); // the sync wraps
               w.mark(MarkerKind::Logout);
               w.mark(MarkerKind::Login);
               w.write(T0 + 9000, PacketDirection::ServerToClient, zoneIn(231, 3));
@@ -327,7 +239,7 @@ int main(int argc, char* argv[])
               {
                   const auto data = m.bytes();
                   w.write({ .timestamp = T0 + 100 + m.offsetMs, .direction = m.direction, .data = data, .channel = 1, .opcode = std::to_integer<uint16_t>(data[0x0B]) });
-                  w.write(T0 + 100 + m.offsetMs, PacketDirection::ServerToClient, game(0x0DF, 16, 1, sync++));
+                  w.write(T0 + 100 + m.offsetMs, PacketDirection::ServerToClient, gamePacket(0x0DF, 16, 1, sync++));
               }
               w.close();
               expect(count(p) == 1 + 2 * std::size(search::recorded), "search holds every recorded message");
@@ -518,8 +430,8 @@ int main(int argc, char* argv[])
               cfg.source->sourceHash.fill(0xAB);
               Writer w(p, cfg);
               w.write(T0, PacketDirection::ServerToClient, zoneIn(230, 1));
-              w.write(T0 + 10, PacketDirection::ServerToClient, game(0x0DF, 16, 1, 2));
-              w.write(T0 + 20, PacketDirection::ServerToClient, game(0x0DF, 16, 2, 3));
+              w.write(T0 + 10, PacketDirection::ServerToClient, gamePacket(0x0DF, 16, 1, 2));
+              w.write(T0 + 20, PacketDirection::ServerToClient, gamePacket(0x0DF, 16, 2, 3));
               w.close();
               Reader r(p);
               expect(r.source() && r.source()->skippedRecords == 2 && r.verify().signedToEnd, "converted names its source");
@@ -530,7 +442,7 @@ int main(int argc, char* argv[])
               cfg.policy = { .name = "none", .version = 1, .rules = {} };
               Writer w(p, cfg);
               w.write(T0, PacketDirection::ServerToClient, zoneIn(230, 1));
-              w.write(T0 + 10, PacketDirection::ServerToClient, game(0x017, 32, 'x', 2)); // chat: kept
+              w.write(T0 + 10, PacketDirection::ServerToClient, gamePacket(0x017, 32, 'x', 2)); // chat: kept
               w.close();
               Reader r(p);
               expect(!coversDefault(r.policy()) && count(p) == 2, "a policy with no rules keeps chat");
@@ -613,7 +525,7 @@ int main(int argc, char* argv[])
           } },
         { "unknown-required-flag", [&](const fs::path& p)
           {
-              auto plain = examplePlain();
+              auto plain = fromHex(EXAMPLE_PLAIN);
               plain[3]   = 0x80;
               plain.insert(plain.begin() + 4, 0x08); // flags 0x400
               badMiddle(tmp, p, plain);
@@ -632,7 +544,7 @@ int main(int argc, char* argv[])
           } },
         { "bad-varint", [&](const fs::path& p)
           {
-              auto plain = examplePlain();
+              auto plain = fromHex(EXAMPLE_PLAIN);
               plain[0]   = 0x80; // deltaMs 0 in six bytes
               plain.insert(plain.begin() + 1, { 0x80, 0x80, 0x80, 0x80, 0x00 });
               badMiddle(tmp, p, plain);
@@ -640,7 +552,7 @@ int main(int argc, char* argv[])
           } },
         { "group-sizes", [&](const fs::path& p)
           {
-              auto plain = examplePlain();
+              auto plain = fromHex(EXAMPLE_PLAIN);
               plain[21]  = 0x2F;
               badMiddle(tmp, p, plain);
               expect(count(p) == 3 && count(p, { .recovery = true }) == 6, "group sizes that do not add up make a bad frame");

@@ -12,11 +12,48 @@
 #include <fstream>
 #include <iterator>
 #include <span>
+#include <string>
+#include <string_view>
 #include <vector>
 #include <zstd.h>
 
 namespace craft
 {
+
+// A game packet: its 4-byte header, then fill.
+inline auto gamePacket(uint16_t opcode, size_t size, uint8_t fill = 0xAB, uint16_t sync = 0x1234) -> std::vector<std::byte>
+{
+    std::vector<std::byte> p(size, std::byte{ fill });
+    const auto             words = static_cast<uint16_t>((size / 4) & 0x7F);
+    const auto             hdr   = static_cast<uint16_t>((words << 9) | (opcode & 0x1FF));
+    p[0]                         = std::byte(hdr & 0xFF);
+    p[1]                         = std::byte(hdr >> 8);
+    p[2]                         = std::byte(sync & 0xFF);
+    p[3]                         = std::byte(sync >> 8);
+    return p;
+}
+
+// FORMAT.md's example plaintext: three 0x0DF packets to the client, 10 ms apart, with syncs 1, 2, and 3.
+inline constexpr std::string_view EXAMPLE_PLAIN = "000a0a"
+                                                  "000000"
+                                                  "000000"
+                                                  "df01df01df01"
+                                                  "000000"
+                                                  "020202"
+                                                  "30"
+                                                  "df080000000000000000000000000000"
+                                                  "df080000010101010101010101010101"
+                                                  "df080000020202020202020202020202";
+
+inline auto fromHex(std::string_view hex) -> std::vector<uint8_t>
+{
+    std::vector<uint8_t> out;
+    for (size_t i = 0; i + 1 < hex.size(); i += 2)
+    {
+        out.push_back(static_cast<uint8_t>(std::stoi(std::string(hex.substr(i, 2)), nullptr, 16)));
+    }
+    return out;
+}
 
 inline auto bytesOf(const std::filesystem::path& path) -> std::vector<uint8_t>
 {

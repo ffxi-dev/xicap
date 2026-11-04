@@ -65,17 +65,7 @@ inline auto alone() -> FramePolicy
     return p;
 }
 
-inline auto gamePacket(uint16_t opcode, size_t size, uint8_t fill = 0xAB, uint16_t sync = 0x1234) -> std::vector<std::byte>
-{
-    std::vector<std::byte> p(size, std::byte{ fill });
-    const auto             words = static_cast<uint16_t>((size / 4) & 0x7F);
-    const auto             hdr   = static_cast<uint16_t>((words << 9) | (opcode & 0x1FF));
-    p[0]                         = std::byte(hdr & 0xFF);
-    p[1]                         = std::byte(hdr >> 8);
-    p[2]                         = std::byte(sync & 0xFF);
-    p[3]                         = std::byte(sync >> 8);
-    return p;
-}
+using craft::gamePacket;
 
 inline auto zoneIn(uint16_t zone, const char* name = "Nouurs", uint32_t id = 0x0A0B0C0D) -> std::vector<std::byte>
 {

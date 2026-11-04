@@ -55,27 +55,6 @@ auto examplePackets() -> std::vector<std::vector<std::byte>>
     return { gamePacket(0x0DF, 16, 0, 1), gamePacket(0x0DF, 16, 1, 2), gamePacket(0x0DF, 16, 2, 3) };
 }
 
-const std::string EXAMPLE = "000a0a"
-                            "000000"
-                            "000000"
-                            "df01df01df01"
-                            "000000"
-                            "020202"
-                            "30"
-                            "df080000000000000000000000000000"
-                            "df080000010101010101010101010101"
-                            "df080000020202020202020202020202";
-
-auto fromHex(const std::string& hex) -> std::vector<uint8_t>
-{
-    std::vector<uint8_t> out;
-    for (size_t i = 0; i + 1 < hex.size(); i += 2)
-    {
-        out.push_back(static_cast<uint8_t>(std::stoi(hex.substr(i, 2), nullptr, 16)));
-    }
-    return out;
-}
-
 // A capture with markers and a checkpoint every two seconds: `frames` frames of three packets, one second apart.
 auto session(const fs::path& path, int frames, FramePolicy policy = {}) -> void
 {
@@ -230,7 +209,7 @@ TEST_CASE("the worked example encodes to its 70 bytes and back")
     }
     const auto plain = internal::encodeColumns(records, {});
     CHECK(plain.size() == 70);
-    CHECK(hexOf(plain) == EXAMPLE);
+    CHECK(hexOf(plain) == EXAMPLE_PLAIN);
 
     internal::DecodedFrame frame;
     internal::decodeColumns(plain, 3, 0, T0, frame);
@@ -254,7 +233,7 @@ TEST_CASE("the column decoder refuses bad frames")
                            internal::decodeColumns(plain, 3, markers, T0, frame);
                        });
     };
-    auto plain = fromHex(EXAMPLE);
+    auto plain = fromHex(EXAMPLE_PLAIN);
     CHECK_FALSE(bad(plain));
 
     SECTION("a section past the end")
