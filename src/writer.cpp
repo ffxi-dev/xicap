@@ -378,7 +378,7 @@ Writer::Writer(const std::filesystem::path& path, WriterConfig config, FramePoli
     {
         throw Error(ErrorCode::InvalidPolicy, "xicap: a recording that keeps everything has a policy with no rules");
     }
-    if (static_cast<uint8_t>(config_.recordingMode) > static_cast<uint8_t>(RecordingMode::Anonymous))
+    if (std::to_underlying(config_.recordingMode) > std::to_underlying(RecordingMode::Anonymous))
     {
         throw Error(ErrorCode::UnknownRecordingMode, "xicap: unknown recording mode");
     }

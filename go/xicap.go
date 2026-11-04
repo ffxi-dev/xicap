@@ -1,10 +1,10 @@
 // Package xicap is the Go binding for the xicap C++ library. It needs cgo, a
-// C++20 compiler, and libzstd.
+// C++23 compiler, and libzstd.
 package xicap
 
 /*
 #cgo CFLAGS: -I${SRCDIR}/../third_party/monocypher
-#cgo CXXFLAGS: -std=c++20 -I${SRCDIR}/../include -I${SRCDIR}/../src -I${SRCDIR}/../third_party/monocypher
+#cgo CXXFLAGS: -std=c++23 -I${SRCDIR}/../include -I${SRCDIR}/../src -I${SRCDIR}/../third_party/monocypher
 #cgo LDFLAGS: -lzstd
 #include <stdlib.h>
 #include "capi.h"

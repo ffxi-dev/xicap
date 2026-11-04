@@ -1,6 +1,6 @@
 # xicap
 
-Binary capture format and C++20 library for Final Fantasy XI network packets.
+Binary capture format and C++23 library for Final Fantasy XI network packets.
 
 A capture is a header written once, format-level extension blocks (the
 exclusion policy, the source of converted captures and its signer), packet
@@ -14,8 +14,7 @@ recorder kept everything, and the recorder's Ed25519 key signs the packets
 themselves, so a capture can be recompressed and keep its signature.
 
 See [FORMAT.md](FORMAT.md) for the on-disk specification, format 4, the only
-one the library reads or writes. Library 5.0 reads and writes format 4.0; 4.x
-libraries also read format 3 and are not compatible.
+one the library reads or writes.
 
 ## Library
 
@@ -91,7 +90,7 @@ via FetchContent). Run via `ctest` or the produced `xicap_tests` executable.
 * **JavaScript / TypeScript** — see [`js/`](js/). C++ reader compiled to
   WebAssembly via Emscripten + Embind. Works in browsers and Node.
 * **Go** — see [`go/`](go/). cgo wrapper that builds the C++ reader in place;
-  needs a C++20 compiler and libzstd (`apt install libzstd-dev`). Import
+  needs a C++23 compiler and libzstd (`apt install libzstd-dev`). Import
   `github.com/ffxi-dev/xicap/v5/go`.
 
 ## License

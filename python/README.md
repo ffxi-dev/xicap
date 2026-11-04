@@ -10,7 +10,7 @@ native build byte-for-byte.
 pip install ./python
 ```
 
-Requires a C++20 toolchain (MSVC, GCC, or Clang) and CMake. The wheel build
+Requires a C++23 toolchain (MSVC, GCC, or Clang) and CMake. The wheel build
 fetches Catch2 / pybind11 / zstd via FetchContent.
 
 For development:

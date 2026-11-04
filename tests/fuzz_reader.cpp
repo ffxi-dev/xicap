@@ -2,7 +2,7 @@
 // first input byte is odd, the harness first rewrites every CRC it can find, so mutations reach past the checksums.
 // Reader and StreamReader must yield the same packets. Build with clang:
 //
-//   clang++ -std=c++20 -g -O1 -fsanitize=fuzzer,address,undefined -Iinclude -Isrc -Ithird_party/monocypher \
+//   clang++ -std=c++23 -g -O1 -fsanitize=fuzzer,address,undefined -Iinclude -Isrc -Ithird_party/monocypher \
 //     tests/fuzz_reader.cpp src/*.cpp third_party/monocypher/monocypher.c \
 //     third_party/monocypher/optional/monocypher-ed25519.c -lzstd
 

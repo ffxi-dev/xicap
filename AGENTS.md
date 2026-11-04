@@ -1,6 +1,6 @@
 # xicap
 
-xicap is Vault's capture binary format and its C++20 library, built for replay and long-term archival: packets in columns over one zstd stream, an index, and signatures over the packets. `FORMAT.md` is the normative specification of format 4, the only format the library reads or writes; `README.md` shows the library API. Every Vault brick that writes, stores, plays, or queries captures depends on it, so treat it as a contract.
+xicap is Vault's capture binary format and its C++23 library, built for replay and long-term archival: packets in columns over one zstd stream, an index, and signatures over the packets. `FORMAT.md` is the normative specification of format 4, the only format the library reads or writes; `README.md` shows the library API. Every Vault brick that writes, stores, plays, or queries captures depends on it, so treat it as a contract.
 
 ## Commands
 

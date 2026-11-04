@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 project(xicap VERSION 5.0.0 LANGUAGES C CXX)
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # 32-bit build option (for non-MSVC compilers)

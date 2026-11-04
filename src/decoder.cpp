@@ -5,6 +5,7 @@
 #include <cstring>
 #include <format>
 #include <string_view>
+#include <utility>
 #include <zstd.h>
 
 namespace xicap::internal
@@ -154,9 +155,9 @@ auto readHeader(std::span<const uint8_t> header, Start& start) -> void
     }
     std::memcpy(&start.header, header.data(), sizeof(Header));
     start.headerBytes.assign(header.begin(), header.end());
-    if (static_cast<uint8_t>(start.header.recordingMode) > static_cast<uint8_t>(RecordingMode::Anonymous))
+    if (std::to_underlying(start.header.recordingMode) > std::to_underlying(RecordingMode::Anonymous))
     {
-        throw Error(ErrorCode::UnknownRecordingMode, std::format("xicap: unknown recording mode {}", static_cast<int>(start.header.recordingMode)));
+        throw Error(ErrorCode::UnknownRecordingMode, std::format("xicap: unknown recording mode {}", std::to_underlying(start.header.recordingMode)));
     }
     if (start.header.dictionaryId != 0)
     {
