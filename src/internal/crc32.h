@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <cstring>
 #include <span>
 
 namespace xicap::internal
@@ -15,38 +16,29 @@ inline constexpr auto CRC32_TABLE = []
         uint32_t c = i;
         for (int k = 0; k < 8; ++k)
         {
-            c = (c & 1U) ? (0xEDB88320U ^ (c >> 1)) : (c >> 1);
+            c = (c >> 1) ^ ((c & 1U) * 0xEDB88320U);
         }
         table[i] = c;
     }
     return table;
 }();
 
-class Crc32
-{
-public:
-    auto update(std::span<const uint8_t> data) noexcept -> void
-    {
-        for (const auto b : data)
-        {
-            state_ = CRC32_TABLE[(state_ ^ b) & 0xFFU] ^ (state_ >> 8);
-        }
-    }
-
-    [[nodiscard]] auto value() const noexcept -> uint32_t
-    {
-        return state_ ^ 0xFFFFFFFFU;
-    }
-
-private:
-    uint32_t state_ = 0xFFFFFFFFU;
-};
-
 [[nodiscard]] inline auto crc32(std::span<const uint8_t> data) noexcept -> uint32_t
 {
-    Crc32 crc;
-    crc.update(data);
-    return crc.value();
+    uint32_t state = 0xFFFFFFFFU;
+    for (const auto b : data)
+    {
+        state = CRC32_TABLE[(state ^ b) & 0xFFU] ^ (state >> 8);
+    }
+    return state ^ 0xFFFFFFFFU;
+}
+
+// Whether the last 4 bytes are the CRC-32 of the rest.
+[[nodiscard]] inline auto endsWithCrc(std::span<const uint8_t> bytes) noexcept -> bool
+{
+    uint32_t stored = 0;
+    std::memcpy(&stored, bytes.data() + bytes.size() - sizeof(stored), sizeof(stored));
+    return crc32(bytes.first(bytes.size() - sizeof(stored))) == stored;
 }
 
 } // namespace xicap::internal

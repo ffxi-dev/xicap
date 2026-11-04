@@ -1,7 +1,7 @@
 #include "xicap/reader.h"
-#include "internal/chain.h"
 #include "internal/crc32.h"
 #include "internal/decoder.h"
+#include "internal/signing.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -26,11 +26,6 @@ template <typename T>
 auto readPodAt(std::ifstream& file, uint64_t offset, T& out) -> bool
 {
     return readAt(file, offset, { reinterpret_cast<uint8_t*>(&out), sizeof(T) });
-}
-
-auto textOf(std::span<const char> field) -> std::string
-{
-    return { field.begin(), std::find(field.begin(), field.end(), '\0') };
 }
 
 } // namespace
@@ -80,12 +75,12 @@ Reader::~Reader() = default;
 
 auto Reader::clientVersion() const -> std::string
 {
-    return textOf(header_.clientVersion);
+    return internal::textOf(header_.clientVersion);
 }
 
 auto Reader::captureAgent() const -> std::string
 {
-    return textOf(header_.captureAgent);
+    return internal::textOf(header_.captureAgent);
 }
 
 auto Reader::skippedRegions() const -> std::vector<SkippedRegion>
@@ -279,39 +274,38 @@ auto Reader::readRawFrame(uint64_t offset, uint64_t limit, std::vector<uint8_t>&
         return false;
     }
     bytes.resize(static_cast<size_t>(size));
-    if (!readAt(file_, offset, bytes))
-    {
-        return false;
-    }
-    uint32_t stored = 0;
-    std::memcpy(&stored, bytes.data() + bytes.size() - sizeof(stored), sizeof(stored));
-    return internal::crc32({ bytes.data(), bytes.size() - sizeof(stored) }) == stored;
+    return readAt(file_, offset, bytes) && internal::endsWithCrc(bytes);
 }
 
-auto Reader::resync(uint64_t from, uint64_t limit) -> std::optional<uint64_t>
+auto Reader::resync(uint64_t offset, uint64_t limit) -> uint64_t
 {
     static constexpr std::array<uint8_t, 4> magic{ 'X', 'C', 'F', 'R' };
     std::vector<uint8_t>                    buf(64 * 1024);
     std::vector<uint8_t>                    candidate;
     internal::FrameInfo                     info;
-    for (uint64_t pos = from; pos + magic.size() <= limit;)
+    const auto                              next = [&]() -> uint64_t
     {
-        const auto n = static_cast<size_t>(std::min<uint64_t>(buf.size(), limit - pos));
-        if (!readAt(file_, pos, { buf.data(), n }))
+        for (uint64_t pos = offset + 1; pos + magic.size() <= limit;)
         {
-            return std::nullopt;
-        }
-        for (size_t i = 0; i + magic.size() <= n; ++i)
-        {
-            if (std::equal(magic.begin(), magic.end(), buf.begin() + static_cast<std::ptrdiff_t>(i)) &&
-                readRawFrame(pos + i, limit, candidate, info))
+            const auto n = static_cast<size_t>(std::min<uint64_t>(buf.size(), limit - pos));
+            if (!readAt(file_, pos, { buf.data(), n }))
             {
-                return pos + i;
+                return limit;
             }
+            for (size_t i = 0; i + magic.size() <= n; ++i)
+            {
+                if (std::equal(magic.begin(), magic.end(), buf.begin() + static_cast<std::ptrdiff_t>(i)) &&
+                    readRawFrame(pos + i, limit, candidate, info))
+                {
+                    return pos + i;
+                }
+            }
+            pos += n - (magic.size() - 1);
         }
-        pos += n - (magic.size() - 1);
-    }
-    return std::nullopt;
+        return limit;
+    }();
+    skip(offset, next - offset);
+    return next;
 }
 
 // Adjacent skipped regions are reported as one.
@@ -342,9 +336,7 @@ auto Reader::scanCutOff() -> void
                 unreadBytes_ = fileSize_ - offset;
                 break;
             }
-            const auto next = resync(offset + 1, fileSize_);
-            skip(offset, next.value_or(fileSize_) - offset);
-            offset = next.value_or(fileSize_);
+            offset = resync(offset, fileSize_);
             continue;
         }
         internal::checkKind(info.kind);
@@ -385,9 +377,7 @@ auto Reader::advance() -> bool
         {
             if (options_.recovery)
             {
-                const auto next = resync(offset + 1, endOffset_);
-                skip(offset, next.value_or(endOffset_) - offset);
-                nextOffset_ = next.value_or(endOffset_);
+                nextOffset_ = resync(offset, endOffset_);
                 decoder_->reset();
                 continue;
             }
@@ -430,13 +420,7 @@ auto Reader::advance() -> bool
                           });
             return false;
         }
-        for (const auto& p : frame_->packets)
-        {
-            if (internal::namesOtherCharacter(header_, p, { frame_->bytes.data() + p.offset, p.length }))
-            {
-                characterMismatch_ = true;
-            }
-        }
+        characterMismatch_ = characterMismatch_ || internal::namesOtherCharacter(header_, *frame_);
         const auto it      = std::ranges::lower_bound(indexEntries_, offset, {}, &FooterIndexEntry::fileOffset);
         currentFrameIndex_ = static_cast<uint64_t>(std::distance(indexEntries_.begin(), it));
         return true;
@@ -452,14 +436,7 @@ auto Reader::next(ReadPacket& packet) -> bool
             return false;
         }
     }
-    const auto& p    = frame_->packets[packetPos_++];
-    packet.timestamp = p.timestamp;
-    packet.channel   = p.channel;
-    packet.opcode    = p.opcode;
-    packet.flags     = p.flags;
-    packet.direction = (p.flags & PacketFlag::ClientToServer) ? PacketDirection::ClientToServer : PacketDirection::ServerToClient;
-    packet.data      = { reinterpret_cast<const std::byte*>(frame_->bytes.data() + p.offset), p.length };
-    packet.markers   = { frame_->markers.data() + p.firstMarker, p.markerCount };
+    packet = frame_->read(packetPos_++);
     return true;
 }
 
@@ -542,11 +519,6 @@ auto Reader::seekToZone(uint16_t zoneId) -> SeekResult
         return SeekResult::NotFound;
     }
     return seekToFrame(static_cast<uint64_t>(std::distance(indexEntries_.begin(), it)));
-}
-
-auto Reader::frameTimestamp(uint64_t frameIndex) const -> uint64_t
-{
-    return frameIndex < indexEntries_.size() ? indexEntries_[frameIndex].timestamp : 0;
 }
 
 auto Reader::listZones() const -> std::vector<ZoneEntry>
@@ -658,12 +630,11 @@ auto Reader::verify() -> Verification
         }
         for (const auto& p : decoded.packets)
         {
-            for (size_t m = 0; m < p.markerCount; ++m)
+            for (const auto& marker : std::span{ decoded.markers }.subspan(p.firstMarker, p.markerCount))
             {
-                const auto& marker = decoded.markers[p.firstMarker + m];
                 stream.marker(marker.kind, marker.text);
             }
-            stream.packet({ .timestamp = p.timestamp, .flags = p.flags, .channel = p.channel, .opcode = p.opcode, .data = { decoded.bytes.data() + p.offset, p.length } });
+            stream.packet({ .timestamp = p.timestamp, .flags = p.flags, .channel = p.channel, .opcode = p.opcode, .data = std::span{ decoded.bytes }.subspan(p.offset, p.length) });
             packets++;
         }
     }
@@ -692,7 +663,7 @@ auto Reader::verify() -> Verification
         const bool  kept  = checkpointFrames == 0 || (checkpointFrames == 1 && keptCheckpoint != decltype(keptCheckpoint){});
         result.seal       = SealCheck{
             .key      = seal_->key,
-            .agent    = textOf(seal_->agent),
+            .agent    = internal::textOf(seal_->agent),
             .sealedAt = seal_->sealedAt,
             .good     = kept && checkSignature(seal_->key, seal_->signature, signedMessage(internal::SEAL_PREFIX, end, trailer_.signature, keptCheckpoint, std::span{ bytes, offsetof(SealBlock, signature) })),
         };

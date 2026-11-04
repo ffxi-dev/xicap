@@ -3,6 +3,7 @@
 
 #include "xicap/constants.h"
 
+#include <algorithm>
 #include <cstring>
 #include <format>
 #include <unordered_map>
@@ -13,11 +14,6 @@ namespace
 {
 
 constexpr uint8_t GAME = static_cast<uint8_t>(Channel::Game);
-
-auto groupKey(uint8_t channel, uint16_t flags, uint16_t opcode) -> uint32_t
-{
-    return (uint32_t{ channel } << 17) | (static_cast<uint32_t>(flags & PacketFlag::ClientToServer) << 16) | opcode;
-}
 
 auto readU16(const uint8_t* p) -> uint16_t
 {
@@ -31,17 +27,15 @@ auto readU16(const uint8_t* p) -> uint16_t
     throw Error(ErrorCode::CorruptFrame, std::format("xicap: bad frame: {}", why));
 }
 
-// Assigns each packet its group, in order of the groups' first packets.
-template <typename Packets>
-auto groupsOf(const Packets& packets, std::vector<uint32_t>& group) -> uint32_t
+// Assigns each of count packets its group, in order of the groups' first packets, from key(i). Returns the groups.
+template <typename Key>
+auto groupsOf(size_t count, Key key, std::vector<uint32_t>& group) -> uint32_t
 {
     std::unordered_map<uint32_t, uint32_t> index;
-    group.resize(packets.size());
-    for (size_t i = 0; i < packets.size(); ++i)
+    group.resize(count);
+    for (size_t i = 0; i < count; ++i)
     {
-        const auto& p   = packets[i];
-        const auto  key = groupKey(p.channel, p.flags, p.opcode);
-        group[i]        = index.try_emplace(key, static_cast<uint32_t>(index.size())).first->second;
+        group[i] = index.try_emplace(key(i), static_cast<uint32_t>(index.size())).first->second;
     }
     return static_cast<uint32_t>(index.size());
 }
@@ -76,8 +70,7 @@ auto encodeColumns(std::span<const Record> packets, std::span<const MarkerRecord
     }
     for (const auto& p : packets)
     {
-        const bool implied = p.channel == GAME && p.data.size() >= 4 && (readU16(p.data.data()) >> 9) != 0 &&
-                             p.data.size() == static_cast<size_t>(readU16(p.data.data()) >> 9U) * 4;
+        const bool implied = p.channel == GAME && p.data.size() >= 4 && p.data.size() == static_cast<size_t>(readU16(p.data.data()) >> 9U) * 4;
         putVarint(out, implied ? 0 : uint64_t{ p.data.size() } + 1);
     }
     uint16_t lastSync[2] = {};
@@ -99,8 +92,12 @@ auto encodeColumns(std::span<const Record> packets, std::span<const MarkerRecord
         out.insert(out.end(), m.text.begin(), m.text.end());
     }
 
+    const auto key = [&](size_t i)
+    {
+        return groupKey(packets[i].channel, packets[i].flags, packets[i].opcode);
+    };
     std::vector<uint32_t> group;
-    const auto            groupCount = groupsOf(packets, group);
+    const auto            groupCount = groupsOf(packets.size(), key, group);
     std::vector<uint64_t> sizes(groupCount);
     for (size_t i = 0; i < packets.size(); ++i)
     {
@@ -152,7 +149,12 @@ auto decodeColumns(std::span<const uint8_t> plain, uint32_t packetCount, uint16_
             }
         }
     };
-    std::vector<uint32_t> delta, flags, channel, opcode, lengths, sync;
+    std::vector<uint32_t> delta;
+    std::vector<uint32_t> flags;
+    std::vector<uint32_t> channel;
+    std::vector<uint32_t> opcode;
+    std::vector<uint32_t> lengths;
+    std::vector<uint32_t> sync;
     column(32, delta, packetCount);
     if (delta[0] != 0)
     {
@@ -169,12 +171,7 @@ auto decodeColumns(std::span<const uint8_t> plain, uint32_t packetCount, uint16_
     column(8, channel, packetCount);
     column(16, opcode, packetCount);
     column(32, lengths, packetCount);
-    size_t games = 0;
-    for (const auto c : channel)
-    {
-        games += c == GAME ? 1 : 0;
-    }
-    column(16, sync, games);
+    column(16, sync, static_cast<size_t>(std::ranges::count(channel, GAME)));
 
     std::vector<std::pair<uint32_t, ReadMarker>> markers(markerCount);
     uint32_t                                     lastIndex = 0;
@@ -199,22 +196,16 @@ auto decodeColumns(std::span<const uint8_t> plain, uint32_t packetCount, uint16_
         pos += textLength;
     }
 
-    struct View
+    const auto key = [&](size_t i)
     {
-        uint8_t  channel;
-        uint16_t flags;
-        uint16_t opcode;
+        return groupKey(static_cast<uint8_t>(channel[i]), static_cast<uint16_t>(flags[i]), static_cast<uint16_t>(opcode[i]));
     };
-    std::vector<View> views(packetCount);
-    for (uint32_t i = 0; i < packetCount; ++i)
-    {
-        views[i] = { static_cast<uint8_t>(channel[i]), static_cast<uint16_t>(flags[i]), static_cast<uint16_t>(opcode[i]) };
-    }
     std::vector<uint32_t> group;
-    const auto            groupCount = groupsOf(views, group);
+    const auto            groupCount = groupsOf(packetCount, key, group);
     std::vector<uint32_t> sizes;
     column(32, sizes, groupCount);
-    std::vector<size_t> cursor(groupCount), end(groupCount);
+    std::vector<size_t> cursor(groupCount);
+    std::vector<size_t> end(groupCount);
     uint64_t            total = 0;
     for (uint32_t g = 0; g < groupCount; ++g)
     {

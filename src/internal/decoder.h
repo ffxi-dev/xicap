@@ -4,10 +4,12 @@
 #include "xicap/constants.h"
 #include "xicap/types.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <optional>
 #include <span>
+#include <string>
 #include <vector>
 
 struct ZSTD_DCtx_s;
@@ -19,7 +21,12 @@ namespace xicap::internal
 // zstd's output can exceed its input slightly; a payload past this is garbage.
 inline constexpr uint64_t MAX_PAYLOAD_SIZE = FrameLimits::MAX_CONTENT_SIZE + 1024 * 1024;
 
-// A frame's header.
+// A text field's text, up to its first zero byte.
+[[nodiscard]] inline auto textOf(std::span<const char> field) -> std::string
+{
+    return { field.begin(), std::ranges::find(field, '\0') };
+}
+
 struct FrameInfo
 {
     FrameKind kind{};
@@ -66,20 +73,19 @@ auto readBlock(std::span<const uint8_t> block, uint32_t index, Start& start) -> 
 // After the last block: what must be there is.
 auto finishBlocks(Start& start) -> void;
 
-// Whether a decoded game packet is a zone-in naming a character other than the header's.
-[[nodiscard]] auto namesOtherCharacter(const Header& header, const DecodedPacket& packet, std::span<const uint8_t> data) -> bool;
+// Whether a zone-in in the frame names a character other than the header's.
+[[nodiscard]] auto namesOtherCharacter(const Header& header, const DecodedFrame& frame) -> bool;
+
+struct FreeDCtx
+{
+    auto operator()(ZSTD_DCtx_s* dctx) const noexcept -> void;
+};
 
 // Decodes packet frames in file order, keeping the zstd stream across frames.
 class Decoder
 {
 public:
     Decoder();
-    ~Decoder();
-
-    Decoder(const Decoder&)                    = delete;
-    Decoder(Decoder&&)                         = delete;
-    auto operator=(const Decoder&) -> Decoder& = delete;
-    auto operator=(Decoder&&) -> Decoder&      = delete;
 
     // Throws Error for a bad frame; UnknownPacketFlag for a flag that must be understood.
     auto decode(const FrameInfo& frame, std::span<const uint8_t> payload, DecodedFrame& out) -> void;
@@ -91,12 +97,10 @@ public:
     }
 
 private:
-    auto decodeStream(const FrameInfo& frame, std::span<const uint8_t> payload, DecodedFrame& out) -> void;
-
-    bool                                                 streamOpen_{ false };
-    uint64_t                                             lastTimestamp_{ 0 }; // the last packet decoded; 0 after a reset
-    std::vector<uint8_t>                                 plain_;
-    std::unique_ptr<ZSTD_DCtx_s, void (*)(ZSTD_DCtx_s*)> dctx_;
+    bool                                   streamOpen_{ false };
+    uint64_t                               lastTimestamp_{ 0 }; // the last packet decoded; 0 after a reset
+    std::vector<uint8_t>                   plain_;
+    std::unique_ptr<ZSTD_DCtx_s, FreeDCtx> dctx_;
 };
 
 } // namespace xicap::internal

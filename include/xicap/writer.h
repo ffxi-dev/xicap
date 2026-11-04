@@ -23,6 +23,11 @@ namespace internal
 class SignedStream;
 class SigningKey;
 struct Access;
+
+struct FreeCCtx
+{
+    auto operator()(ZSTD_CCtx_s* cctx) const noexcept -> void;
+};
 } // namespace internal
 
 // Zeroes the text of chat on the game channel in both directions, keeping each packet's layout: xicap-default
@@ -180,15 +185,11 @@ public:
 private:
     friend struct internal::Access;
 
-    struct PendingMarker
+    struct FrameMarker
     {
+        uint32_t    packetIndex;
         MarkerKind  kind;
         std::string text;
-    };
-    struct FrameMarkerEntry
-    {
-        uint32_t      packetIndex;
-        PendingMarker marker;
     };
     struct FramePacket
     {
@@ -251,8 +252,8 @@ private:
     uint64_t                      lastTimestamp_{ 0 };
     uint64_t                      firstTimestamp_{ 0 };
     uint16_t                      currentZoneId_{ 0 };
-    std::vector<PendingMarker>    pendingMarkers_;
-    std::vector<FrameMarkerEntry> frameMarkers_;
+    std::vector<ReadMarker>       pendingMarkers_;
+    std::vector<FrameMarker>      frameMarkers_;
     size_t                        pendingMarkerBytes_{ 0 };
     std::vector<FooterIndexEntry> frameIndex_;
 
@@ -277,9 +278,9 @@ private:
     std::string                           sealAgent_;
     uint64_t                              sealedAt_{ 0 };
 
-    std::unique_ptr<internal::SignedStream>              stream_;
-    std::unique_ptr<internal::SigningKey>                key_;
-    std::unique_ptr<ZSTD_CCtx_s, void (*)(ZSTD_CCtx_s*)> cctx_;
+    std::unique_ptr<internal::SignedStream>          stream_;
+    std::unique_ptr<internal::SigningKey>            key_;
+    std::unique_ptr<ZSTD_CCtx_s, internal::FreeCCtx> cctx_;
 };
 
 } // namespace xicap

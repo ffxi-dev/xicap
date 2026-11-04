@@ -25,11 +25,6 @@ auto pop(std::span<const uint8_t> buf, size_t& pos, T& out) -> bool
     return true;
 }
 
-auto textOf(std::span<const char> field) -> std::string
-{
-    return { field.begin(), std::find(field.begin(), field.end(), '\0') };
-}
-
 auto parsePolicy(std::span<const uint8_t> payload) -> ExclusionPolicy
 {
     const auto invalid = []
@@ -105,7 +100,7 @@ auto parseFrameHeader(std::span<const uint8_t> bytes, FrameInfo& out) noexcept -
 
 auto checkKind(FrameKind kind) -> void
 {
-    if (kind != FrameKind::Packets && kind != FrameKind::Checkpoint && static_cast<uint8_t>(kind) >= 0x80)
+    if (kind != FrameKind::Packets && static_cast<uint8_t>(kind) >= 0x80)
     {
         throw Error(ErrorCode::UnknownFrameKind, std::format("xicap: unknown frame kind {:#04x}", static_cast<uint8_t>(kind)));
     }
@@ -136,9 +131,7 @@ auto headerSize(std::span<const uint8_t> first) -> uint16_t
 
 auto readHeader(std::span<const uint8_t> header, Start& start) -> void
 {
-    uint32_t stored = 0;
-    std::memcpy(&stored, header.data() + header.size() - sizeof(stored), sizeof(stored));
-    if (crc32(header.first(header.size() - sizeof(stored))) != stored)
+    if (!endsWithCrc(header))
     {
         throw Error(ErrorCode::HeaderChecksumMismatch, "xicap: header crc mismatch");
     }
@@ -165,9 +158,7 @@ auto readBlock(std::span<const uint8_t> block, uint32_t index, Start& start) -> 
 {
     ExtensionBlockHeader hdr{};
     std::memcpy(&hdr, block.data(), sizeof(hdr));
-    uint32_t stored = 0;
-    std::memcpy(&stored, block.data() + block.size() - sizeof(stored), sizeof(stored));
-    if (crc32(block.first(block.size() - sizeof(stored))) != stored)
+    if (!endsWithCrc(block))
     {
         throw Error(ErrorCode::ExtensionChecksumMismatch, std::format("xicap: extension block {} crc mismatch", index));
     }
@@ -205,28 +196,35 @@ auto finishBlocks(Start& start) -> void
     }
 }
 
-auto namesOtherCharacter(const Header& header, const DecodedPacket& packet, std::span<const uint8_t> data) -> bool
+auto namesOtherCharacter(const Header& header, const DecodedFrame& frame) -> bool
 {
     using namespace FFXIPacket;
-    if (packet.channel != static_cast<uint8_t>(Channel::Game) || packet.opcode != LOGIN_ZONE ||
-        (packet.flags & (PacketFlag::ClientToServer | PacketFlag::Excluded | PacketFlag::Redacted)) != 0 ||
-        data.size() < LOGIN_NAME_OFFSET + LOGIN_NAME_SIZE)
+    const auto& c     = header.character;
+    const auto  name  = std::string_view(c.characterName.data(), strnlen(c.characterName.data(), c.characterName.size()));
+    const auto  other = [&](const DecodedPacket& p)
     {
-        return false;
-    }
-    uint32_t uniqueNo = 0;
-    std::memcpy(&uniqueNo, data.data() + LOGIN_UNIQUE_NO_OFFSET, sizeof(uniqueNo));
-    const auto* name = reinterpret_cast<const char*>(data.data() + LOGIN_NAME_OFFSET);
-    const auto& c    = header.character;
-    return uniqueNo != c.characterId ||
-           std::string_view(name, strnlen(name, LOGIN_NAME_SIZE)) != std::string_view(c.characterName.data(), strnlen(c.characterName.data(), c.characterName.size()));
+        if (p.channel != static_cast<uint8_t>(Channel::Game) || p.opcode != LOGIN_ZONE ||
+            (p.flags & (PacketFlag::ClientToServer | PacketFlag::Excluded | PacketFlag::Redacted)) != 0 ||
+            p.length < LOGIN_NAME_OFFSET + LOGIN_NAME_SIZE)
+        {
+            return false;
+        }
+        const auto* data     = frame.bytes.data() + p.offset;
+        uint32_t    uniqueNo = 0;
+        std::memcpy(&uniqueNo, data + LOGIN_UNIQUE_NO_OFFSET, sizeof(uniqueNo));
+        const auto* named = reinterpret_cast<const char*>(data + LOGIN_NAME_OFFSET);
+        return uniqueNo != c.characterId || std::string_view(named, strnlen(named, LOGIN_NAME_SIZE)) != name;
+    };
+    return std::ranges::any_of(frame.packets, other);
+}
+
+auto FreeDCtx::operator()(ZSTD_DCtx* dctx) const noexcept -> void
+{
+    ZSTD_freeDCtx(dctx);
 }
 
 Decoder::Decoder()
-: dctx_(ZSTD_createDCtx(), [](ZSTD_DCtx* c) noexcept
-        {
-            ZSTD_freeDCtx(c);
-        })
+: dctx_(ZSTD_createDCtx())
 {
     if (!dctx_)
     {
@@ -235,23 +233,15 @@ Decoder::Decoder()
     ZSTD_DCtx_setParameter(dctx_.get(), ZSTD_d_windowLogMax, FrameLimits::MAX_WINDOW_LOG);
 }
 
-Decoder::~Decoder() = default;
-
 auto Decoder::decode(const FrameInfo& frame, std::span<const uint8_t> payload, DecodedFrame& out) -> void
 {
     out.clear();
-    // Whatever goes wrong, the stream cannot go on.
-    const bool restart = frame.restart();
-    if (!restart && !streamOpen_)
+    if (!frame.restart() && !streamOpen_)
     {
         throw Error(ErrorCode::CorruptFrame, "xicap: a frame continues a stream that is not open");
     }
+    // Whatever goes wrong below, the stream cannot go on.
     streamOpen_ = false;
-    decodeStream(frame, payload, out);
-}
-
-auto Decoder::decodeStream(const FrameInfo& frame, std::span<const uint8_t> payload, DecodedFrame& out) -> void
-{
     if (frame.plainSize == 0 || frame.plainSize > FrameLimits::MAX_CONTENT_SIZE)
     {
         throw Error(ErrorCode::CorruptFrame, std::format("xicap: plain size {} out of range", frame.plainSize));
@@ -270,7 +260,7 @@ auto Decoder::decodeStream(const FrameInfo& frame, std::span<const uint8_t> payl
         {
             std::memcpy(&magic, payload.data(), sizeof(magic));
         }
-        if (magic != ZSTD_FRAME_MAGIC || (payload[4] & 0xEBU) != 0 || (payload[4] & 0x04U) == 0)
+        if (magic != ZSTD_FRAME_MAGIC || (payload[4] & 0xEFU) != 0x04U)
         {
             throw Error(ErrorCode::CorruptFrame, "xicap: a stream that is not a zstd frame without content size or dictionary, with checksum");
         }

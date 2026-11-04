@@ -1,8 +1,7 @@
 #include "xicap/writer.h"
-#include "internal/access.h"
-#include "internal/chain.h"
 #include "internal/columns.h"
 #include "internal/crc32.h"
+#include "internal/signing.h"
 #include "internal/varint.h"
 
 #include <algorithm>
@@ -17,12 +16,12 @@ namespace xicap
 namespace
 {
 
-inline constexpr size_t MARKER_TEXT_MAX = 1024;
+constexpr size_t MARKER_TEXT_MAX = 1024;
 // What a marker adds to the plaintext, at most: packetIndex, kind, and textLength.
-inline constexpr size_t MARKER_COST = 5 + 1 + 3;
-constexpr uint8_t       GAME        = static_cast<uint8_t>(Channel::Game);
+constexpr size_t  MARKER_COST = 5 + 1 + 3;
+constexpr uint8_t GAME        = static_cast<uint8_t>(Channel::Game);
 // The game channel's stub keeps the 4-byte FFXI header.
-inline constexpr size_t GAME_STUB_BYTES = sizeof(FFXIPacketHeader);
+constexpr size_t GAME_STUB_BYTES = sizeof(FFXIPacketHeader);
 
 template <typename T>
 auto appendPod(std::vector<uint8_t>& dst, const T& value) -> void
@@ -34,11 +33,6 @@ auto appendPod(std::vector<uint8_t>& dst, const T& value) -> void
 auto appendBytes(std::vector<uint8_t>& dst, std::span<const uint8_t> bytes) -> void
 {
     dst.insert(dst.end(), bytes.begin(), bytes.end());
-}
-
-auto asBytes(std::string_view text) -> std::span<const uint8_t>
-{
-    return { reinterpret_cast<const uint8_t*>(text.data()), text.size() };
 }
 
 auto appendCrc(std::vector<uint8_t>& block) -> void
@@ -61,49 +55,44 @@ auto cutUtf8(std::string_view text, size_t maxBytes) -> std::string_view
     return text.substr(0, n);
 }
 
-// The length of the valid UTF-8 character text starts with, or 0.
+// The length of the valid UTF-8 character text starts with, or 0. As RFC 3629 says, the first byte gives the length
+// and bounds the second, which rules out overlong forms, surrogates, and code points past U+10FFFF.
 auto utf8Length(std::string_view text) -> size_t
 {
     const auto at = [&](size_t i) -> unsigned
     {
         return i < text.size() ? static_cast<uint8_t>(text[i]) : 0x100U;
     };
-    const auto tail = [&](size_t n) -> bool
-    {
-        for (size_t i = 1; i <= n; ++i)
-        {
-            if ((at(i) & 0xC0U) != 0x80U)
-            {
-                return false;
-            }
-        }
-        return true;
-    };
-    const unsigned b0 = at(0);
-    const unsigned b1 = at(1);
+    const auto b0 = at(0);
+    const auto b1 = at(1);
     if (b0 < 0x80)
     {
         return 1;
     }
-    if (b0 >= 0xC2 && b0 <= 0xDF)
+    const auto length = [&]() -> size_t
     {
-        return tail(1) ? 2 : 0;
-    }
-    if (b0 >= 0xE0 && b0 <= 0xEF)
+        if (b0 >= 0xC2 && b0 <= 0xDF)
+        {
+            return 2;
+        }
+        if (b0 >= 0xE0 && b0 <= 0xEF && (b0 != 0xE0 || b1 >= 0xA0) && (b0 != 0xED || b1 < 0xA0))
+        {
+            return 3;
+        }
+        if (b0 >= 0xF0 && b0 <= 0xF4 && (b0 != 0xF0 || b1 >= 0x90) && (b0 != 0xF4 || b1 < 0x90))
+        {
+            return 4;
+        }
+        return 0;
+    }();
+    for (size_t i = 1; i < length; ++i)
     {
-        const bool ok = (b0 == 0xE0 ? b1 >= 0xA0 : b0 == 0xED ? b1 < 0xA0
-                                                              : true) &&
-                        tail(2);
-        return ok ? 3 : 0;
+        if ((at(i) & 0xC0U) != 0x80U)
+        {
+            return 0;
+        }
     }
-    if (b0 >= 0xF0 && b0 <= 0xF4)
-    {
-        const bool ok = (b0 == 0xF0 ? b1 >= 0x90 : b0 == 0xF4 ? b1 < 0x90
-                                                              : true) &&
-                        tail(3);
-        return ok ? 4 : 0;
-    }
-    return 0;
+    return length;
 }
 
 // FORMAT.md's text is UTF-8, but hosts pass what they have: Ashita hands over Shift-JIS. Each byte that does not
@@ -115,8 +104,14 @@ auto toUtf8(std::string_view text) -> std::string
     while (!text.empty())
     {
         const auto n = utf8Length(text);
-        out.append(n == 0 ? std::string_view{ "\xEF\xBF\xBD" } : text.substr(0, n));
-        text.remove_prefix(n == 0 ? 1 : n);
+        if (n == 0)
+        {
+            out += "\xEF\xBF\xBD";
+            text.remove_prefix(1);
+            continue;
+        }
+        out += text.substr(0, n);
+        text.remove_prefix(n);
     }
     return out;
 }
@@ -145,7 +140,7 @@ auto randomCaptureId() -> CaptureId
 
 auto validateRule(const ExclusionRule& rule) -> void
 {
-    const bool isGame = rule.channel == static_cast<uint8_t>(Channel::Game);
+    const bool isGame = rule.channel == GAME;
     if (rule.action == ExclusionAction::Stub && !isGame)
     {
         throw Error(ErrorCode::InvalidPolicy,
@@ -225,6 +220,15 @@ auto encodePolicy(const ExclusionPolicy& policy) -> std::vector<uint8_t>
     return out;
 }
 
+auto encodeBlock(uint32_t type, std::span<const uint8_t> payload) -> std::vector<uint8_t>
+{
+    std::vector<uint8_t> block;
+    appendPod(block, ExtensionBlockHeader{ .type = type, .length = static_cast<uint32_t>(payload.size()) });
+    appendBytes(block, payload);
+    appendCrc(block);
+    return block;
+}
+
 auto encodeSource(const SourceInfo& source) -> std::vector<uint8_t>
 {
     if (source.metadata.size() > FrameLimits::MAX_EXTENSION_SIZE - sizeof(SourceHeader))
@@ -249,24 +253,10 @@ auto encodeSource(const SourceInfo& source) -> std::vector<uint8_t>
 
 } // namespace
 
-namespace internal
+auto internal::FreeCCtx::operator()(ZSTD_CCtx* cctx) const noexcept -> void
 {
-
-auto encodeBlock(uint32_t type, std::span<const uint8_t> payload) -> std::vector<uint8_t>
-{
-    std::vector<uint8_t> block;
-    appendPod(block, ExtensionBlockHeader{ .type = type, .length = static_cast<uint32_t>(payload.size()) });
-    appendBytes(block, payload);
-    appendCrc(block);
-    return block;
+    ZSTD_freeCCtx(cctx);
 }
-
-auto encodeSource(const SourceInfo& source) -> std::vector<uint8_t>
-{
-    return xicap::encodeSource(source);
-}
-
-} // namespace internal
 
 auto ruleFor(const ExclusionPolicy& policy, uint8_t channel, PacketDirection direction, uint16_t opcode) -> const ExclusionRule*
 {
@@ -284,7 +274,7 @@ auto ruleFor(const ExclusionPolicy& policy, uint8_t channel, PacketDirection dir
 
 auto applyPolicy(const ExclusionPolicy& policy, const OutPacket& packet) -> StoredPacket
 {
-    const bool isGame = packet.channel == static_cast<uint8_t>(Channel::Game);
+    const bool isGame = packet.channel == GAME;
     if (isGame && packet.data.size() < sizeof(FFXIPacketHeader))
     {
         throw Error(ErrorCode::PacketTooShort, "xicap: a game packet is at least 4 bytes");
@@ -358,26 +348,31 @@ auto defaultExclusionPolicy() -> const ExclusionPolicy&
 
 auto coversDefault(const ExclusionPolicy& policy) -> bool
 {
-    return std::ranges::all_of(defaultExclusionPolicy().rules, [&](const ExclusionRule& want)
-                               {
-                                   const auto  direction = want.direction == ExclusionDirection::ClientToServer ? PacketDirection::ClientToServer : PacketDirection::ServerToClient;
-                                   const auto* rule      = ruleFor(policy, want.channel, direction, want.opcode);
-                                   if (rule == nullptr || rule->action == ExclusionAction::Stub)
+    const auto end = [](const ByteRange& r) -> uint64_t
+    {
+        if (r.length == 0xFFFFFFFF)
+        {
+            return UINT64_MAX;
+        }
+        return uint64_t{ r.offset } + r.length;
+    };
+    const auto covers = [&](const ExclusionRule& want)
+    {
+        // Each of the default's rules names one direction.
+        const auto* rule = ruleFor(policy, want.channel, static_cast<PacketDirection>(want.direction), want.opcode);
+        if (rule == nullptr || rule->action == ExclusionAction::Stub)
+        {
+            return rule != nullptr;
+        }
+        return std::ranges::all_of(want.ranges, [&](const ByteRange& w)
                                    {
-                                       return rule != nullptr;
-                                   }
-                                   const auto end = [](const ByteRange& r)
-                                   {
-                                       return r.length == 0xFFFFFFFF ? UINT64_MAX : uint64_t{ r.offset } + r.length;
-                                   };
-                                   return std::ranges::all_of(want.ranges, [&](const ByteRange& w)
-                                                              {
-                                                                  return std::ranges::any_of(rule->ranges, [&](const ByteRange& r)
-                                                                                             {
-                                                                                                 return r.offset <= w.offset && end(r) >= end(w);
-                                                                                             });
-                                                              });
-                               });
+                                       return std::ranges::any_of(rule->ranges, [&](const ByteRange& r)
+                                                                  {
+                                                                      return r.offset <= w.offset && end(r) >= end(w);
+                                                                  });
+                                   });
+    };
+    return std::ranges::all_of(defaultExclusionPolicy().rules, covers);
 }
 
 Writer::Writer(const std::filesystem::path& path, WriterConfig config, FramePolicy policy)
@@ -385,10 +380,7 @@ Writer::Writer(const std::filesystem::path& path, WriterConfig config, FramePoli
 , policy_(policy)
 , stream_(std::make_unique<internal::SignedStream>())
 , key_(std::make_unique<internal::SigningKey>(config_.signingSeed))
-, cctx_(ZSTD_createCCtx(), [](ZSTD_CCtx* c) noexcept
-        {
-            ZSTD_freeCCtx(c);
-        })
+, cctx_(ZSTD_createCCtx())
 {
     validatePolicy(config_.policy);
     if ((config_.origin == Origin::Converted) != config_.source.has_value())
@@ -409,10 +401,7 @@ Writer::Writer(const std::filesystem::path& path, FramePolicy policy, std::vecto
 , blockBytes_(std::move(blocks))
 , stream_(std::make_unique<internal::SignedStream>())
 , key_(signer ? std::make_unique<internal::SigningKey>(*signer) : nullptr)
-, cctx_(ZSTD_createCCtx(), [](ZSTD_CCtx* c) noexcept
-        {
-            ZSTD_freeCCtx(c);
-        })
+, cctx_(ZSTD_createCCtx())
 {
     std::memcpy(captureId_.data(), headerBytes_.data() + offsetof(Header, captureId), captureId_.size());
     open(path);
@@ -544,8 +533,7 @@ auto Writer::packetCost(uint64_t timestamp, uint16_t flags, uint8_t channel, uin
     {
         cost += 3; // sync
     }
-    const auto key = (uint32_t{ channel } << 17) | (static_cast<uint32_t>(flags & PacketFlag::ClientToServer) << 16) | opcode;
-    if (!frameGroups_.contains(key))
+    if (!frameGroups_.contains(internal::groupKey(channel, flags, opcode)))
     {
         cost += 5; // group size
     }
@@ -555,7 +543,7 @@ auto Writer::packetCost(uint64_t timestamp, uint16_t flags, uint8_t channel, uin
 auto Writer::add(uint64_t timestamp, uint16_t flags, uint8_t channel, uint16_t opcode, std::span<const uint8_t> data) -> void
 {
     // Timestamps never go backwards.
-    timestamp = totalPackets_ > 0 ? std::max(timestamp, lastTimestamp_) : timestamp;
+    timestamp = std::max(timestamp, lastTimestamp_);
 
     size_t added = packetCost(timestamp, flags, channel, opcode, data.size());
     // Even alone in a frame, the packet must fit with the markers placed before it.
@@ -585,13 +573,13 @@ auto Writer::add(uint64_t timestamp, uint16_t flags, uint8_t channel, uint16_t o
     }
     for (auto& marker : pendingMarkers_)
     {
-        frameMarkers_.push_back({ static_cast<uint32_t>(framePackets_.size()), std::move(marker) });
+        frameMarkers_.push_back({ .packetIndex = static_cast<uint32_t>(framePackets_.size()), .kind = marker.kind, .text = std::move(marker.text) });
     }
     pendingMarkers_.clear();
     frameSize_ += added + pendingMarkerBytes_;
     pendingMarkerBytes_ = 0;
 
-    frameGroups_.insert((uint32_t{ channel } << 17) | (static_cast<uint32_t>(flags & PacketFlag::ClientToServer) << 16) | opcode);
+    frameGroups_.insert(internal::groupKey(channel, flags, opcode));
     framePackets_.push_back({ .timestamp = timestamp, .flags = flags, .channel = channel, .opcode = opcode, .offset = frameBytes_.size(), .length = data.size() });
     frameBytes_.insert(frameBytes_.end(), data.begin(), data.end());
     lastTimestamp_ = timestamp;
@@ -660,12 +648,11 @@ auto Writer::writeStart() -> void
         header.extensionCount     = static_cast<uint32_t>(extensions_.size() + 1U + (config_.source ? 1U : 0U));
         header.captureId          = captureId_;
         header.previousCaptureId  = config_.previousCaptureId;
-        header.startTimestamp     = totalPackets_ > 0 ? firstTimestamp_ : 0;
+        header.startTimestamp     = firstTimestamp_;
         header.clockSource        = config_.clockSource;
         header.origin             = config_.origin;
         header.network            = config_.network;
         header.startContext       = config_.startContext;
-        header.dictionaryId       = 0;
         header.signingKey         = key_->publicKey();
         header.character          = config_.character;
         header.character.reserved = 0;
@@ -676,7 +663,7 @@ auto Writer::writeStart() -> void
 
         const auto addBlock = [this](uint32_t type, std::span<const uint8_t> payload)
         {
-            blockBytes_.push_back(internal::encodeBlock(type, payload));
+            blockBytes_.push_back(encodeBlock(type, payload));
         };
         addBlock(EXT_EXCLUSION_POLICY, encodePolicy(config_.policy));
         if (config_.source)
@@ -756,7 +743,7 @@ auto Writer::writeFrame(bool last) -> void
     markers.reserve(frameMarkers_.size());
     for (const auto& m : frameMarkers_)
     {
-        markers.push_back({ .packetIndex = m.packetIndex, .kind = m.marker.kind, .text = m.marker.text });
+        markers.push_back({ .packetIndex = m.packetIndex, .kind = m.kind, .text = m.text });
     }
     const auto plain = internal::encodeColumns(records, markers);
 
@@ -858,12 +845,11 @@ auto Writer::writeCheckpoint(const CheckpointPayload& payload) -> void
 
 auto Writer::writeFooter() -> void
 {
-    const uint64_t endTimestamp = totalPackets_ > 0 ? lastTimestamp_ : 0;
-    const auto     end          = stream_->end(totalPackets_, endTimestamp);
-    const auto     indexBytes   = std::span{ reinterpret_cast<const uint8_t*>(frameIndex_.data()), frameIndex_.size() * sizeof(FooterIndexEntry) };
+    const auto end        = stream_->end(totalPackets_, lastTimestamp_);
+    const auto indexBytes = std::span{ reinterpret_cast<const uint8_t*>(frameIndex_.data()), frameIndex_.size() * sizeof(FooterIndexEntry) };
 
     FooterTrailer trailer{
-        .endTimestamp     = endTimestamp,
+        .endTimestamp     = lastTimestamp_,
         .totalPacketCount = totalPackets_,
         .trailerFlags     = (sealKey_ ? TrailerFlag::Sealed : 0U) | (footerSignature_ == FooterSignature::Unsigned ? TrailerFlag::EndUnsigned : 0U),
         .entryCount       = static_cast<uint32_t>(frameIndex_.size()),

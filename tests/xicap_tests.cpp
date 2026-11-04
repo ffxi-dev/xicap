@@ -1,8 +1,8 @@
 #include "helpers.h"
 #include "internal/access.h"
-#include "internal/chain.h"
 #include "internal/columns.h"
 #include "internal/crc32.h"
+#include "internal/signing.h"
 #include "search.h"
 #include "vectors.h"
 

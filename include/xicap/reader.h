@@ -194,8 +194,11 @@ public:
     {
         return currentFrameIndex_;
     }
-    [[nodiscard]] auto frameTimestamp(uint64_t frameIndex) const -> uint64_t;
-    [[nodiscard]] auto frameZone(uint64_t frameIndex) const -> uint16_t
+    [[nodiscard]] auto frameTimestamp(uint64_t frameIndex) const noexcept -> uint64_t
+    {
+        return frameIndex < indexEntries_.size() ? indexEntries_[frameIndex].timestamp : 0;
+    }
+    [[nodiscard]] auto frameZone(uint64_t frameIndex) const noexcept -> uint16_t
     {
         return frameIndex < indexEntries_.size() ? indexEntries_[frameIndex].zoneId : 0;
     }
@@ -261,9 +264,10 @@ private:
     [[nodiscard]] auto indexDisagreement() -> const char*;
     auto               scanCutOff() -> void;
     auto               readRawFrame(uint64_t offset, uint64_t limit, std::vector<uint8_t>& bytes, internal::FrameInfo& info) -> bool;
-    auto               resync(uint64_t from, uint64_t limit) -> std::optional<uint64_t>;
-    auto               skip(uint64_t offset, uint64_t length) -> void;
-    auto               advance() -> bool;
+    // Recovery: skips to the next frame that passes its CRC, or to limit, and returns its offset.
+    auto resync(uint64_t offset, uint64_t limit) -> uint64_t;
+    auto skip(uint64_t offset, uint64_t length) -> void;
+    auto advance() -> bool;
 
     std::ifstream                     file_;
     ReaderOptions                     options_;

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "internal/chain.h"
+#include "internal/signing.h"
 #include "xicap/reader.h"
 #include "xicap/writer.h"
 
@@ -13,10 +13,6 @@
 // rewrites a capture without applying a policy or signing it.
 namespace xicap::internal
 {
-
-// A whole extension block, from type to crc. Defined in writer.cpp.
-auto encodeBlock(uint32_t type, std::span<const uint8_t> payload) -> std::vector<uint8_t>;
-auto encodeSource(const SourceInfo& source) -> std::vector<uint8_t>;
 
 struct Access
 {
@@ -53,11 +49,7 @@ struct Access
         }
         w.add(p.timestamp, p.flags, p.channel, p.opcode, { reinterpret_cast<const uint8_t*>(p.data.data()), p.data.size() });
     }
-    // A marker as stored, unchanged.
-    static auto marker(Writer& w, MarkerKind kind, std::string_view text) -> void
-    {
-        w.queueMarker(kind, text);
-    }
+
     // Ends the frame and writes a checkpoint frame, unchanged; the seal covers it.
     static auto keep(Writer& w, const CheckpointPayload& checkpoint) -> void
     {

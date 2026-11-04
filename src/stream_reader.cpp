@@ -38,14 +38,12 @@ auto StreamReader::header() const noexcept -> const Header&
 
 auto StreamReader::clientVersion() const -> std::string
 {
-    const auto& f = start_->header.clientVersion;
-    return { f.begin(), std::find(f.begin(), f.end(), '\0') };
+    return internal::textOf(start_->header.clientVersion);
 }
 
 auto StreamReader::captureAgent() const -> std::string
 {
-    const auto& f = start_->header.captureAgent;
-    return { f.begin(), std::find(f.begin(), f.end(), '\0') };
+    return internal::textOf(start_->header.captureAgent);
 }
 
 auto StreamReader::policy() const noexcept -> const ExclusionPolicy&
@@ -80,14 +78,7 @@ auto StreamReader::next(ReadPacket& packet) -> bool
             return false;
         }
     }
-    const auto& p    = frame_->packets[packetPos_++];
-    packet.timestamp = p.timestamp;
-    packet.channel   = p.channel;
-    packet.opcode    = p.opcode;
-    packet.flags     = p.flags;
-    packet.direction = (p.flags & PacketFlag::ClientToServer) ? PacketDirection::ClientToServer : PacketDirection::ServerToClient;
-    packet.data      = { reinterpret_cast<const std::byte*>(frame_->bytes.data() + p.offset), p.length };
-    packet.markers   = { frame_->markers.data() + p.firstMarker, p.markerCount };
+    packet = frame_->read(packetPos_++);
     return true;
 }
 
@@ -145,10 +136,9 @@ auto StreamReader::parse() -> void
                     return;
                 }
                 frame_->clear();
-                packetPos_                     = 0;
-                constexpr auto      headerSize = sizeof(FrameHeader);
+                packetPos_ = 0;
                 internal::FrameInfo info;
-                if (avail.size() < headerSize)
+                if (avail.size() < sizeof(FrameHeader))
                 {
                     if (avail.size() >= 4 && std::memcmp(avail.data(), "XCFR", 4) != 0)
                     {
@@ -161,15 +151,13 @@ auto StreamReader::parse() -> void
                     state_ = State::Stopped;
                     return;
                 }
-                const uint64_t size = headerSize + uint64_t{ info.payloadSize } + sizeof(uint32_t);
+                const uint64_t size = sizeof(FrameHeader) + uint64_t{ info.payloadSize } + sizeof(uint32_t);
                 if (avail.size() < size)
                 {
                     return;
                 }
-                const auto frame  = avail.first(static_cast<size_t>(size));
-                uint32_t   stored = 0;
-                std::memcpy(&stored, frame.data() + frame.size() - sizeof(stored), sizeof(stored));
-                if (internal::crc32(frame.first(frame.size() - sizeof(stored))) != stored)
+                const auto frame = avail.first(static_cast<size_t>(size));
+                if (!internal::endsWithCrc(frame))
                 {
                     state_ = State::Stopped;
                     return;
@@ -179,7 +167,7 @@ auto StreamReader::parse() -> void
                 {
                     try
                     {
-                        decoder_->decode(info, frame.subspan(headerSize, info.payloadSize), *frame_);
+                        decoder_->decode(info, frame.subspan(sizeof(FrameHeader), info.payloadSize), *frame_);
                     }
                     catch (const Error& error)
                     {
@@ -193,14 +181,7 @@ auto StreamReader::parse() -> void
                     }
                 }
                 pos_ += frame.size();
-                for (const auto& p : frame_->packets)
-                {
-                    if (internal::namesOtherCharacter(start_->header, p, { frame_->bytes.data() + p.offset, p.length }))
-                    {
-                        characterMismatch_ = true;
-                    }
-                }
-                packetPos_ = 0;
+                characterMismatch_ = characterMismatch_ || internal::namesOtherCharacter(start_->header, *frame_);
                 break;
             }
             case State::Stopped:

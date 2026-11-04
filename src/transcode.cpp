@@ -1,13 +1,10 @@
 #include "internal/transcode.h"
 #include "internal/access.h"
-#include "internal/chain.h"
-#include "internal/crc32.h"
 
 #include "xicap/reader.h"
 
 #include <algorithm>
 #include <chrono>
-#include <cstring>
 #include <format>
 #include <memory>
 #include <optional>
@@ -47,7 +44,9 @@ public:
         std::filesystem::remove(path_, ec);
     }
     Staged(const Staged&)                    = delete;
+    Staged(Staged&&)                         = delete;
     auto operator=(const Staged&) -> Staged& = delete;
+    auto operator=(Staged&&) -> Staged&      = delete;
 
     [[nodiscard]] auto path() const -> const std::filesystem::path&
     {
@@ -66,8 +65,10 @@ private:
 // Reads src and dst side by side; any difference is a mismatch.
 auto compare(const std::filesystem::path& src, const std::filesystem::path& dst) -> void
 {
-    Reader     a(src), b(dst);
-    ReadPacket pa{}, pb{};
+    Reader     a(src);
+    Reader     b(dst);
+    ReadPacket pa{};
+    ReadPacket pb{};
     for (uint64_t i = 0;; ++i)
     {
         const bool na = a.next(pa);
@@ -81,7 +82,7 @@ auto compare(const std::filesystem::path& src, const std::filesystem::path& dst)
             return;
         }
         const bool same = pa.timestamp == pb.timestamp && pa.channel == pb.channel && pa.flags == pb.flags && pa.opcode == pb.opcode &&
-                          std::ranges::equal(pa.data, pb.data) && pa.markers.size() == pb.markers.size() &&
+                          std::ranges::equal(pa.data, pb.data) &&
                           std::ranges::equal(pa.markers, pb.markers, [](const ReadMarker& x, const ReadMarker& y)
                                              {
                                                  return x.kind == y.kind && x.text == y.text;
