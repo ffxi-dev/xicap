@@ -34,7 +34,7 @@ enum class Channel : uint8_t
     Search = 1,
 };
 
-// Readers treat kinds this enum does not name as notes.
+// Readers pass on kinds this enum does not name unchanged.
 enum class MarkerKind : uint8_t
 {
     Note   = 0,
