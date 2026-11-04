@@ -61,11 +61,71 @@ auto cutUtf8(std::string_view text, size_t maxBytes) -> std::string_view
     return text.substr(0, n);
 }
 
+// The length of the valid UTF-8 character text starts with, or 0.
+auto utf8Length(std::string_view text) -> size_t
+{
+    const auto at = [&](size_t i) -> unsigned
+    {
+        return i < text.size() ? static_cast<uint8_t>(text[i]) : 0x100U;
+    };
+    const auto tail = [&](size_t n) -> bool
+    {
+        for (size_t i = 1; i <= n; ++i)
+        {
+            if ((at(i) & 0xC0U) != 0x80U)
+            {
+                return false;
+            }
+        }
+        return true;
+    };
+    const unsigned b0 = at(0);
+    const unsigned b1 = at(1);
+    if (b0 < 0x80)
+    {
+        return 1;
+    }
+    if (b0 >= 0xC2 && b0 <= 0xDF)
+    {
+        return tail(1) ? 2 : 0;
+    }
+    if (b0 >= 0xE0 && b0 <= 0xEF)
+    {
+        const bool ok = (b0 == 0xE0 ? b1 >= 0xA0 : b0 == 0xED ? b1 < 0xA0
+                                                              : true) &&
+                        tail(2);
+        return ok ? 3 : 0;
+    }
+    if (b0 >= 0xF0 && b0 <= 0xF4)
+    {
+        const bool ok = (b0 == 0xF0 ? b1 >= 0x90 : b0 == 0xF4 ? b1 < 0x90
+                                                              : true) &&
+                        tail(3);
+        return ok ? 4 : 0;
+    }
+    return 0;
+}
+
+// FORMAT.md's text is UTF-8, but hosts pass what they have: Ashita hands over Shift-JIS. Each byte that does not
+// start a valid character becomes U+FFFD.
+auto toUtf8(std::string_view text) -> std::string
+{
+    std::string out;
+    out.reserve(text.size());
+    while (!text.empty())
+    {
+        const auto n = utf8Length(text);
+        out.append(n == 0 ? std::string_view{ "\xEF\xBF\xBD" } : text.substr(0, n));
+        text.remove_prefix(n == 0 ? 1 : n);
+    }
+    return out;
+}
+
 auto copyText(std::string_view src, std::span<char> dst) -> void
 {
     std::ranges::fill(dst, '\0');
-    const auto cut = cutUtf8(src, dst.size() - 1);
-    std::ranges::copy(cut, dst.begin());
+    const auto text = toUtf8(src);
+    std::ranges::copy(cutUtf8(text, dst.size() - 1), dst.begin());
 }
 
 auto randomCaptureId() -> CaptureId
@@ -396,18 +456,23 @@ auto Writer::mark(MarkerKind kind, std::string_view text) -> void
             checkpoint();
         }
     }
-    queueMarker(kind, text);
+    const auto utf8 = toUtf8(text);
+    queueMarker(kind, cutUtf8(utf8, MARKER_TEXT_MAX));
 }
 
+// As given: a copy keeps a marker whole, up to the format's 65,535 bytes.
 auto Writer::queueMarker(MarkerKind kind, std::string_view text) -> void
 {
     if (pendingMarkers_.size() >= UINT16_MAX)
     {
         throw Error(ErrorCode::AddMarkerWithoutPacket, "xicap: too many markers before the next packet");
     }
-    const auto cut = cutUtf8(text, MARKER_TEXT_MAX);
-    pendingMarkers_.push_back({ kind, std::string(cut) });
-    pendingMarkerBytes_ += MARKER_COST + cut.size();
+    if (text.size() > UINT16_MAX)
+    {
+        throw Error(ErrorCode::PacketTooLarge, "xicap: marker text over 65,535 bytes");
+    }
+    pendingMarkers_.push_back({ kind, std::string(text) });
+    pendingMarkerBytes_ += MARKER_COST + text.size();
 }
 
 auto Writer::write(const OutPacket& packet) -> void

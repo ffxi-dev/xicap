@@ -48,6 +48,11 @@ struct Access
         }
         w.add(p.timestamp, p.flags, p.channel, p.opcode, { reinterpret_cast<const uint8_t*>(p.data.data()), p.data.size() });
     }
+    // A marker as stored, unchanged.
+    static auto marker(Writer& w, MarkerKind kind, std::string_view text) -> void
+    {
+        w.queueMarker(kind, text);
+    }
     // Ends the frame and writes a checkpoint frame, unchanged.
     static auto carry(Writer& w, const CheckpointPayload& checkpoint) -> void
     {

@@ -925,6 +925,44 @@ TEST_CASE("transcode")
     }
 }
 
+TEST_CASE("the writer stores text as UTF-8, and copies keep markers whole")
+{
+    TempCapture src;
+    TempCapture dst;
+    // Ashita hands Memoria a note in Shift-JIS: 0x93 0x8C is not UTF-8.
+    const std::string sjis = "\x93\x8c \xe6\x9d\xb1\xe4\xba\xac";
+    {
+        auto cfg         = config();
+        cfg.captureAgent = "agent \xff";
+        Writer w(src.path, cfg);
+        w.mark(MarkerKind::Note, sjis);
+        w.write(T0, PacketDirection::ServerToClient, gamePacket(0x0DF, 16));
+        w.close();
+    }
+    Reader r(src.path);
+    CHECK(r.captureAgent() == "agent \xef\xbf\xbd");
+    const auto packets = readAll(r);
+    REQUIRE(packets.size() == 1);
+    REQUIRE(packets[0].markers.size() == 1);
+    CHECK(packets[0].markers[0].text == "\xef\xbf\xbd\xef\xbf\xbd \xe6\x9d\xb1\xe4\xba\xac");
+
+    // A marker of 2,000 bytes, which the format allows though this writer's mark() cuts at 1,024.
+    const std::string longText(2000, 'x');
+    TempCapture       long_;
+    auto              options = mogsafe();
+    options.signing           = Signing::Resign;
+    internal::transcode(src.path, long_.path, options, { .edit = [&](uint64_t, internal::CopiedPacket& p)
+                                                         {
+                                                             p.markers[0].text = longText;
+                                                         },
+                                                         .check = false });
+    REQUIRE(readAll(long_.path)[0].markers[0].text == longText);
+    transcode(long_.path, dst.path, mogsafe());
+    CHECK(readAll(dst.path)[0].markers[0].text == longText);
+    cut(long_.path, dst.path, { .first = 0, .last = 0, .seed = seed(9), .agent = "cut", .sourceHash = {}, .metadata = {} });
+    CHECK(readAll(dst.path)[0].markers[0].text == longText);
+}
+
 TEST_CASE("a cut carries the scene from before its range")
 {
     TempCapture src;

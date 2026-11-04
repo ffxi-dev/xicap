@@ -390,7 +390,7 @@ auto cut(const std::filesystem::path& src, const std::filesystem::path& dst, con
         }
         for (const auto& m : packet.markers)
         {
-            writer.mark(m.kind, m.text);
+            internal::Access::marker(writer, m.kind, m.text);
         }
         writer.write({
             .timestamp  = packet.timestamp,
