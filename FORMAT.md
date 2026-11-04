@@ -1,8 +1,8 @@
 # XICAP Binary Format
 
 Version 4.0. This document is normative: a reader built from it alone, with the
-references below, must read every format-4 capture the library writes.
-[FORMAT-3.md](FORMAT-3.md) specifies format 3, which readers keep reading.
+references below, must read every capture the library writes. Earlier formats
+are not read.
 
 **Status: draft.** Until the owner declares format 4 in production, a change
 may break compatibility. From that day captures are kept for the long term, so
@@ -90,7 +90,7 @@ frame, or at close if there is none.
 | 68 | 1 | `origin` | `0` unknown, `1` recorded live, `2` converted from another format |
 | 69 | 1 | `network` | `0` unknown, `1` retail, `2` private server |
 | 70 | 1 | `startContext` | `0` unknown, `1` starts at a login, `2` starts mid-session |
-| 71 | 1 | `reserved` | |
+| 71 | 1 | `recordingMode` | what the recorder kept of what players write: `0` default, `1` everything, `2` anonymous. See below |
 | 72 | 4 | `dictionaryId` | `0`. A reader refuses any other value |
 | 76 | 4 | `reserved` | |
 | 80 | 32 | `signingKey` | the signer's Ed25519 public key |
@@ -116,9 +116,21 @@ bad magic.
 grow the header: it adds fields in the reserved bytes or after them, moves the
 CRC to the new end, and raises `headerSize`.
 
-A reader refuses the file if the magic differs, `headerSize` is out of range,
-`headerCrc` fails, or `dictionaryId` is not 0. A reader of format 4 reads
-`versionMajor` 3 by [FORMAT-3.md](FORMAT-3.md) and refuses any other value.
+A reader refuses the file if the magic differs, `versionMajor` is not 4,
+`headerSize` is out of range, `headerCrc` fails, `recordingMode` is above 2, or
+`dictionaryId` is not 0.
+
+`recordingMode` tells a reader whether chat is in the file and whether names
+are real:
+
+| Mode | Name | The exclusion policy | Names and player ids |
+|-----:|------|----------------------|----------------------|
+| 0 | default | removes the text of chat, as the library's default does | as the game sent them |
+| 1 | everything | has no rules: chat is kept | as the game sent them |
+| 2 | anonymous | removes the text of chat, as in mode 0 | replaced by the recorder with pseudonyms of the same length |
+
+A writer refuses mode 1 with a policy that has rules. Whether a policy removes
+enough for mode 0 or 2 is the archive's rule.
 
 `dictionaryId` stays in the header so a later version can add a dictionary
 behind a check old readers already make.
@@ -151,13 +163,13 @@ A reader refuses a block whose CRC fails or whose length is over 16 MiB.
 
 | Type | Name | Required | Payload |
 |-----:|------|----------|---------|
-| `0x0008` | `ZSTD_DICT` | never: a reader refuses it in format 4 | |
 | `0x0009` | `EXCLUSION_POLICY` | always, exactly once | [Exclusion](#exclusion) |
-| `0x000A` | `SOURCE` | when `origin` is 2, or the file was rewritten from another major version | [Source](#source) |
+| `0x000A` | `SOURCE` | when `origin` is 2; at most once | [Source](#source) |
+| `0x000B` | `SOURCE_SIGNER` | when the source was a signed capture; at most once, right after `SOURCE` | [Source signer](#source-signer) |
 
-Ids `0x0001` to `0x0007` held client memory copies in 2.x and are retired:
-never reuse them. A capture's context is its packets, never a copy of client
-state.
+Ids `0x0001` to `0x0008` held client memory copies and a zstd dictionary in
+earlier formats and are retired: never reuse them. A capture's context is its
+packets, never a copy of client state.
 
 | Range | Use |
 |-------|-----|
@@ -170,8 +182,8 @@ unchanged.
 
 ### Source
 
-Converted captures (`origin` 2) carry this block, and so does a capture
-rewritten from another major version.
+Converted captures (`origin` 2) carry this block. A reader refuses a second
+one.
 
 | Off | Size | Field | Notes |
 |----:|-----:|-------|-------|
@@ -183,19 +195,20 @@ rewritten from another major version.
 | 104 | 4 | `metadataLength` | |
 | 108 | `metadataLength` | `metadata` | the source's metadata as found, such as captain's `manifest.txt` |
 
-A writer that rewrites a capture of another major version under its own key
-(see [Rewriting a capture](#rewriting-a-capture)) keeps the source's SOURCE
-block, if it has one. Otherwise it adds one: `format` `xicap`, `formatVersion`
-the source's version, and `metadata` that starts with these lines, each ended by
-`\n`, then anything the rewriter adds:
+### Source signer
 
-```
-signing-key <the source's signingKey, 64 hex digits>
-signed-to-end yes|no
-verified-packets <packets the source's signatures covered, in decimal>
-footer-signature <the source's footer signature, 128 hex digits>|none
-transcoded-by <the rewriting program, with its version>
-```
+When the packets came from a capture its own signer signed, this block names
+that signer and what its signatures covered when the packets were taken, so the
+source's verdict outlives its file. It follows the `SOURCE` block; a reader
+refuses one with no `SOURCE` block before it, a second one, or one whose
+payload is not 48 bytes, and reports it with the source.
+
+| Off | Size | Field | Notes |
+|----:|-----:|-------|-------|
+| 0 | 32 | `signingKey` | the source's signer's Ed25519 public key |
+| 32 | 8 | `verifiedPackets` | packets the source's signatures covered |
+| 40 | 1 | `flags` | bit 0: the source was signed to the end. Other bits reserved |
+| 41 | 7 | `reserved` | |
 
 ## Frames
 
@@ -331,8 +344,7 @@ frame is bad if:
 | 2 | blocked by an addon | may ignore |
 | 3 | modified by an addon | may ignore |
 | 4 | first packet of its datagram | may ignore |
-| 5 | carried: from before the capture's start, see [Carried packets](#carried-packets) | may ignore |
-| 6 to 7 | reserved | may ignore |
+| 5 to 7 | reserved | may ignore |
 | 8 | excluded: a stub, see [Exclusion](#exclusion) | must understand |
 | 9 | redacted: byte ranges zeroed | must understand |
 | 10 to 15 | reserved | must understand |
@@ -445,7 +457,7 @@ rewrote the file. See [Signatures](#signatures).
 | 8 | 8 | `sealedAt` | when the rewriter sealed the file |
 | 16 | 32 | `key` | the rewriter's Ed25519 public key |
 | 48 | 32 | `agent` | text: the rewriter, with its version, such as `mogsafe 2026.11.4` |
-| 80 | 64 | `signature` | `Ed25519(key, "xicap/4 seal" ‖ D(end) ‖ seal bytes 0..80)` |
+| 80 | 64 | `signature` | `Ed25519(key, "xicap/4 seal" ‖ D(end) ‖ F ‖ C ‖ seal bytes 0..80)`, see [Signatures](#signatures) |
 | 144 | 12 | `reserved` | |
 | 156 | 4 | `crc` | CRC-32 of seal bytes `0..156` |
 
@@ -480,7 +492,7 @@ A reader reads a file whose footer is not valid as cut off. If its last 4 bytes
 are `XCPF` anyway, the reader also reports a damaged footer.
 
 The last 112 bytes of a complete file start with the end time and end with
-`XCPF`, as in format 3, so a reader can learn the end time from them alone.
+`XCPF`, so a reader can learn the end time from them alone.
 
 ## Signatures
 
@@ -514,8 +526,14 @@ Three signatures cover the stream. The prefixes are ASCII, with no terminator.
 
 - A **checkpoint**: `signature = Ed25519(signingKey, "xicap/4 checkpoint" ‖ D(packets))`.
 - The **footer**: `signature = Ed25519(signingKey, "xicap/4 footer" ‖ D(end))`.
-- The **seal**: `signature = Ed25519(key, "xicap/4 seal" ‖ D(end) ‖ seal bytes 0..80)`,
-  so the seal's time, key, and agent are signed too.
+- The **seal**: `signature = Ed25519(key, "xicap/4 seal" ‖ D(end) ‖ F ‖ C ‖ seal bytes 0..80)`,
+  where `F` is the trailer's 64-byte `signature` (zero when the end is not
+  signed) and `C` is the 136-byte payload of the file's checkpoint frame, or 136
+  zero bytes when it has none. So the seal covers the signer's evidence, its
+  footer signature and the checkpoint the rewriter kept, as well as the seal's
+  time, key, and agent: stripping either breaks it. A sealed file holds at most
+  one checkpoint frame; with more, or one whose payload is not 136 bytes, the
+  seal fails.
 
 A reader computes the stream from the packets it reads and reports:
 
@@ -528,40 +546,31 @@ A reader computes the stream from the packets it reads and reports:
   fails. Checkpoints sit outside the signed stream, so a failed one does not stop
   a later checkpoint or the footer from counting;
 - for a sealed file, the seal's key, agent, and time, and whether its signature
-  verifies.
+  verifies;
+- the source signer, if the file names one.
 
 A failed signature never stops a reader from reading packets.
 
 ### Rewriting a capture
 
 Since signatures cover packets, not bytes, a program may rewrite a capture with
-other frames and other compression:
+other frames and other compression. A rewrite keeps every packet and marker in
+order, and the capture id; its bytes depend on the compressor, so two rewrites
+of one file need not match byte for byte.
 
 - **Sealing.** A rewriter without the signer's key keeps the header and every
-  extension block byte for byte, and every packet and marker in order. For a
-  complete file, it keeps the footer's signature. For a cut-off file, it may
-  carry the last checkpoint that verifies: it ends a frame after packet
+  extension block byte for byte. For a complete file, it keeps the footer's
+  signature. For a cut-off file, or a sealed one whose end was never signed, it
+  keeps the last checkpoint that verifies, if any: it ends a frame after packet
   `packets` − 1 and writes the checkpoint frame there, unchanged. It drops every
-  other checkpoint, sets bit 1 of `trailerFlags`, and writes a zero
-  `signature`. Either way it adds a seal made with its own key and sets bit 0.
-  `D(k)` does not depend on frames, so the carried checkpoint and the footer
-  signature still verify.
-- **Re-signing.** A rewriter may sign a file anew with its own key: it changes
-  the header's `signingKey`, which changes every digest. A file rewritten this
-  way from another major version names its source in a SOURCE block, as
-  [Source](#source) says.
-
-### Carried packets
-
-A capture cut from a range of another starts mid-zone. So that a reader knows
-the zone and what is in view, the cut may begin with **carried packets**:
-packets from before the range, copied in with the carried flag set. They come
-before every other packet, in the order the source holds them, and each has the
-timestamp of the range's first packet. No marker sits before one.
-
-A reader that draws the capture applies carried packets as it would any other.
-A reader that counts or times events skips them: they happened before the
-capture starts.
+  other checkpoint and any earlier seal, sets bit 1 of `trailerFlags`, and
+  writes a zero `signature`. Either way it adds a seal made with its own key and
+  sets bit 0. `D(k)` does not depend on frames, so the kept checkpoint and the
+  footer signature still verify. A rewriter does not seal a file with a
+  signature that fails.
+- **Reissuing.** A signer may write its own file again, signing it with the
+  same key. It keeps the header and the blocks, except that it may add or
+  replace the `SOURCE_SIGNER` block, which changes `extensionCount`.
 
 ## Exclusion
 
@@ -603,16 +612,19 @@ A writer refuses a policy that stubs packets on a channel whose row in
   header, which holds the opcode the packet's `opcode` repeats; a writer refuses
   such a policy before it writes anything.
 
-The library's default policy, `xicap-default` version 1, stubs the game
-channel's packets that carry text players write to each other:
+The library's default policy, `xicap-default` version 2, zeroes the text
+players write to each other on the game channel, and nothing else, so each
+packet keeps its length and its other fields: kind, sender, target, and ids.
+Offsets count the 4-byte header; a range "to the end" covers text of any length.
 
-| Opcode | Direction | Packet |
-|-------:|-----------|--------|
-| `0x017` | to the client | chat, in every channel (say, shout, party, linkshell, tell, yell, unity, assist) |
-| `0x0B5` | from the client | chat |
-| `0x0B6` | from the client | tell |
-| `0x0CC` | to the client | linkshell message board |
-| `0x0E2` | from the client | linkshell message board post |
+| Opcode | Direction | Packet | Zeroed |
+|-------:|-----------|--------|--------|
+| `0x017` | to the client | chat, in every channel (say, shout, party, linkshell, tell, yell, unity, assist) | `0x17` to the end (`Mes`) |
+| `0x0B5` | from the client | chat | `0x06` to the end (`Str`) |
+| `0x0B6` | from the client | tell | `0x15` to the end (`Mes`) |
+| `0x0B7` | from the client | the Assist Channel | `0x15` to the end (`Mes`) |
+| `0x0CC` | to the client | linkshell message board | `0x08`, 128 bytes (`sMessage`) |
+| `0x0E2` | from the client | linkshell message board post | `0x10`, 128 bytes (`sMessage`) |
 
 Opcodes and meanings follow atom0s's XiPackets. Public text, such as search and
 bazaar comments, is kept.
@@ -622,8 +634,7 @@ bazaar comments, is kept.
 A reader:
 
 1. checks the header and its CRC, each extension block's CRC and length, and
-   the policy and dictionary rules above, and refuses the file if any check
-   fails;
+   the block rules above, and refuses the file if any check fails;
 2. checks the footer;
 3. reads frames, starting at the end of the extension blocks, and decodes each
    packet frame with the decoder its stream left.
@@ -653,7 +664,8 @@ frame's offset, `baseTimestamp`, `zoneId`, and restart bit, and the trailer's
 packet frames' `packetCount`. In recovery mode it reads such a file as cut off.
 
 In a cut-off file, frames run up to the first bad frame. The capture ends there,
-and the reader reports how many bytes it did not read.
+and the reader reports how many bytes it did not read; seeks and zone lists
+stop there too.
 
 In **recovery mode**, a reader that meets a bad frame searches forward, byte by
 byte, for the next `XCFR` whose frame passes its CRC, and goes on from there,
@@ -706,17 +718,17 @@ it parses.
   `startContext` to mid-session and `previousCaptureId` to the capture it
   continues, or all zero if it knows none. No timer ends a capture.
 - **Durability.** A writer hands each frame to the operating system as soon as
-  it is written, and reports any write error.
+  it is written, and reports any write error. After a frame fails to write, a
+  writer writes nothing more, footer included: its signed stream already holds
+  packets the file may not, so the file stays cut off before the failure.
 - **Empty captures** still get a header, extension blocks, and a footer with no
   index entries.
 
 ## Conformance
 
 `tests/vectors/` holds test files, each with a JSON file of its expected
-reading. The files whose names start with `4-` are format 4; the others are
-format 3. Every binding reads all of them in CI, and `tests/spec_reader.py`, a
-reader written from this document and [FORMAT-3.md](FORMAT-3.md) alone, reads
-them too.
+reading. Every binding reads all of them in CI, and `tests/spec_reader.py`, a
+reader written from this document alone, reads them too.
 
 ## Worked example
 
@@ -729,7 +741,7 @@ one packet frame, and the footer. Offsets are in hex.
 00000010  00 00 00 00 00 00 00 00 33 33 33 33 33 33 33 33  reserved; captureId
 00000020  33 33 33 33 33 33 33 33 00 00 00 00 00 00 00 00  previousCaptureId
 00000030  00 00 00 00 00 00 00 00 00 6c 50 c4 a0 01 00 00  startTimestamp
-00000040  00 00 00 01 01 01 01 00 00 00 00 00 00 00 00 00  reserved; clockSource 1 (live), origin 1 (live), network 1 (retail), startContext 1 (login); reserved; dictionaryId 0; reserved
+00000040  00 00 00 01 01 01 01 00 00 00 00 00 00 00 00 00  reserved; clockSource 1 (live), origin 1 (live), network 1 (retail), startContext 1 (login), recordingMode 0 (default); dictionaryId 0; reserved
 00000050  d7 59 79 3b bc 13 a2 81 9a 82 7c 76 ad b6 fb a8  signingKey
 00000060  a4 9a ee 00 7f 49 f2 d0 99 2d 99 b8 25 ad 2c 48
 00000070  78 69 63 61 70 5f 6d 61 6b 65 5f 76 65 63 74 6f  captureAgent
@@ -749,26 +761,30 @@ one packet frame, and the footer. Offsets are in hex.
 00000150  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
 00000160  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
 00000170  00 00 00 00 00 00 00 00 00 00 00 00 19 3b 9d 72  headerCrc
-00000180  09 00 00 00 50 00 00 00 78 69 63 61 70 2d 64 65  extension block: type 0x0009 (exclusion policy), length 80; policy name
+00000180  09 00 00 00 88 00 00 00 78 69 63 61 70 2d 64 65  extension block: type 0x0009 (exclusion policy), length 136; policy name
 00000190  66 61 75 6c 74 00 00 00 00 00 00 00 00 00 00 00
-000001a0  00 00 00 00 00 00 00 00 01 00 00 00 05 00 00 00  version 1, 5 rules, reserved
-000001b0  00 00 01 00 17 00 00 00 00 01 01 00 b5 00 00 00  rules: channel, direction, action 1 (stub), reserved, opcode, rangeCount
-000001c0  00 01 01 00 b6 00 00 00 00 00 01 00 cc 00 00 00
-000001d0  00 01 01 00 e2 00 00 00 a2 a5 72 ea 58 43 46 52  block CRC; frame: magic XCFR
-000001e0  80 01 00 00 31 00 00 00 03 00 00 00 00 6c 50 c4  kind 0x80 (packets), frameFlags 1 (restart), markerCount 0, payloadSize 49, packetCount 3; baseTimestamp
-000001f0  a0 01 00 00 00 00 00 00 46 00 00 00 28 b5 2f fd  zoneId 0, reserved, plainSize 70; payload: a whole zstd stream (decoded below)
-00000200  04 00 25 01 00 90 00 0a 0a 00 df 01 00 00 00 02
-00000210  02 02 30 df 08 00 01 02 07 00 38 13 10 00 67 37
-00000220  33 08 b8 43 b9 c0 17 20 02 2e 49 ba 6a a0 90 f4  frame CRC
-00000230  43 00 6c 50 c4 a0 01 00 00 dc 01 00 00 00 00 00  footer index entry: timestamp, fileOffset, zoneId, flags 1 (restart), reserved
-00000240  00 00 00 01 00 00 00 00 00 14 6c 50 c4 a0 01 00  trailer: endTimestamp
-00000250  00 03 00 00 00 00 00 00 00 00 00 00 00 01 00 00  totalPacketCount 3; trailerFlags 0, entryCount 1
-00000260  00 31 02 00 00 00 00 00 00 38 ee d7 f4 01 00 00  indexOffset; indexCrc, frameCount 1
-00000270  00 3b 4c ba 00 07 0b 7d 18 fa d5 82 cf 4e 2e 0b  signature
-00000280  5d c4 06 4c 49 3a 54 24 62 5d 60 1d 91 93 96 06
-00000290  9f 38 7c f1 eb f7 78 cc dc 7a bd 87 cb b5 a4 c4
-000002a0  bd 7a 74 b5 58 25 b7 9f 5a 56 4a 17 dc 7e 94 b2
-000002b0  01 d6 f5 0a 44 58 43 50 46                       trailerCrc, magic XCPF
+000001a0  00 00 00 00 00 00 00 00 02 00 00 00 06 00 00 00  version 2, 6 rules, reserved
+000001b0  00 00 02 00 17 00 01 00 17 00 00 00 ff ff ff ff  rules: channel, direction, action 2 (zero ranges), reserved, opcode, rangeCount 1; range offset, length
+000001c0  00 01 02 00 b5 00 01 00 06 00 00 00 ff ff ff ff
+000001d0  00 01 02 00 b6 00 01 00 15 00 00 00 ff ff ff ff
+000001e0  00 01 02 00 b7 00 01 00 15 00 00 00 ff ff ff ff
+000001f0  00 00 02 00 cc 00 01 00 08 00 00 00 80 00 00 00
+00000200  00 01 02 00 e2 00 01 00 10 00 00 00 80 00 00 00
+00000210  0b 2b 93 a3 58 43 46 52 80 01 00 00 31 00 00 00  block CRC; frame: magic XCFR, kind 0x80 (packets), frameFlags 1 (restart), markerCount 0, payloadSize 49
+00000220  03 00 00 00 00 6c 50 c4 a0 01 00 00 00 00 00 00  packetCount 3; baseTimestamp; zoneId 0, reserved
+00000230  46 00 00 00 28 b5 2f fd 04 00 25 01 00 90 00 0a  plainSize 70; payload: a whole zstd stream (decoded below)
+00000240  0a 00 df 01 00 00 00 02 02 02 30 df 08 00 01 02
+00000250  07 00 38 13 10 00 67 37 33 08 b8 43 b9 c0 17 20
+00000260  02 2e 49 ba 6a a0 90 f4 43 00 6c 50 c4 a0 01 00  frame CRC (from 265); footer index entry: timestamp (from 269)
+00000270  00 14 02 00 00 00 00 00 00 00 00 01 00 00 00 00  fileOffset, zoneId, flags 1 (restart), reserved
+00000280  00 14 6c 50 c4 a0 01 00 00 03 00 00 00 00 00 00  trailer: endTimestamp (from 281); totalPacketCount
+00000290  00 00 00 00 00 01 00 00 00 69 02 00 00 00 00 00  trailerFlags 0, entryCount 1, indexOffset
+000002a0  00 00 00 3a e4 01 00 00 00 9d fe 1f c3 e8 c4 b6  indexCrc, frameCount 1; signature (from 2a9)
+000002b0  39 4d 4a 62 e3 b8 ab c6 af 76 86 fd a6 74 28 1a
+000002c0  9a bc b7 2e d2 2c a8 b3 53 c3 52 90 1e 9f 1b e6
+000002d0  fb cb d4 17 79 da 56 12 8c e9 b3 67 16 ca 4e 98
+000002e0  f7 19 f6 28 1d 4f 6d 5a 0b 7f 71 30 6e 58 43 50  trailerCrc (from 2e9), magic XCPF (from 2ed)
+000002f0  46
 ```
 
 The frame's payload, decoded:

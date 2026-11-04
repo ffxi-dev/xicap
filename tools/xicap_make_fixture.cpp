@@ -1,4 +1,4 @@
-// Generates a deterministic format 3 .xicap file for the Python and JS test
+// Generates a deterministic .xicap file for the Python and JS test
 // suites. Its contents are described inline so those tests can assert on them.
 
 #include <xicap/xicap.h>

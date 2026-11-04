@@ -160,6 +160,10 @@ public:
     {
         return static_cast<int>(reader_->startContext());
     }
+    [[nodiscard]] auto recordingMode() const -> int
+    {
+        return static_cast<int>(reader_->recordingMode());
+    }
     // JS numbers are doubles, safe up to 2^53. Unix-ms timestamps fit.
     [[nodiscard]] auto startTimestampMs() const -> double
     {
@@ -247,6 +251,15 @@ public:
         o.set("utcOffsetSeconds", s->utcOffsetSeconds);
         o.set("sourceHash", copyBytes(s->sourceHash));
         o.set("metadata", copyBytes(s->metadata));
+        em::val signer = em::val::null();
+        if (s->signer)
+        {
+            signer = em::val::object();
+            signer.set("key", copyBytes(s->signer->key));
+            signer.set("signedToEnd", s->signer->signedToEnd);
+            signer.set("verifiedPackets", static_cast<double>(s->signer->verifiedPackets));
+        }
+        o.set("signer", signer);
         return o;
     }
 
@@ -459,6 +472,7 @@ EMSCRIPTEN_BINDINGS(xicap_module)
         .function("origin", &JsReader::origin)
         .function("network", &JsReader::network)
         .function("startContext", &JsReader::startContext)
+        .function("recordingMode", &JsReader::recordingMode)
         .function("startTimestampMs", &JsReader::startTimestampMs)
         .function("endTimestampMs", &JsReader::endTimestampMs)
         .function("durationMs", &JsReader::durationMs)

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 project(xicap_python LANGUAGES C CXX)
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Pull xicap (lib only) in as a subproject. The xicap static lib gets linked

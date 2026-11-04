@@ -36,7 +36,6 @@ inline auto errorName(xicap::ErrorCode code) -> std::string
         "CompressFailed",
         "HeaderChecksumMismatch",
         "ExtensionChecksumMismatch",
-        "MissingDictionary",
         "MissingPolicy",
         "UnknownFrameKind",
         "UnknownPacketFlag",
@@ -46,6 +45,7 @@ inline auto errorName(xicap::ErrorCode code) -> std::string
         "PacketTooShort",
         "TranscodeRefused",
         "TranscodeMismatch",
+        "UnknownRecordingMode",
     };
     return names[static_cast<size_t>(code)];
 }
@@ -68,11 +68,11 @@ inline auto refusalClass(xicap::ErrorCode code) -> std::string
         case xicap::ErrorCode::InvalidPolicy:
         case xicap::ErrorCode::InvalidExtension:
             return "extension";
-        case xicap::ErrorCode::MissingDictionary:
         case xicap::ErrorCode::DictionaryMismatch:
             return "dictionary";
         case xicap::ErrorCode::UnknownFrameKind:
         case xicap::ErrorCode::UnknownPacketFlag:
+        case xicap::ErrorCode::UnknownRecordingMode:
             return "unknown-required";
         default:
             return "frame";
@@ -142,7 +142,7 @@ inline auto normalReading(const std::filesystem::path& path) -> std::string
     const auto&   c = r.character();
     out += std::format("  \"result\": \"ok\",\n");
     out += std::format("  \"header\": {{\"version\": \"{}.{}\", \"captureId\": {}, \"previousCaptureId\": {}, \"startTimestamp\": {}, "
-                       "\"clockSource\": {}, \"origin\": {}, \"network\": {}, \"startContext\": {}, \"signingKey\": {}, "
+                       "\"clockSource\": {}, \"origin\": {}, \"network\": {}, \"startContext\": {}, \"recordingMode\": {}, \"signingKey\": {}, "
                        "\"captureAgent\": {}, \"clientVersion\": {}, \"character\": [{}, {}, {}, {}, {}]}},\n",
                        r.versionMajor(),
                        r.versionMinor(),
@@ -153,6 +153,7 @@ inline auto normalReading(const std::filesystem::path& path) -> std::string
                        static_cast<int>(r.origin()),
                        static_cast<int>(r.network()),
                        static_cast<int>(r.startContext()),
+                       static_cast<int>(r.recordingMode()),
                        hex(r.signingKey()),
                        str(r.captureAgent()),
                        str(r.clientVersion()),
@@ -174,7 +175,12 @@ inline auto normalReading(const std::filesystem::path& path) -> std::string
     out += std::format("  \"policy\": [{}, {}, [{}]],\n", str(r.policy().name), r.policy().version, rules);
     if (const auto& s = r.source())
     {
-        out += std::format("  \"source\": [{}, {}, {}, {}, {}, {}],\n", str(s->format), str(s->formatVersion), s->skippedRecords, s->utcOffsetSeconds, hex(s->sourceHash), hex(s->metadata));
+        std::string signer = "null";
+        if (s->signer)
+        {
+            signer = std::format("[{}, {}, {}]", hex(s->signer->key), s->signer->signedToEnd, s->signer->verifiedPackets);
+        }
+        out += std::format("  \"source\": [{}, {}, {}, {}, {}, {}, {}],\n", str(s->format), str(s->formatVersion), s->skippedRecords, s->utcOffsetSeconds, hex(s->sourceHash), hex(s->metadata), signer);
     }
     else
     {

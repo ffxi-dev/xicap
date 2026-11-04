@@ -25,8 +25,13 @@ class SigningKey;
 struct Access;
 } // namespace internal
 
-// Stubs chat on the game channel in both directions. See FORMAT.md, Exclusion.
+// Zeroes the text of chat on the game channel in both directions, keeping each packet's layout: xicap-default
+// version 2. See FORMAT.md, Exclusion.
 [[nodiscard]] auto defaultExclusionPolicy() -> const ExclusionPolicy&;
+
+// Whether a policy removes at least what the default policy does: for each of its rules, the first rule of the policy
+// that matches the same packets stubs them or zeroes ranges that hold the default's.
+[[nodiscard]] auto coversDefault(const ExclusionPolicy& policy) -> bool;
 
 // Per-capture metadata, written into the header and the format-level
 // extension blocks.
@@ -35,11 +40,12 @@ struct WriterConfig
     std::string       clientVersion;
     std::string       captureAgent;
     CharacterIdentity character{};
-    ClockSource       clockSource  = ClockSource::Live;
-    Origin            origin       = Origin::Live;
-    Network           network      = Network::Unknown;
-    StartContext      startContext = StartContext::Login;
-    CaptureId         captureId{}; // all zero: the writer picks a random id
+    ClockSource       clockSource   = ClockSource::Live;
+    Origin            origin        = Origin::Live;
+    Network           network       = Network::Unknown;
+    StartContext      startContext  = StartContext::Login;
+    RecordingMode     recordingMode = RecordingMode::Default; // Everything takes a policy with no rules
+    CaptureId         captureId{};                            // all zero: the writer picks a random id
     CaptureId         previousCaptureId{};
     SecretSeed        signingSeed{}; // the recorder install's Ed25519 seed
     ExclusionPolicy   policy = defaultExclusionPolicy();
@@ -211,6 +217,8 @@ private:
     auto               writeStart() -> void;
     auto               writeFooter() -> void;
     auto               endFrame(bool last) -> void;
+    auto               writeFrame(bool last) -> void;
+    auto               usable() const -> void;
     auto               compress(std::span<const uint8_t> plain, bool endStream) -> size_t;
     auto               checkpoint() -> void;
     auto               writeCheckpoint(const CheckpointPayload& payload) -> void;
@@ -227,6 +235,7 @@ private:
     CaptureId     captureId_{};
     bool          started_{ false };
     bool          closed_{ false };
+    bool          failed_{ false }; // a write failed: no footer may follow
     uint64_t      offset_{ 0 };
 
     std::vector<ExtensionBlock>       extensions_;
@@ -264,6 +273,7 @@ private:
 
     FooterSignature                       footerSignature_{ FooterSignature::Sign };
     Signature                             copiedSignature_{};
+    CheckpointPayload                     keptCheckpoint_{}; // a rewrite's kept checkpoint, which its seal covers; zero for none
     std::unique_ptr<internal::SigningKey> sealKey_;
     std::string                           sealAgent_;
     uint64_t                              sealedAt_{ 0 };

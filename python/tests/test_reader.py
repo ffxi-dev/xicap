@@ -140,22 +140,23 @@ def test_transcode_seal(tmp_path):
     assert xicap.Reader(FIXTURE).verify()["seal"] is None
 
 
-def test_transcode_resign_format_3(tmp_path):
-    out = tmp_path / "resigned.xicap"
-    src = VECTORS / "clean.xicap"
-    xicap.transcode(src, out, seal=False, seed=bytes([9] * 32), agent="mogsafe test", source_hash=bytes(64), metadata=b"capture x")
+def test_transcode_reissue(tmp_path):
+    out = tmp_path / "reissued.xicap"
+    signer = {"key": bytes([5] * 32), "signedToEnd": True, "verifiedPackets": 51}
+    # The fixture is not converted, so it has no source block for a signer.
+    with pytest.raises(xicap.Error) as exc_info:
+        xicap.transcode(FIXTURE, out, seal=False, seed=bytes([0x22] * 32), agent="x", signer=signer)
+    assert exc_info.value.code == xicap.ErrorCode.TranscodeRefused
+    xicap.transcode(FIXTURE, out, seal=False, seed=bytes([0x22] * 32), agent="x")
     r = xicap.Reader(out)
-    assert r.version_major == 4
-    assert r.source["format"] == "xicap"
-    assert r.source["metadata"].endswith(b"transcoded-by mogsafe test\ncapture x")
-    assert [p.data for p in r] == [p.data for p in xicap.Reader(src)]
     assert r.verify()["signedToEnd"] is True
+    assert [p.data for p in r] == [p.data for p in xicap.Reader(FIXTURE)]
 
 
 def test_transcode_refuses_and_leaves_nothing(tmp_path):
     out = tmp_path / "refused.xicap"
     with pytest.raises(xicap.Error) as exc_info:
-        xicap.transcode(VECTORS / "clean.xicap", out, seal=True, seed=bytes(32), agent="x")
+        xicap.transcode(FIXTURE, out, seal=False, seed=bytes(32), agent="x")
     assert exc_info.value.code == xicap.ErrorCode.TranscodeRefused
     assert not out.exists()
 

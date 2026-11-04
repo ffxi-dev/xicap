@@ -10,7 +10,7 @@ native build byte-for-byte.
 pip install ./python
 ```
 
-Requires a C++20 toolchain (MSVC, GCC, or Clang) and CMake. The wheel build
+Requires a C++23 toolchain (MSVC, GCC, or Clang) and CMake. The wheel build
 fetches Catch2 / pybind11 / zstd via FetchContent.
 
 For development:
@@ -43,6 +43,9 @@ v = r.verify()   # v["signedToEnd"], v["seal"]
 
 # Rewrite at archive size; checked packet by packet before dst appears
 xicap.transcode("upload.xicap", "archived.xicap", seal=True, seed=seed32, agent="mogsafe 2026.11.4")
+# Reissue a file its own signer's seed signed, naming a signed source
+xicap.transcode("converted.xicap", "again.xicap", seal=False, seed=seed32, agent="mogsafe",
+                signer={"key": key32, "signedToEnd": True, "verifiedPackets": 1200})
 ```
 
 ## API

@@ -1,6 +1,6 @@
-// Writes the format-4 conformance set: each tests/vectors/4-<name>.xicap with 4-<name>.json, its expected reading (see
-// vectors.h). Every file is checked against what it was built to show before its reading is saved. The format-3 files
-// in the same directory were written by xicap 3 and stay as they are.
+// Writes the conformance set: each tests/vectors/4-<name>.xicap with 4-<name>.json, its expected reading (see
+// vectors.h). Every file is checked against what it was built to show before its reading is saved. The files are the
+// same byte for byte only with the zstd version they were made with (1.5.7).
 //
 //   xicap_make_vectors tests/vectors
 
@@ -151,7 +151,7 @@ auto cutOff(const fs::path& path) -> std::vector<uint8_t>
 
 auto mogsafe() -> TranscodeOptions
 {
-    TranscodeOptions o{ .policy = FramePolicy::archive(), .signing = Signing::Seal, .seed = {}, .agent = "mogsafe vectors", .sourceHash = {}, .metadata = {} };
+    TranscodeOptions o{ .policy = FramePolicy::archive(), .signing = Signing::Seal, .seed = {}, .agent = "mogsafe vectors", .signer = {} };
     o.seed.fill(0x99);
     return o;
 }
@@ -286,7 +286,7 @@ int main(int argc, char* argv[])
               w.mark(MarkerKind::Login, "start");
               w.write(T0, PacketDirection::ServerToClient, zoneIn(230, 1));
               w.write({ .timestamp = T0 + 1, .direction = PacketDirection::ClientToServer, .data = game(0x015, 32, 7, 1), .provenance = PacketFlag::Injected | PacketFlag::FirstInChunk });
-              w.write(T0 + 2, PacketDirection::ServerToClient, game(0x017, 64, 'x', 2));  // chat: stubbed
+              w.write(T0 + 2, PacketDirection::ServerToClient, game(0x017, 64, 'x', 2));  // chat: its text zeroed
               w.write(T0 + 3, PacketDirection::ServerToClient, game(0x020, 40, 0xFF, 3)); // redacted
               const std::vector<std::byte> search(24, std::byte{ 0x5A });
               w.write({ .timestamp = T0 + 4, .direction = PacketDirection::ServerToClient, .data = search, .channel = 1, .opcode = 5 });
@@ -509,15 +509,104 @@ int main(int argc, char* argv[])
               const auto v = Reader(p).verify();
               expect(before.verifiedPackets > 0 && v.verifiedPackets == before.verifiedPackets && !v.signedToEnd && v.seal && v.seal->good, "sealed-cut-off carries its last checkpoint");
           } },
-        { "resigned-3", [&](const fs::path& p)
+        { "converted", [&](const fs::path& p)
           {
-              auto options    = mogsafe();
-              options.signing = Signing::Resign;
-              options.sourceHash.fill(0xAB);
-              options.metadata = { 'c', 'a', 'p', 't', 'u', 'r', 'e', ' ', 'x' };
-              transcode(dir / "clean.xicap", p, options);
+              auto cfg        = config();
+              cfg.origin      = Origin::Converted;
+              cfg.clockSource = ClockSource::Converted;
+              cfg.source      = SourceInfo{ .format = "xicap", .formatVersion = "3.0", .skippedRecords = 2, .utcOffsetSeconds = -3600, .sourceHash = {}, .metadata = { 'c', 'a', 'p', 't', 'u', 'r', 'e', ' ', 'x' }, .signer = SourceSigner{ .key = {}, .signedToEnd = false, .verifiedPackets = 2 } };
+              cfg.source->sourceHash.fill(0xAB);
+              cfg.source->signer->key.fill(0xCD);
+              Writer w(p, cfg);
+              w.write(T0, PacketDirection::ServerToClient, zoneIn(230, 1));
+              w.write(T0 + 10, PacketDirection::ServerToClient, game(0x0DF, 16, 1, 2));
+              w.write(T0 + 20, PacketDirection::ServerToClient, game(0x0DF, 16, 2, 3));
+              w.close();
               Reader r(p);
-              expect(r.source() && r.source()->format == "xicap" && r.verify().signedToEnd, "resigned-3 names its format-3 source");
+              expect(r.source() && r.source()->signer && r.source()->signer->verifiedPackets == 2 && r.verify().signedToEnd, "converted names its source and the source's signer");
+          } },
+        { "everything", [&](const fs::path& p)
+          {
+              auto cfg          = config();
+              cfg.recordingMode = RecordingMode::Everything;
+              cfg.policy        = { .name = "none", .version = 1, .rules = {} };
+              Writer w(p, cfg);
+              w.write(T0, PacketDirection::ServerToClient, zoneIn(230, 1));
+              w.write(T0 + 10, PacketDirection::ServerToClient, game(0x017, 32, 'x', 2)); // chat: kept
+              w.close();
+              Reader r(p);
+              expect(r.recordingMode() == RecordingMode::Everything && count(p) == 2, "a recording that keeps everything keeps chat");
+          } },
+        { "unknown-mode", [&](const fs::path& p)
+          {
+              session(tmp, 1, alone());
+              auto bytes           = bytesOf(tmp);
+              auto header          = podAt<Header>(bytes, 0);
+              header.recordingMode = static_cast<RecordingMode>(3);
+              header.headerCrc     = internal::crc32({ reinterpret_cast<const uint8_t*>(&header), offsetof(Header, headerCrc) });
+              std::memcpy(bytes.data(), &header, sizeof(header));
+              save(p, bytes);
+              expect(refuses(p, ErrorCode::UnknownRecordingMode), "an unknown recording mode is refused");
+          } },
+        { "edited-packet", [&](const fs::path& p)
+          {
+              session(tmp, 3, alone());
+              const auto bytes = cutOff(tmp);
+              const auto f     = packetFrames(bytes)[1];
+              auto       plain = plainOf(bytes, f);
+              plain.back() ^= 0x01; // the last byte of the frame's last packet
+              save(p, splice(bytes, f.offset, f.size, packetFrame(podAt<FrameHeader>(bytes, f.offset), plain)));
+              const auto v = Reader(p).verify();
+              expect(count(p) == 9 && v.firstFailureOffset && v.verifiedPackets == 0, "an edited packet reads, and the checkpoint over it fails");
+          } },
+        { "character-mismatch", [&](const fs::path& p)
+          {
+              Writer w(p, config());
+              auto   other = zoneIn(230, 1);
+              std::memcpy(other.data() + FFXIPacket::LOGIN_NAME_OFFSET, "Other\0", 6);
+              w.write(T0, PacketDirection::ServerToClient, other);
+              w.close();
+              Reader     r(p);
+              ReadPacket pk{};
+              while (r.next(pk))
+              {
+              }
+              expect(r.characterMismatch(), "a zone-in naming another character reads, and is reported");
+          } },
+        { "bad-header-crc", [&](const fs::path& p)
+          {
+              session(tmp, 1, alone());
+              auto bytes = bytesOf(tmp);
+              bytes[offsetof(Header, clientVersion)] ^= 0x01;
+              save(p, bytes);
+              expect(refuses(p, ErrorCode::HeaderChecksumMismatch), "a header whose CRC fails is refused");
+          } },
+        { "bad-extension-crc", [&](const fs::path& p)
+          {
+              session(tmp, 1, alone());
+              auto bytes = bytesOf(tmp);
+              bytes[HEADER_SIZE + sizeof(ExtensionBlockHeader)] ^= 0x01; // the policy's name
+              save(p, bytes);
+              expect(refuses(p, ErrorCode::ExtensionChecksumMismatch), "a block whose CRC fails is refused");
+          } },
+        { "format-2", [&](const fs::path& p)
+          {
+              session(tmp, 1, alone());
+              auto bytes = bytesOf(tmp);
+              std::memcpy(bytes.data(), "XCAP", 4);
+              save(p, bytes);
+              expect(refuses(p, ErrorCode::BadMagic), "a format-2 magic is refused");
+          } },
+        { "version-3", [&](const fs::path& p)
+          {
+              session(tmp, 1, alone());
+              auto bytes          = bytesOf(tmp);
+              auto header         = podAt<Header>(bytes, 0);
+              header.versionMajor = 3;
+              header.headerCrc    = internal::crc32({ reinterpret_cast<const uint8_t*>(&header), offsetof(Header, headerCrc) });
+              std::memcpy(bytes.data(), &header, sizeof(header));
+              save(p, bytes);
+              expect(refuses(p, ErrorCode::UnsupportedVersion), "format 3 is refused");
           } },
         { "unknown-skippable-kind", [&](const fs::path& p)
           {

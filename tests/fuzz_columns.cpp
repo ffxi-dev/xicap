@@ -1,7 +1,7 @@
 // libFuzzer target for the format-4 column decoder. The first 6 bytes give the packet and marker counts; the rest is
 // a frame's plaintext. Build with clang and -fsanitize=fuzzer,address:
 //
-//   clang++ -std=c++20 -g -O1 -fsanitize=fuzzer,address -Iinclude -Isrc tests/fuzz_columns.cpp src/columns.cpp
+//   clang++ -std=c++23 -g -O1 -fsanitize=fuzzer,address -Iinclude -Isrc tests/fuzz_columns.cpp src/columns.cpp
 
 #include "internal/columns.h"
 #include "xicap/constants.h"

@@ -94,7 +94,7 @@ func TestWriteThenRead(t *testing.T) {
 	if !s.Closed || s.Packets != 6 || s.Frames != 2 || s.VersionMajor != 4 || s.CaptureAgent != "test" ||
 		s.Character.Name != "Nouurs" || s.Character.ContentID != 0x01020304 || s.Network != NetworkRetail ||
 		s.StartContext != StartLogin || s.StartTimestamp != t0 || s.EndTimestamp != t0+1002 ||
-		s.Policy.Name != "xicap-default" || s.RuleCount != 5 || len(s.Policy.Rules) != 5 || !s.SignedToEnd || s.VerifiedPackets != 6 || s.Source != nil {
+		s.Policy.Name != "xicap-default" || s.RuleCount != 6 || len(s.Policy.Rules) != 6 || !s.SignedToEnd || s.VerifiedPackets != 6 || s.Source != nil {
 		t.Fatalf("unexpected summary %+v", s)
 	}
 }
@@ -217,7 +217,7 @@ func TestChannelsAndMarkers(t *testing.T) {
 // search messages on channel 1 between game packets, and reads them back.
 // The Go binding reads only a Summary; the conformance set checks the bytes.
 func TestSearchRoundTrip(t *testing.T) {
-	b, err := os.ReadFile("../tests/vectors/search.json")
+	b, err := os.ReadFile("../tests/vectors/4-search.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -355,7 +355,7 @@ func TestPolicyAction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if a := s.Policy.Action(ChannelGame, DirServerToClient, 0x017); a != ActionStub {
+	if a := s.Policy.Action(ChannelGame, DirServerToClient, 0x017); a != ActionZeroRange || !s.CoversDefault {
 		t.Fatalf("chat to the client: action %d", a)
 	}
 	if a := s.Policy.Action(ChannelGame, DirClientToServer, 0x017); a != 0 {
@@ -430,77 +430,6 @@ func TestMarkers(t *testing.T) {
 	}
 }
 
-func TestCut(t *testing.T) {
-	src := filepath.Join(t.TempDir(), "src.xicap")
-	w, err := Create(src, info())
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, step := range []error{
-		w.Mark(MarkerLogin, ""), w.Write(t0, false, pkt),
-		w.Mark(MarkerNote, "cap start quest"), w.Write(t0+10, true, pkt), w.Write(t0+20, false, pkt), w.Flush(),
-		w.Mark(MarkerNote, "cap stop quest"), w.Write(t0+30, false, pkt), w.Close(),
-	} {
-		if step != nil {
-			t.Fatal(step)
-		}
-	}
-	// The key a seed signs with, as a writer reports it.
-	seed := [32]byte{9}
-	kw, err := Create(filepath.Join(t.TempDir(), "k.xicap"), WriterInfo{SigningSeed: seed})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, key := kw.IDs()
-	kw.Close()
-
-	dst := filepath.Join(t.TempDir(), "cut.xicap")
-	if err := Cut(src, dst, 1, 2, "mogsafe", seed, [64]byte{7}, []byte("capture abc")); err != nil {
-		t.Fatal(err)
-	}
-	s, err := Read(dst)
-	if err != nil {
-		t.Fatal(err)
-	}
-	from, _ := Read(src)
-	if s.Packets != 2 || s.StartTimestamp != t0+10 || s.EndTimestamp != t0+20 || !s.Closed || !s.SignedToEnd || s.SigningKey != key {
-		t.Fatalf("cut: %+v", s)
-	}
-	if s.Character != from.Character || s.ClientVersion != from.ClientVersion || s.Network != from.Network || s.ClockSource != from.ClockSource ||
-		s.Policy.Name != from.Policy.Name || s.RuleCount != from.RuleCount || s.CaptureAgent != "mogsafe" {
-		t.Fatalf("header: %+v\nsource: %+v", s, from)
-	}
-	if s.Origin != OriginConverted || s.StartContext != StartMidSession || s.Source == nil || s.Source.Format != "xicap" || s.Source.FormatVersion != "4.0" {
-		t.Fatalf("provenance: %+v %+v", s, s.Source)
-	}
-	if m, err := Markers(dst); err != nil || !reflect.DeepEqual(m, []Marker{{MarkerNote, "cap start quest", 0, t0 + 10}}) {
-		t.Fatalf("markers: %+v %v", m, err)
-	}
-
-	// The same range of the same recording cuts to the same file; another range gets another id.
-	if err := Cut(src, dst+"again", 1, 2, "mogsafe", seed, [64]byte{7}, []byte("capture abc")); err != nil {
-		t.Fatal(err)
-	}
-	if a, b := mustRead(t, dst), mustRead(t, dst+"again"); !bytes.Equal(a, b) {
-		t.Fatal("two cuts of one range differ")
-	}
-	if err := Cut(src, dst+"2", 0, 3, "mogsafe", seed, [64]byte{}, nil); err != nil {
-		t.Fatal(err)
-	}
-	if other, _ := Read(dst + "2"); other.CaptureID == s.CaptureID {
-		t.Fatal("two ranges share an id")
-	}
-	if s, _ := Read(dst + "2"); s.Packets != 4 || s.StartContext != StartLogin {
-		t.Fatalf("a cut from the first packet starts where its source does: %+v", s)
-	}
-	if err := Cut(src, dst+"3", 2, 9, "mogsafe", seed, [64]byte{}, nil); err == nil {
-		t.Fatal("a range past the end: no error")
-	}
-	if _, err := os.Stat(dst + "3"); err == nil {
-		t.Fatal("a failed cut leaves its file")
-	}
-}
-
 func mustRead(t *testing.T, path string) []byte {
 	t.Helper()
 	b, err := os.ReadFile(path)
@@ -529,24 +458,41 @@ func TestTranscode(t *testing.T) {
 		t.Fatal("a recorder's own file has a seal")
 	}
 
-	// A format-3 capture is re-signed, and keeps its packets.
-	resigned := filepath.Join(t.TempDir(), "resigned.xicap")
-	if err := Transcode("../tests/vectors/clean.xicap", resigned, TranscodeOptions{Agent: "mogsafe test", Seed: mogsafe, SourceHash: [64]byte{1}, Metadata: []byte("capture x")}); err != nil {
+	if in.RecordingMode != ModeDefault {
+		t.Fatalf("mode: %v", in.RecordingMode)
+	}
+	everything := info()
+	everything.RecordingMode = ModeEverything
+	everything.Policy = &Policy{Name: "none", Version: 1}
+	if s, err := Read(capture(t, 1, everything)); err != nil || s.RecordingMode != ModeEverything || s.RuleCount != 0 {
+		t.Fatalf("everything: %+v %v", s, err)
+	}
+	if !reflect.DeepEqual(in.Channels, []uint8{0}) {
+		t.Fatalf("channels: %v", in.Channels)
+	}
+
+	// The signer writes its own converted file again, naming a signed source.
+	ci := info()
+	ci.Origin = OriginConverted
+	ci.Source = &Source{Format: "xicap", FormatVersion: "3.0", Metadata: []byte("x")}
+	conv := capture(t, 2, ci)
+	reissued := filepath.Join(t.TempDir(), "reissued.xicap")
+	signer := SourceSigner{Key: [32]byte{5}, VerifiedPackets: 6}
+	if err := Transcode(conv, reissued, TranscodeOptions{Seed: ci.SigningSeed, Signer: &signer}); err != nil {
 		t.Fatal(err)
 	}
-	old, _ := Read("../tests/vectors/clean.xicap")
-	s, err = Read(resigned)
+	s, err = Read(reissued)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.VersionMajor != 4 || s.Packets != old.Packets || !s.SignedToEnd || s.SigningKey == old.SigningKey || s.Seal != nil || s.Source == nil || s.Source.Format != "xicap" || s.Source.FormatVersion != "3.0" {
-		t.Fatalf("resigned: %+v", s)
+	if !s.SignedToEnd || s.Seal != nil || s.Source == nil || s.Source.Signer == nil || *s.Source.Signer != signer {
+		t.Fatalf("reissued: %+v %+v", s, s.Source)
 	}
 
-	// A seal refuses format 3 and leaves no file.
+	// Another signer's seed is refused and leaves no file.
 	refused := filepath.Join(t.TempDir(), "refused.xicap")
-	if err := Transcode("../tests/vectors/clean.xicap", refused, TranscodeOptions{Seal: true, Seed: mogsafe}); err == nil {
-		t.Fatal("sealed format 3")
+	if err := Transcode(conv, refused, TranscodeOptions{Seed: mogsafe, Signer: &signer}); err == nil {
+		t.Fatal("reissued another signer's file")
 	}
 	if _, err := os.Stat(refused); !os.IsNotExist(err) {
 		t.Fatal("a refused transcode left a file")

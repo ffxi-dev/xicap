@@ -211,6 +211,10 @@ int main(int argc, char* argv[])
         if (const auto& source = reader.source())
         {
             std::cout << "Source:         " << source->format << " " << source->formatVersion << ", " << source->skippedRecords << " records skipped\n";
+            if (const auto& signer = source->signer)
+            {
+                std::cout << "Source signer:  " << hex(signer->key) << ", " << (signer->signedToEnd ? "signed to the end" : std::format("{} packets verified", signer->verifiedPackets)) << "\n";
+            }
         }
         for (const auto& ext : reader.extensions())
         {

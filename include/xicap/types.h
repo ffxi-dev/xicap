@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -21,8 +22,7 @@ using CaptureId  = std::array<uint8_t, 16>;
 using PublicKey  = std::array<uint8_t, 32>;
 using SecretSeed = std::array<uint8_t, 32>;
 using Signature  = std::array<uint8_t, 64>;
-using ChainValue = std::array<uint8_t, 64>; // format 3's hash chain
-using Digest     = std::array<uint8_t, 64>; // format 4's D(k), a SHA-512
+using Digest     = std::array<uint8_t, 64>; // D(k), a SHA-512
 
 enum class ClockSource : uint8_t
 {
@@ -50,6 +50,14 @@ enum class StartContext : uint8_t
     Unknown    = 0,
     Login      = 1,
     MidSession = 2,
+};
+
+// What the recorder kept of what players write. Readers refuse a mode they do not know. See FORMAT.md, Header.
+enum class RecordingMode : uint8_t
+{
+    Default    = 0, // the exclusion policy removes the text of chat
+    Everything = 1, // the exclusion policy has no rules: chat is kept
+    Anonymous  = 2, // as Default, and names and player ids are pseudonyms
 };
 
 // Channel numbers come from the registry in FORMAT.md. Readers pass on
@@ -86,7 +94,6 @@ inline constexpr uint16_t Injected       = 0x0002;
 inline constexpr uint16_t Blocked        = 0x0004;
 inline constexpr uint16_t Modified       = 0x0008;
 inline constexpr uint16_t FirstInChunk   = 0x0010;
-inline constexpr uint16_t Carried        = 0x0020; // from before a cut's start; see FORMAT.md, Carried packets
 inline constexpr uint16_t Provenance     = 0x00FE; // bits 1 to 7
 inline constexpr uint16_t Excluded       = 0x0100;
 inline constexpr uint16_t Redacted       = 0x0200;
@@ -107,7 +114,7 @@ struct CharacterIdentity
 };
 static_assert(sizeof(CharacterIdentity) == 44);
 
-// Written once, with every field final. The same in formats 3 and 4. See FORMAT.md.
+// Written once, with every field final. See FORMAT.md.
 struct Header
 {
     std::array<uint8_t, 8>                   magic;
@@ -124,7 +131,7 @@ struct Header
     Origin                                   origin;
     Network                                  network;
     StartContext                             startContext;
-    uint8_t                                  reserved2;
+    RecordingMode                            recordingMode;
     uint32_t                                 dictionaryId;
     uint32_t                                 reserved3;
     PublicKey                                signingKey;
@@ -138,6 +145,7 @@ static_assert(sizeof(Header) == 384);
 static_assert(offsetof(Header, startTimestamp) == 56);
 static_assert(offsetof(Header, clockSource) == 67);
 static_assert(offsetof(Header, startContext) == 70);
+static_assert(offsetof(Header, recordingMode) == 71);
 static_assert(offsetof(Header, dictionaryId) == 72);
 static_assert(offsetof(Header, signingKey) == 80);
 static_assert(offsetof(Header, captureAgent) == 112);
@@ -153,7 +161,7 @@ struct ExtensionBlockHeader
 };
 static_assert(sizeof(ExtensionBlockHeader) == 8);
 
-// Format 4. Followed by payloadSize bytes, then a u32 CRC of everything from magic on.
+// Followed by payloadSize bytes, then a u32 CRC of everything from magic on.
 struct FrameHeader
 {
     uint32_t  magic;
@@ -183,57 +191,12 @@ struct CheckpointPayload
 };
 static_assert(sizeof(CheckpointPayload) == 136);
 
-// Format 3 (FORMAT-3.md). Followed by payloadSize bytes, then a u32 CRC.
-struct FrameHeader3
-{
-    uint32_t  magic;
-    FrameKind kind;
-    uint8_t   reserved0;
-    uint16_t  markerCount;
-    uint32_t  payloadSize;
-    uint32_t  packetCount;
-    uint64_t  baseTimestamp;
-    uint16_t  zoneId;
-    uint16_t  reserved1;
-};
-static_assert(sizeof(FrameHeader3) == 28);
-static_assert(offsetof(FrameHeader3, baseTimestamp) == 16);
-
-// Format 3. Followed by `length` bytes of packet data.
-struct PacketEntry3
-{
-    uint16_t deltaMs;
-    uint16_t flags;
-    uint8_t  channel;
-    uint8_t  reserved;
-    uint16_t opcode;
-    uint32_t length;
-};
-static_assert(sizeof(PacketEntry3) == 12);
-
-// Format 3. Followed by textLength bytes of UTF-8. Sits just before packet packetIndex.
-struct FrameMarker3
-{
-    uint16_t   packetIndex;
-    MarkerKind kind;
-    uint8_t    reserved;
-    uint16_t   textLength;
-};
-static_assert(sizeof(FrameMarker3) == 6);
-
-struct CheckpointPayload3
-{
-    ChainValue chain;
-    Signature  signature;
-};
-static_assert(sizeof(CheckpointPayload3) == 128);
-
 struct FooterIndexEntry
 {
     uint64_t timestamp;
     uint64_t fileOffset;
     uint16_t zoneId;
-    uint8_t  flags; // format 4: IndexFlag. Format 3 writes 0
+    uint8_t  flags; // IndexFlag
     uint8_t  reserved[5];
 };
 static_assert(sizeof(FooterIndexEntry) == 24);
@@ -243,7 +206,7 @@ namespace IndexFlag
 inline constexpr uint8_t Restart = 0x01;
 } // namespace IndexFlag
 
-// Format 4: what another program that rewrote the file signed.
+// What another program that rewrote the file signed.
 struct SealBlock
 {
     uint32_t                magic;
@@ -263,7 +226,7 @@ struct FooterTrailer
 {
     uint64_t  endTimestamp;
     uint64_t  totalPacketCount;
-    uint32_t  trailerFlags; // format 4: TrailerFlag. Format 3 writes 0
+    uint32_t  trailerFlags; // TrailerFlag
     uint32_t  entryCount;
     uint64_t  indexOffset;
     uint32_t  indexCrc;
@@ -314,19 +277,31 @@ struct SourceHeader
 };
 static_assert(sizeof(SourceHeader) == 108);
 
+// The SOURCE_SIGNER block's payload.
+struct SourceSignerBlock
+{
+    PublicKey              signingKey;
+    uint64_t               verifiedPackets;
+    uint8_t                flags; // SourceSignerFlag
+    std::array<uint8_t, 7> reserved;
+};
+static_assert(sizeof(SourceSignerBlock) == 48);
+
+namespace SourceSignerFlag
+{
+inline constexpr uint8_t SignedToEnd = 0x01;
+} // namespace SourceSignerFlag
+
 #pragma pack(pop)
 
-// Well-known extension block types. 0x0001 to 0x0007 held client memory copies
-// in 2.x and are retired.
+// Well-known extension block types. 0x0001 to 0x0008 held client memory copies
+// and a zstd dictionary in earlier formats and are retired.
 enum ExtensionType : uint32_t
 {
-    EXT_ZSTD_DICT        = 0x0008,
     EXT_EXCLUSION_POLICY = 0x0009,
     EXT_SOURCE           = 0x000A,
+    EXT_SOURCE_SIGNER    = 0x000B,
 };
-
-inline constexpr uint32_t EXT_RETIRED_FIRST = 0x0001;
-inline constexpr uint32_t EXT_RETIRED_LAST  = 0x0007;
 
 enum class ExclusionDirection : uint8_t
 {
@@ -363,15 +338,24 @@ struct ExclusionPolicy
     std::vector<ExclusionRule> rules;
 };
 
+// A source that was a signed capture: its signer, and what its signatures covered when its packets were taken.
+struct SourceSigner
+{
+    PublicKey key{};
+    bool      signedToEnd{};
+    uint64_t  verifiedPackets{};
+};
+
 // Metadata a converted capture carries about its source.
 struct SourceInfo
 {
-    std::string             format;
-    std::string             formatVersion;
-    uint32_t                skippedRecords{};
-    int32_t                 utcOffsetSeconds{};
-    std::array<uint8_t, 64> sourceHash{};
-    std::vector<uint8_t>    metadata;
+    std::string                 format;
+    std::string                 formatVersion;
+    uint32_t                    skippedRecords{};
+    int32_t                     utcOffsetSeconds{};
+    std::array<uint8_t, 64>     sourceHash{};
+    std::vector<uint8_t>        metadata;
+    std::optional<SourceSigner> signer; // the SOURCE_SIGNER block, when the source was signed
 };
 
 struct ReadMarker
@@ -420,7 +404,6 @@ enum class ErrorCode
     // Appended only: the bindings mirror this enum by ordinal.
     HeaderChecksumMismatch,
     ExtensionChecksumMismatch,
-    MissingDictionary,
     MissingPolicy,
     UnknownFrameKind,
     UnknownPacketFlag,
@@ -430,6 +413,7 @@ enum class ErrorCode
     PacketTooShort,
     TranscodeRefused,
     TranscodeMismatch,
+    UnknownRecordingMode,
 };
 
 class Error : public std::runtime_error

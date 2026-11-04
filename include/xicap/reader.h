@@ -43,7 +43,7 @@ struct SkippedRegion
     uint64_t length;
 };
 
-// Format 4: the seal of a program that rewrote the file. See FORMAT.md, Signatures.
+// The seal of a program that rewrote the file. See FORMAT.md, Signatures.
 struct SealCheck
 {
     PublicKey   key{};
@@ -65,10 +65,10 @@ struct Verification
     uint32_t goodCheckpoints{ 0 };
     // First checkpoint frame, or footer index, whose signature fails, if any.
     std::optional<uint64_t> firstFailureOffset;
-    // Format 4: the last checkpoint that verifies, which a rewrite of a cut-off file carries.
+    // The last checkpoint that verifies, which a rewrite of a cut-off file keeps.
     Digest    checkpointDigest{};
     Signature checkpointSignature{};
-    // Format 4: the seal, in a file another program rewrote.
+    // The seal, in a file another program rewrote.
     std::optional<SealCheck> seal;
 };
 
@@ -121,6 +121,10 @@ public:
     {
         return header_.startContext;
     }
+    [[nodiscard]] auto recordingMode() const noexcept -> RecordingMode
+    {
+        return header_.recordingMode;
+    }
     [[nodiscard]] auto character() const noexcept -> const CharacterIdentity&
     {
         return header_.character;
@@ -172,7 +176,7 @@ public:
     {
         return source_;
     }
-    // Blocks other than the dictionary, policy, and source.
+    // Blocks other than the policy and source.
     [[nodiscard]] auto extensions() const noexcept -> const std::vector<ExtensionBlock>&
     {
         return extensions_;
@@ -206,8 +210,8 @@ public:
     }
     [[nodiscard]] auto durationMs() const -> uint64_t;
 
-    // Checks every signature over the whole file, in format 3 by its hash
-    // chain and in format 4 by its signed stream. Independent of iteration.
+    // Checks every signature over the whole file by its signed stream.
+    // Independent of iteration.
     [[nodiscard]] auto verify() -> Verification;
 
     class Iterator
@@ -264,8 +268,6 @@ private:
     auto               resync(uint64_t from, uint64_t limit) -> std::optional<uint64_t>;
     auto               skip(uint64_t offset, uint64_t length) -> void;
     auto               advance() -> bool;
-    auto               verify3() -> Verification;
-    auto               verify4() -> Verification;
 
     std::ifstream                     file_;
     ReaderOptions                     options_;
@@ -273,7 +275,6 @@ private:
     Header                            header_{};
     std::vector<uint8_t>              headerBytes_;
     std::vector<std::vector<uint8_t>> blockBytes_; // each from type to crc
-    std::vector<uint8_t>              dictionary_; // format 3
     uint64_t                          dataStart_{ 0 };
     uint64_t                          endOffset_{ 0 };
 

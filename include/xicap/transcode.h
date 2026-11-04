@@ -3,11 +3,10 @@
 #include "types.h"
 #include "writer.h"
 
-#include <array>
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string>
-#include <vector>
 
 namespace xicap
 {
@@ -15,11 +14,13 @@ namespace xicap
 // How a transcode signs what it writes. See FORMAT.md, Rewriting a capture.
 enum class Signing
 {
-    // Keep the signer's header, blocks, and signatures; add a seal made with the seed. Format 4 only: a file
-    // complete and signed to the end, or cut off.
+    // Keep the signer's header, blocks, and signatures; add a seal made with the seed. Takes a file complete and
+    // signed to the end, a cut-off one, or a sealed one whose end was never signed; refuses one with a signature that
+    // fails.
     Seal,
-    // Sign anew with the seed. Any format; a file of another major version gets a SOURCE block naming it.
-    Resign,
+    // The signer writes its own file again: the seed must be the one the header's key comes from. Takes a file
+    // complete and signed to the end. With signer set, the file's SOURCE_SIGNER block becomes that one.
+    Reissue,
 };
 
 struct TranscodeOptions
@@ -27,10 +28,9 @@ struct TranscodeOptions
     FramePolicy policy  = FramePolicy::archive();
     Signing     signing = Signing::Seal;
     SecretSeed  seed{}; // the transcoder's Ed25519 seed
-    std::string agent;  // the transcoder's name, for the seal or the source block
-    // Resign: the SHA-512 of src as stored, and what to add to the source block's metadata.
-    std::array<uint8_t, 64> sourceHash{};
-    std::vector<uint8_t>    metadata;
+    std::string agent;  // Seal: the seal's agent, the transcoder with its version
+    // Reissue: the signed capture the file's packets came from. The file must have a SOURCE block.
+    std::optional<SourceSigner> signer;
 };
 
 struct TranscodeResult
@@ -41,27 +41,18 @@ struct TranscodeResult
     uint64_t bytesOut{};
 };
 
-// Rewrites src as format 4 at dst, then reads dst back and checks that it holds the same packets and markers as src
-// and that its signatures verify. It writes a file of its own beside dst and renames it to dst only once checked.
-// Throws Error, leaving dst as it was: TranscodeRefused for a src the mode does not take, TranscodeMismatch for any
-// difference.
+// Rewrites src at dst with other frames and compression, then reads dst back and checks that it holds the same
+// packets and markers as src and that its signatures verify. The packets and the capture id stay; the bytes depend
+// on the zstd version. It writes a file of its own beside dst and renames it to dst only once checked. Throws Error,
+// leaving dst as it was: TranscodeRefused for a src the mode does not take, TranscodeMismatch for any difference.
 auto transcode(const std::filesystem::path& src, const std::filesystem::path& dst, const TranscodeOptions& options) -> TranscodeResult;
 
-struct CutOptions
-{
-    uint64_t                first{}; // the first and last packet to keep, counting from 0
-    uint64_t                last{};
-    SecretSeed              seed{};       // the cutter's Ed25519 seed
-    std::string             agent;        // the cutter's name, as the cut's captureAgent
-    std::array<uint8_t, 64> sourceHash{}; // the SHA-512 of src as stored
-    std::vector<uint8_t>    metadata;     // the source block's metadata
-};
-
-// Writes packets first to last of src, with the markers before each, as a new capture at dst signed with the seed.
-// Ahead of them it writes the scene: packets from before first that tell a reader the zone and what is in view,
-// flagged PacketFlag::Carried. See README.md, Cuts. The cut keeps src's client version, character, clock, network
-// and exclusion policy; it is converted, and its source block names src. The same range of the same src always cuts
-// to the same bytes. Throws on a range src does not hold; dst is then incomplete.
-auto cut(const std::filesystem::path& src, const std::filesystem::path& dst, const CutOptions& options) -> void;
+// Writes the packets of source whose frame does not end within its first fromByte bytes, up to its last intact frame,
+// with the markers before them, as a new capture at out that continues source: a new capture id, source's id as
+// previousCaptureId, startContext MidSession, and source's agent, client, character, clock, origin, network,
+// recording mode, exclusion policy and source block. Packets are copied as stored. Signed with seed and written with policy. Returns
+// the packets written; with none, it writes no file. Throws Error, leaving out as it was. For a recorder whose upload
+// was cut off: fromByte is what the archive holds.
+auto continueFrom(const std::filesystem::path& source, uint64_t fromByte, const std::filesystem::path& out, const SecretSeed& seed, FramePolicy policy = FramePolicy::live()) -> uint64_t;
 
 } // namespace xicap

@@ -1,10 +1,10 @@
 // Package xicap is the Go binding for the xicap C++ library. It needs cgo, a
-// C++20 compiler, and libzstd.
+// C++23 compiler, and libzstd.
 package xicap
 
 /*
 #cgo CFLAGS: -I${SRCDIR}/../third_party/monocypher
-#cgo CXXFLAGS: -std=c++20 -I${SRCDIR}/../include -I${SRCDIR}/../src -I${SRCDIR}/../third_party/monocypher
+#cgo CXXFLAGS: -std=c++23 -I${SRCDIR}/../include -I${SRCDIR}/../src -I${SRCDIR}/../third_party/monocypher
 #cgo LDFLAGS: -lzstd
 #include <stdlib.h>
 #include "capi.h"
@@ -15,21 +15,21 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"os"
 	"unsafe"
 )
 
-// HeaderSize is the length of a format 3.0 or 4.0 header, the least a
+// HeaderSize is the length of a format 4.0 header, the least a
 // capture's first bytes must hold before CheckHeader can judge them.
 const HeaderSize = 384
 
 // Values of the header's provenance fields. See FORMAT.md.
 type (
-	ClockSource  uint8
-	Origin       uint8
-	Network      uint8
-	StartContext uint8
-	MarkerKind   uint8
+	ClockSource   uint8
+	Origin        uint8
+	Network       uint8
+	StartContext  uint8
+	RecordingMode uint8
+	MarkerKind    uint8
 )
 
 const (
@@ -49,6 +49,11 @@ const (
 	StartLogin      StartContext = 1
 	StartMidSession StartContext = 2
 
+	// What the recorder kept of what players write.
+	ModeDefault    RecordingMode = 0 // the exclusion policy removes the text of chat
+	ModeEverything RecordingMode = 1 // the exclusion policy has no rules: chat is kept
+	ModeAnonymous  RecordingMode = 2 // as ModeDefault, and names and player ids are pseudonyms
+
 	MarkerNote   MarkerKind = 0
 	MarkerLogin  MarkerKind = 1
 	MarkerLogout MarkerKind = 2
@@ -63,7 +68,6 @@ const (
 	FlagBlocked      uint16 = 0x0004
 	FlagModified     uint16 = 0x0008
 	FlagFirstInChunk uint16 = 0x0010
-	FlagCarried      uint16 = 0x0020
 )
 
 // Exclusion rule directions and actions. See FORMAT.md, Exclusion.
@@ -119,6 +123,14 @@ type SourceSummary struct {
 	Format        string
 	FormatVersion string
 	Skipped       uint32
+	Signer        *SourceSigner // set when the source was a signed capture
+}
+
+// SourceSigner is a signed source's signer, and what its signatures covered when its packets were taken.
+type SourceSigner struct {
+	Key             [32]byte
+	SignedToEnd     bool
+	VerifiedPackets uint64
 }
 
 // Summary describes a capture after reading every frame and checking its
@@ -135,6 +147,7 @@ type Summary struct {
 	Origin            Origin
 	Network           Network
 	StartContext      StartContext
+	RecordingMode     RecordingMode
 	StartZoneID       uint16 // the first packet frame's zone
 	EndZoneID         uint16 // the last packet frame's zone
 	StartTimestamp    uint64 // Unix ms
@@ -147,12 +160,14 @@ type Summary struct {
 	CharacterMismatch bool   // a zone-in names a character other than the header's
 	Policy            Policy // its first 256 rules; RuleCount says how many there are
 	RuleCount         uint32
+	CoversDefault     bool           // the policy removes at least what xicap's default policy does
 	Source            *SourceSummary // set on converted captures
 	SigningKey        [32]byte
-	SignedToEnd       bool   // the footer's signature verifies
-	VerifiedPackets   uint64 // packets covered by the last good signature
-	FirstFailure      uint64 // file offset of the first checkpoint or footer whose signature fails; 0 when none does
-	Seal              *Seal  // set on a format-4 file another program rewrote
+	SignedToEnd       bool    // the footer's signature verifies
+	VerifiedPackets   uint64  // packets covered by the last good signature
+	FirstFailure      uint64  // file offset of the first checkpoint or footer whose signature fails; 0 when none does
+	Seal              *Seal   // set on a file another program rewrote
+	Channels          []uint8 // the channels the packets use, in order
 }
 
 // Seal is what a program that rewrote a capture signed: every packet, with its key, name, and time.
@@ -176,7 +191,7 @@ func HeaderLength(b []byte) (int, error) {
 	}
 	n := C.xicap_header_size((*C.uint8_t)(unsafe.Pointer(&b[0])), C.size_t(len(b)))
 	if n < 0 {
-		return 0, errors.New("xicap: not a format 3 or 4 header")
+		return 0, errors.New("xicap: not a format 4 header")
 	}
 	return int(n), nil
 }
@@ -222,6 +237,7 @@ func Read(path string) (Summary, error) {
 		Origin:            Origin(s.origin),
 		Network:           Network(s.network),
 		StartContext:      StartContext(s.start_context),
+		RecordingMode:     RecordingMode(s.recording_mode),
 		StartZoneID:       uint16(s.start_zone_id),
 		EndZoneID:         uint16(s.end_zone_id),
 		StartTimestamp:    uint64(s.start_timestamp),
@@ -234,6 +250,7 @@ func Read(path string) (Summary, error) {
 		CharacterMismatch: s.character_mismatch != 0,
 		Policy:            Policy{Name: C.GoString(&s.policy_name[0]), Version: uint32(s.policy_version)},
 		RuleCount:         uint32(s.rule_count),
+		CoversDefault:     s.covers_default != 0,
 		SigningKey:        *(*[32]byte)(unsafe.Pointer(&s.signing_key[0])),
 		SignedToEnd:       s.signed_to_end != 0,
 		VerifiedPackets:   uint64(s.verified_packets),
@@ -256,6 +273,18 @@ func Read(path string) (Summary, error) {
 			Format:        C.GoString(&s.source_format[0]),
 			FormatVersion: C.GoString(&s.source_format_version[0]),
 			Skipped:       uint32(s.skipped_records),
+		}
+		if s.has_source_signer != 0 {
+			out.Source.Signer = &SourceSigner{
+				Key:             *(*[32]byte)(unsafe.Pointer(&s.source_signing_key[0])),
+				SignedToEnd:     s.source_signed_to_end != 0,
+				VerifiedPackets: uint64(s.source_verified_packets),
+			}
+		}
+	}
+	for c := 0; c < 256; c++ {
+		if s.channels[c/8]&(1<<(c%8)) != 0 {
+			out.Channels = append(out.Channels, uint8(c))
 		}
 	}
 	return out, nil
@@ -310,10 +339,11 @@ type WriterInfo struct {
 	Origin            Origin
 	Network           Network
 	StartContext      StartContext
+	RecordingMode     RecordingMode // ModeEverything takes a Policy with no rules
 	PreviousCaptureID [16]byte
 	SigningSeed       [32]byte // the recorder's Ed25519 seed
 	Source            *Source  // required with OriginConverted
-	Policy            *Policy  // nil: the default, which stubs chat
+	Policy            *Policy  // nil: the default, which zeroes the text of chat
 	Preset            Preset
 	Level             int // zstd level; 0 for the preset's. Level 3 holds a live writer's compressor to about 3.7 MB
 }
@@ -356,6 +386,7 @@ func Create(path string, info WriterInfo) (*Writer, error) {
 		origin:         C.uint8_t(info.Origin),
 		network:        C.uint8_t(info.Network),
 		start_context:  C.uint8_t(info.StartContext),
+		recording_mode: C.uint8_t(info.RecordingMode),
 	}
 	ci.preset = C.int(info.Preset)
 	ci.level = C.int(info.Level)
@@ -497,61 +528,38 @@ func (w *Writer) Close() error {
 	return nil
 }
 
-// Cut writes packets first to last of the capture at src, counting from 0, with the markers before each, as a new
-// capture at dst signed with seed. Ahead of them it writes the packets from before first that tell a reader the zone
-// and what is in view, flagged FlagCarried and stamped with first's time (README.md, Cuts). The cut keeps src's client version, character, clock, network and exclusion policy;
-// it is converted (OriginConverted), and its source block names format "xicap" with hash and metadata. On error dst is
-// removed.
-func Cut(src, dst string, first, last uint64, agent string, seed [32]byte, hash [64]byte, metadata []byte) error {
-	s, d, a := C.CString(src), C.CString(dst), C.CString(agent)
-	defer C.free(unsafe.Pointer(s))
-	defer C.free(unsafe.Pointer(d))
-	defer C.free(unsafe.Pointer(a))
-	var m *C.uint8_t
-	if len(metadata) > 0 {
-		cm := C.CBytes(metadata)
-		defer C.free(cm)
-		m = (*C.uint8_t)(cm)
-	}
-	var msg [256]C.char
-	if C.xicap_cut(s, d, C.uint64_t(first), C.uint64_t(last), a, (*C.uint8_t)(unsafe.Pointer(&seed[0])),
-		(*C.uint8_t)(unsafe.Pointer(&hash[0])), m, C.size_t(len(metadata)), &msg[0], C.size_t(len(msg))) != 0 {
-		os.Remove(dst)
-		return cerr(&msg)
-	}
-	return nil
-}
-
 // TranscodeOptions says how Transcode signs and compresses.
 type TranscodeOptions struct {
-	// Seal keeps the signer's signatures and adds a seal made with Seed: format 4, complete and signed to the end,
-	// or cut off. Without it, Transcode signs anew with Seed, and names a format-3 src in a source block.
-	Seal       bool
-	Level      int // zstd level; 0 for the archive preset's 19
-	Agent      string
-	Seed       [32]byte
-	SourceHash [64]byte // without Seal: the SHA-512 of src as stored
-	Metadata   []byte   // without Seal: added to the source block's metadata
+	// Seal keeps the signer's signatures and adds a seal made with Seed: a file complete and signed to the end, cut
+	// off, or sealed with its end unsigned, and none whose signature fails. Without it, Transcode reissues a file
+	// signed to the end whose own signer Seed is, writing Signer as its source signer when set.
+	Seal   bool
+	Level  int // zstd level; 0 for the archive preset's 19
+	Agent  string
+	Seed   [32]byte
+	Signer *SourceSigner // without Seal: the file must have a source block
 }
 
-// Transcode rewrites src as format 4 at dst with the archive preset, then reads dst back and checks that it holds
-// the same packets and markers as src and that its signatures verify. On any difference it returns an error and
-// leaves dst as it was.
+// Transcode rewrites src at dst with the archive preset, then reads dst back and checks that it holds the same
+// packets and markers as src and that its signatures verify. Packets and capture id stay; bytes depend on the zstd
+// version. On any difference it returns an error and leaves dst as it was.
 func Transcode(src, dst string, opt TranscodeOptions) error {
 	s, d, a := C.CString(src), C.CString(dst), C.CString(opt.Agent)
 	defer C.free(unsafe.Pointer(s))
 	defer C.free(unsafe.Pointer(d))
 	defer C.free(unsafe.Pointer(a))
-	ci := C.xicap_transcode_info{level: C.int(opt.Level), agent: a, metadata_size: C.size_t(len(opt.Metadata))}
+	ci := C.xicap_transcode_info{level: C.int(opt.Level), agent: a}
 	if opt.Seal {
 		ci.seal = 1
 	}
 	*(*[32]byte)(unsafe.Pointer(&ci.seed[0])) = opt.Seed
-	*(*[64]byte)(unsafe.Pointer(&ci.source_hash[0])) = opt.SourceHash
-	if len(opt.Metadata) > 0 {
-		m := C.CBytes(opt.Metadata)
-		defer C.free(m)
-		ci.metadata = (*C.uint8_t)(m)
+	if g := opt.Signer; g != nil {
+		ci.has_signer = 1
+		*(*[32]byte)(unsafe.Pointer(&ci.signer_key[0])) = g.Key
+		ci.signer_verified_packets = C.uint64_t(g.VerifiedPackets)
+		if g.SignedToEnd {
+			ci.signer_signed_to_end = 1
+		}
 	}
 	var msg [256]C.char
 	if C.xicap_transcode(s, d, &ci, &msg[0], C.size_t(len(msg))) != 0 {

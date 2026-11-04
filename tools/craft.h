@@ -54,14 +54,14 @@ inline auto framesOf(std::span<const uint8_t> bytes) -> std::vector<FrameRef>
         return out; // nothing written yet
     }
     const auto header     = podAt<xicap::Header>(bytes, 0);
-    const auto headerSize = xicap::internal::frameHeaderSize(header.versionMajor);
+    const auto headerSize = sizeof(xicap::FrameHeader);
     size_t     offset     = header.headerSize;
     for (uint32_t i = 0; i < header.extensionCount; ++i)
     {
         offset += sizeof(xicap::ExtensionBlockHeader) + podAt<xicap::ExtensionBlockHeader>(bytes, offset).length + 4;
     }
     xicap::internal::FrameInfo info;
-    while (offset + headerSize <= bytes.size() && xicap::internal::parseFrameHeader(header.versionMajor, bytes.subspan(offset), info))
+    while (offset + headerSize <= bytes.size() && xicap::internal::parseFrameHeader(bytes.subspan(offset), info))
     {
         const auto size = headerSize + info.payloadSize + 4;
         out.push_back({ offset, size, info });

@@ -120,7 +120,7 @@ auto StreamReader::parse() -> void
                 if (nextBlock_ == start_->header.extensionCount)
                 {
                     internal::finishBlocks(*start_);
-                    decoder_ = std::make_unique<internal::Decoder>(start_->version(), start_->dictionary);
+                    decoder_ = std::make_unique<internal::Decoder>();
                     state_   = State::Frames;
                     break;
                 }
@@ -146,8 +146,7 @@ auto StreamReader::parse() -> void
                 }
                 frame_->clear();
                 packetPos_                     = 0;
-                const auto          version    = start_->version();
-                const auto          headerSize = internal::frameHeaderSize(version);
+                constexpr auto      headerSize = sizeof(FrameHeader);
                 internal::FrameInfo info;
                 if (avail.size() < headerSize)
                 {
@@ -157,7 +156,7 @@ auto StreamReader::parse() -> void
                     }
                     return;
                 }
-                if (!internal::parseFrameHeader(version, avail, info) || info.payloadSize > internal::MAX_PAYLOAD_SIZE)
+                if (!internal::parseFrameHeader(avail, info) || info.payloadSize > internal::MAX_PAYLOAD_SIZE)
                 {
                     state_ = State::Stopped;
                     return;

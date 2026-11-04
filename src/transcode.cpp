@@ -3,18 +3,15 @@
 #include "internal/chain.h"
 #include "internal/crc32.h"
 
-#include "monocypher.h"
 #include "xicap/reader.h"
 
 #include <algorithm>
 #include <chrono>
 #include <cstring>
 #include <format>
-#include <map>
+#include <memory>
 #include <optional>
 #include <random>
-#include <stdexcept>
-#include <tuple>
 
 namespace xicap
 {
@@ -33,17 +30,6 @@ namespace
     throw Error(ErrorCode::TranscodeMismatch, "xicap: transcode check failed: " + why);
 }
 
-template <typename T>
-auto hexOf(const T& bytes) -> std::string
-{
-    std::string out;
-    for (const auto b : bytes)
-    {
-        out += std::format("{:02x}", static_cast<unsigned>(b));
-    }
-    return out;
-}
-
 auto blockType(const std::vector<uint8_t>& block) -> uint32_t
 {
     uint32_t type = 0;
@@ -51,38 +37,24 @@ auto blockType(const std::vector<uint8_t>& block) -> uint32_t
     return type;
 }
 
-// Resign: the header names the new key and format 4; the blocks lose the dictionary and gain a SOURCE block naming
-// src, unless src has one.
-auto resignStart(Reader& src, const Verification& v, const TranscodeOptions& options, std::vector<uint8_t>& header, std::vector<std::vector<uint8_t>>& blocks) -> void
+// Reissue with a signer: the blocks lose any SOURCE_SIGNER and gain the given one after SOURCE; the header counts them.
+auto restateSigner(const SourceSigner& signer, std::vector<uint8_t>& header, std::vector<std::vector<uint8_t>>& blocks) -> void
 {
     std::erase_if(blocks, [](const std::vector<uint8_t>& block)
                   {
-                      return blockType(block) == EXT_ZSTD_DICT;
+                      return blockType(block) == EXT_SOURCE_SIGNER;
                   });
-    if (!std::ranges::any_of(blocks, [](const std::vector<uint8_t>& block)
-                             {
-                                 return blockType(block) == EXT_SOURCE;
-                             }))
+    const auto source = std::ranges::find_if(blocks, [](const std::vector<uint8_t>& block)
+                                             {
+                                                 return blockType(block) == EXT_SOURCE;
+                                             });
+    if (source == blocks.end())
     {
-        const auto& trailer = Access::trailer(src);
-        std::string lines   = std::format("signing-key {}\nsigned-to-end {}\nverified-packets {}\nfooter-signature {}\ntranscoded-by {}\n",
-                                          hexOf(src.signingKey()),
-                                          v.signedToEnd ? "yes" : "no",
-                                          v.verifiedPackets,
-                                          src.complete() ? hexOf(trailer.signature) : "none",
-                                          options.agent);
-        SourceInfo  source{ .format = "xicap", .formatVersion = std::format("{}.{}", src.versionMajor(), src.versionMinor()), .skippedRecords = 0, .utcOffsetSeconds = 0, .sourceHash = options.sourceHash, .metadata = { lines.begin(), lines.end() } };
-        source.metadata.insert(source.metadata.end(), options.metadata.begin(), options.metadata.end());
-        blocks.push_back(encodeBlock(EXT_SOURCE, encodeSource(source)));
+        refuse("a source signer needs a SOURCE block");
     }
-
-    const SigningKey key(options.seed);
-    const auto       count                 = static_cast<uint32_t>(blocks.size());
-    header[offsetof(Header, versionMajor)] = VERSION_MAJOR;
-    header[offsetof(Header, versionMinor)] = VERSION_MINOR;
+    blocks.insert(std::next(source), encodeBlock(EXT_SOURCE_SIGNER, encodeSourceSigner(signer)));
+    const auto count = static_cast<uint32_t>(blocks.size());
     std::memcpy(header.data() + offsetof(Header, extensionCount), &count, sizeof(count));
-    std::memset(header.data() + offsetof(Header, dictionaryId), 0, sizeof(uint32_t));
-    std::memcpy(header.data() + offsetof(Header, signingKey), key.publicKey().data(), key.publicKey().size());
     const auto crc = crc32({ header.data(), header.size() - sizeof(uint32_t) });
     std::memcpy(header.data() + header.size() - sizeof(crc), &crc, sizeof(crc));
 }
@@ -150,124 +122,6 @@ auto compare(const std::filesystem::path& src, const std::filesystem::path& dst)
     }
 }
 
-// What a reader needs to set the scene at a cut's start: the last zone-in before it, then, since that zone-in, the
-// last packet of each key below. A newer packet with the same key replaces the older; a packet is kept while any
-// key still names it.
-class Scene
-{
-public:
-    auto add(uint64_t index, const ReadPacket& p) -> void
-    {
-        if (p.channel != static_cast<uint8_t>(Channel::Game))
-        {
-            return;
-        }
-        const auto* d     = reinterpret_cast<const uint8_t*>(p.data.data());
-        const auto  n     = p.data.size();
-        const auto  field = [&](size_t at, size_t size) -> uint64_t
-        {
-            uint64_t v = 0;
-            if (at + size <= n)
-            {
-                std::memcpy(&v, d + at, size);
-            }
-            return v;
-        };
-        if (p.direction == PacketDirection::ClientToServer)
-        {
-            if (p.opcode == 0x015) // the recorder's position
-            {
-                keep({ 1, p.opcode, 0 }, index, p);
-            }
-            return;
-        }
-        switch (p.opcode)
-        {
-            case 0x00A: // zone-in: what came before it was another zone
-                latest_.clear();
-                kept_.clear();
-                keep({ 0, p.opcode, 0 }, index, p);
-                break;
-            case 0x00D: // a player's update, by id, the last carrying each part (position, claim, general, name, model)
-            case 0x00E: // an NPC's or mob's
-            {
-                const auto id    = field(4, 4) << 8;
-                const auto parts = field(10, 1);
-                for (uint64_t part = 0; part < 5; ++part)
-                {
-                    if (parts & 0x20) // despawned
-                    {
-                        release({ 0, p.opcode, id | part });
-                    }
-                    else if (parts >> part & 1)
-                    {
-                        keep({ 0, p.opcode, id | part }, index, p);
-                    }
-                }
-                break;
-            }
-            case 0x037: // the recorder's status
-            case 0x051: // its gear's look
-            case 0x057: // weather
-            case 0x061: // its job, level, HP and MP
-            case 0x076: // the party's status icons
-            case 0x0C8: // the party and alliance list
-                keep({ 0, p.opcode, 0 }, index, p);
-                break;
-            case 0x05F: // music, by slot
-            case 0x063: // the recorder's status icons and more, by type
-                keep({ 0, p.opcode, field(4, 2) }, index, p);
-                break;
-            case 0x0DD: // a party member, by id
-            case 0x0DF:
-            case 0x0E2:
-                keep({ 0, p.opcode, field(4, 4) }, index, p);
-                break;
-            default:
-                break;
-        }
-    }
-
-    // The packets kept, in the order they were read.
-    [[nodiscard]] auto packets() const -> const std::map<uint64_t, std::pair<CopiedPacket, int>>&
-    {
-        return kept_;
-    }
-
-private:
-    using Key = std::tuple<uint8_t, uint16_t, uint64_t>; // direction, opcode, what the packet is about
-
-    auto keep(const Key& key, uint64_t index, const ReadPacket& p) -> void
-    {
-        release(key);
-        latest_[key]     = index;
-        auto [it, added] = kept_.try_emplace(index);
-        if (added)
-        {
-            const auto* d    = reinterpret_cast<const uint8_t*>(p.data.data());
-            it->second.first = { .timestamp = p.timestamp, .flags = p.flags, .channel = p.channel, .opcode = p.opcode, .data = { d, d + p.data.size() }, .markers = {} };
-        }
-        it->second.second++;
-    }
-
-    auto release(const Key& key) -> void
-    {
-        const auto it = latest_.find(key);
-        if (it == latest_.end())
-        {
-            return;
-        }
-        if (const auto k = kept_.find(it->second); --k->second.second == 0)
-        {
-            kept_.erase(k);
-        }
-        latest_.erase(it);
-    }
-
-    std::map<Key, uint64_t>                          latest_;
-    std::map<uint64_t, std::pair<CopiedPacket, int>> kept_; // by index: the packet and how many keys name it
-};
-
 } // namespace
 
 auto transcode(const std::filesystem::path& src, const std::filesystem::path& dst, const TranscodeOptions& options, const TranscodeHooks& hooks) -> TranscodeResult
@@ -275,11 +129,13 @@ auto transcode(const std::filesystem::path& src, const std::filesystem::path& ds
     Reader     in(src);
     const auto v    = in.verify();
     const bool seal = options.signing == Signing::Seal;
-    if (seal && in.versionMajor() == 3)
+    // A sealed file whose end was never signed stands for the cut-off recording it was made from.
+    const bool cutOff = !in.complete() || (Access::trailer(in).trailerFlags & TrailerFlag::EndUnsigned) != 0;
+    if (v.firstFailureOffset)
     {
-        refuse("a seal keeps the signer's signatures, which format 3 signs over compressed bytes; resign it");
+        refuse(std::format("a signature fails at offset {}", *v.firstFailureOffset));
     }
-    if (seal && in.complete() && !v.signedToEnd)
+    if (in.complete() && !cutOff && !v.signedToEnd)
     {
         refuse("a complete file not signed to the end");
     }
@@ -288,13 +144,24 @@ auto transcode(const std::filesystem::path& src, const std::filesystem::path& ds
     auto blocks = Access::blockBytes(in);
     if (!seal)
     {
-        resignStart(in, v, options, header, blocks);
+        if (!v.signedToEnd)
+        {
+            refuse("a reissue takes a file signed to the end");
+        }
+        if (SigningKey(options.seed).publicKey() != in.signingKey())
+        {
+            refuse("a reissue is signed by the file's own signer");
+        }
+        if (options.signer)
+        {
+            restateSigner(*options.signer, header, blocks);
+        }
     }
     // A cut-off file keeps the last checkpoint that verifies.
-    std::optional<CheckpointPayload> carried;
-    if (seal && !in.complete() && v.verifiedPackets > 0)
+    std::optional<CheckpointPayload> kept;
+    if (seal && cutOff && v.verifiedPackets > 0)
     {
-        carried = CheckpointPayload{ .packets = v.verifiedPackets, .digest = v.checkpointDigest, .signature = v.checkpointSignature };
+        kept = CheckpointPayload{ .packets = v.verifiedPackets, .digest = v.checkpointDigest, .signature = v.checkpointSignature };
     }
 
     Staged          tmp(dst);
@@ -303,13 +170,13 @@ auto transcode(const std::filesystem::path& src, const std::filesystem::path& ds
         const auto writer = Access::rewriter(tmp.path(), options.policy, std::move(header), std::move(blocks), seal ? nullptr : &options.seed);
         if (seal)
         {
-            if (in.complete())
+            if (cutOff)
             {
-                Access::copyFooter(*writer, Access::trailer(in).signature);
+                Access::endUnsigned(*writer);
             }
             else
             {
-                Access::endUnsigned(*writer);
+                Access::copyFooter(*writer, Access::trailer(in).signature);
             }
             const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
             Access::seal(*writer, options.seed, options.agent, hooks.sealedAt != 0 ? hooks.sealedAt : static_cast<uint64_t>(now));
@@ -328,9 +195,9 @@ auto transcode(const std::filesystem::path& src, const std::filesystem::path& ds
             result.markers += p.markers.size();
             Access::add(*writer, p);
             result.packets++;
-            if (carried && result.packets == carried->packets)
+            if (kept && result.packets == kept->packets)
             {
-                Access::carry(*writer, *carried);
+                Access::keep(*writer, *kept);
             }
         }
         writer->close();
@@ -341,7 +208,7 @@ auto transcode(const std::filesystem::path& src, const std::filesystem::path& ds
         Reader     out(tmp.path());
         const auto w    = out.verify();
         const bool good = out.complete() && !w.firstFailureOffset &&
-                          (seal ? (in.complete() ? w.signedToEnd : w.verifiedPackets == (carried ? carried->packets : 0)) && w.seal && w.seal->good
+                          (seal ? (cutOff ? w.verifiedPackets == (kept ? kept->packets : 0) : w.signedToEnd) && w.seal && w.seal->good
                                 : w.signedToEnd);
         if (!good)
         {
@@ -360,77 +227,50 @@ auto transcode(const std::filesystem::path& src, const std::filesystem::path& ds
     return internal::transcode(src, dst, options, {});
 }
 
-auto cut(const std::filesystem::path& src, const std::filesystem::path& dst, const CutOptions& options) -> void
+auto continueFrom(const std::filesystem::path& source, uint64_t fromByte, const std::filesystem::path& out, const SecretSeed& seed, FramePolicy policy) -> uint64_t
 {
-    if (options.first > options.last)
-    {
-        throw std::invalid_argument("xicap: a cut's first packet is after its last");
-    }
-    Reader       reader{ src };
+    using internal::Access;
+    Reader       in(source);
     WriterConfig config{};
-    config.captureAgent  = options.agent;
-    config.clientVersion = reader.clientVersion();
-    config.character     = reader.character();
-    config.clockSource   = reader.clockSource();
-    config.origin        = Origin::Converted;
-    config.network       = reader.network();
-    config.startContext  = options.first == 0 ? reader.startContext() : StartContext::MidSession;
-    config.signingSeed   = options.seed;
-    config.policy        = reader.policy();
-    // The same range of the same recording always cuts to the same file: its id comes from the recording's hash and
-    // the range, not from a random draw.
-    uint8_t idInput[64 + 16]{};
-    std::ranges::copy(options.sourceHash, idInput);
-    std::memcpy(idInput + 64, &options.first, 8);
-    std::memcpy(idInput + 72, &options.last, 8);
-    crypto_blake2b(config.captureId.data(), config.captureId.size(), idInput, sizeof idInput);
-    config.source = SourceInfo{ .format = "xicap", .formatVersion = std::format("{}.{}", reader.versionMajor(), reader.versionMinor()), .sourceHash = options.sourceHash, .metadata = options.metadata };
+    config.captureAgent      = in.captureAgent();
+    config.clientVersion     = in.clientVersion();
+    config.character         = in.character();
+    config.clockSource       = in.clockSource();
+    config.origin            = in.origin();
+    config.network           = in.network();
+    config.startContext      = StartContext::MidSession;
+    config.recordingMode     = in.recordingMode();
+    config.previousCaptureId = in.captureId();
+    config.signingSeed       = seed;
+    config.policy            = in.policy();
+    config.source            = in.source();
 
-    Writer          writer{ dst, std::move(config), FramePolicy::archive() };
-    internal::Scene scene;
-    ReadPacket      packet{};
-    uint64_t        index = 0;
-    for (; index <= options.last && reader.next(packet); ++index)
+    std::optional<internal::Staged> tmp;
+    std::unique_ptr<Writer>         writer;
+    uint64_t                        packets = 0;
+    ReadPacket                      p{};
+    while (in.next(p))
     {
-        if (index < options.first)
+        if (Access::frameEnd(in) <= fromByte)
         {
-            scene.add(index, packet);
             continue;
         }
-        if (index == options.first)
+        if (!writer)
         {
-            // Stamped with the first packet's time, so a reader that does not know the flag still starts there.
-            for (const auto& [_, kept] : scene.packets())
-            {
-                const auto& p = kept.first;
-                writer.write({
-                    .timestamp  = packet.timestamp,
-                    .direction  = (p.flags & PacketFlag::ClientToServer) != 0 ? PacketDirection::ClientToServer : PacketDirection::ServerToClient,
-                    .data       = std::as_bytes(std::span{ p.data }),
-                    .channel    = p.channel,
-                    .opcode     = p.opcode,
-                    .provenance = static_cast<uint16_t>(p.flags | PacketFlag::Carried),
-                });
-            }
+            tmp.emplace(out);
+            writer = std::make_unique<Writer>(tmp->path(), config, policy);
         }
-        for (const auto& m : packet.markers)
-        {
-            internal::Access::marker(writer, m.kind, m.text);
-        }
-        writer.write({
-            .timestamp  = packet.timestamp,
-            .direction  = packet.direction,
-            .data       = packet.data,
-            .channel    = packet.channel,
-            .opcode     = packet.opcode,
-            .provenance = packet.flags,
-        });
+        Access::add(*writer, p);
+        packets++;
     }
-    if (index <= options.last)
+    if (!writer)
     {
-        throw std::out_of_range(std::format("xicap: the capture holds {} packets, not {}", index, options.last + 1));
+        return 0;
     }
-    writer.close();
+    writer->close();
+    writer.reset();
+    tmp->publish();
+    return packets;
 }
 
 } // namespace xicap

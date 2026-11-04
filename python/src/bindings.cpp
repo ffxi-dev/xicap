@@ -140,6 +140,15 @@ public:
         out["utcOffsetSeconds"] = s->utcOffsetSeconds;
         out["sourceHash"]       = toBytes(s->sourceHash);
         out["metadata"]         = toBytes(s->metadata);
+        out["signer"]           = py::none();
+        if (s->signer)
+        {
+            py::dict signer;
+            signer["key"]             = toBytes(s->signer->key);
+            signer["signedToEnd"]     = s->signer->signedToEnd;
+            signer["verifiedPackets"] = s->signer->verifiedPackets;
+            out["signer"]             = signer;
+        }
         return out;
     }
 
@@ -270,7 +279,6 @@ PYBIND11_MODULE(_xicap, m)
         .value("CompressFailed", xicap::ErrorCode::CompressFailed)
         .value("HeaderChecksumMismatch", xicap::ErrorCode::HeaderChecksumMismatch)
         .value("ExtensionChecksumMismatch", xicap::ErrorCode::ExtensionChecksumMismatch)
-        .value("MissingDictionary", xicap::ErrorCode::MissingDictionary)
         .value("MissingPolicy", xicap::ErrorCode::MissingPolicy)
         .value("UnknownFrameKind", xicap::ErrorCode::UnknownFrameKind)
         .value("UnknownPacketFlag", xicap::ErrorCode::UnknownPacketFlag)
@@ -279,7 +287,13 @@ PYBIND11_MODULE(_xicap, m)
         .value("WriteFailed", xicap::ErrorCode::WriteFailed)
         .value("PacketTooShort", xicap::ErrorCode::PacketTooShort)
         .value("TranscodeRefused", xicap::ErrorCode::TranscodeRefused)
-        .value("TranscodeMismatch", xicap::ErrorCode::TranscodeMismatch);
+        .value("TranscodeMismatch", xicap::ErrorCode::TranscodeMismatch)
+        .value("UnknownRecordingMode", xicap::ErrorCode::UnknownRecordingMode);
+
+    py::enum_<xicap::RecordingMode>(m, "RecordingMode")
+        .value("Default", xicap::RecordingMode::Default)
+        .value("Everything", xicap::RecordingMode::Everything)
+        .value("Anonymous", xicap::RecordingMode::Anonymous);
 
     // Map xicap::Error onto a Python exception with a .code attribute.
     static py::exception<xicap::Error> errExc(m, "Error");
@@ -435,7 +449,7 @@ PYBIND11_MODULE(_xicap, m)
 
     m.def(
         "transcode",
-        [](const std::filesystem::path& src, const std::filesystem::path& dst, bool seal, const py::bytes& seed, const std::string& agent, int level, const py::object& sourceHash, const py::bytes& metadata)
+        [](const std::filesystem::path& src, const std::filesystem::path& dst, bool seal, const py::bytes& seed, const std::string& agent, int level, const py::object& signer)
         {
             const auto take = [](const py::bytes& b, auto& out, const char* what)
             {
@@ -447,15 +461,18 @@ PYBIND11_MODULE(_xicap, m)
                 std::memcpy(out.data(), view.data(), out.size());
             };
             xicap::TranscodeOptions options{};
-            options.signing = seal ? xicap::Signing::Seal : xicap::Signing::Resign;
+            options.signing = seal ? xicap::Signing::Seal : xicap::Signing::Reissue;
             options.agent   = agent;
             take(seed, options.seed, "seed");
-            if (!sourceHash.is_none())
+            if (!signer.is_none())
             {
-                take(sourceHash.cast<py::bytes>(), options.sourceHash, "source_hash");
+                const auto          d = signer.cast<py::dict>();
+                xicap::SourceSigner out{};
+                take(d["key"].cast<py::bytes>(), out.key, "signer key");
+                out.signedToEnd     = d["signedToEnd"].cast<bool>();
+                out.verifiedPackets = d["verifiedPackets"].cast<uint64_t>();
+                options.signer      = out;
             }
-            const auto meta = static_cast<std::string_view>(metadata);
-            options.metadata.assign(meta.begin(), meta.end());
             if (level != 0)
             {
                 options.policy.compressionLevel = level;
@@ -478,9 +495,9 @@ PYBIND11_MODULE(_xicap, m)
         py::arg("seal"),
         py::arg("seed"),
         py::arg("agent"),
-        py::arg("level")       = 0,
-        py::arg("source_hash") = py::none(),
-        py::arg("metadata")    = py::bytes(""),
-        "Rewrites src as format 4 at dst with the archive preset and checks it against src. seal=True keeps the signer's "
-        "signatures and adds a seal made with seed; seal=False signs anew with seed.");
+        py::arg("level")  = 0,
+        py::arg("signer") = py::none(),
+        "Rewrites src at dst with the archive preset and checks it against src. seal=True keeps the signer's "
+        "signatures and adds a seal made with seed; seal=False reissues a file its own signer's seed signs, with the "
+        "source signer given as {key, signedToEnd, verifiedPackets}.");
 }
