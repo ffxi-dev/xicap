@@ -86,6 +86,7 @@ private:
     State                                   state_{ State::Header };
     std::vector<uint8_t>                    buffer_;
     size_t                                  pos_{ 0 };
+    uint64_t                                dropped_{ 0 }; // bytes pushed after the stop
     uint32_t                                nextBlock_{ 0 };
     bool                                    characterMismatch_{ false };
     size_t                                  packetPos_{ 0 };

@@ -28,7 +28,7 @@ auto StreamReader::stopped() const noexcept -> bool
 
 auto StreamReader::unreadBytes() const noexcept -> uint64_t
 {
-    return buffer_.size() - pos_;
+    return buffer_.size() - pos_ + dropped_;
 }
 
 auto StreamReader::header() const noexcept -> const Header&
@@ -57,7 +57,7 @@ auto StreamReader::push(std::span<const uint8_t> bytes) -> void
 {
     if (state_ == State::Stopped)
     {
-        buffer_.insert(buffer_.end(), bytes.begin(), bytes.end());
+        dropped_ += bytes.size(); // counted, not kept: nothing after a stop is read
         return;
     }
     // Drop what has been read once it is most of the buffer, so each byte moves a bounded number of times.
