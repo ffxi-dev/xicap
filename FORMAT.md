@@ -567,7 +567,7 @@ of one file need not match byte for byte.
   writes a zero `signature`. Either way it adds a seal made with its own key and
   sets bit 0. `D(k)` does not depend on frames, so the kept checkpoint and the
   footer signature still verify. A rewriter does not seal a file with a
-  signature or seal that fails.
+  signature that fails.
 - **Reissuing.** A signer may write its own file again, signing it with the
   same key. It keeps the header and the blocks, except that it may add or
   replace the `SOURCE_SIGNER` block, which changes `extensionCount`.

@@ -135,10 +135,6 @@ auto transcode(const std::filesystem::path& src, const std::filesystem::path& ds
     {
         refuse(std::format("a signature fails at offset {}", *v.firstFailureOffset));
     }
-    if (v.seal && !v.seal->good)
-    {
-        refuse("its seal fails");
-    }
     if (in.complete() && !cutOff && !v.signedToEnd)
     {
         refuse("a complete file not signed to the end");
