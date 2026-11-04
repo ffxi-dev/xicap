@@ -428,6 +428,69 @@ int main(int argc, char* argv[])
               save(p, bytes);
               expect(count(p) == static_cast<uint64_t>(target - frames.begin()) * 3, "a cut-off file ends at its bad frame");
           } },
+        { "bad-plaintext-mid-stream", [&](const fs::path& p)
+          {
+              session(tmp, 8, shortStreams());
+              const auto bytes  = cutOff(tmp);
+              const auto frames = packetFrames(bytes);
+              // A stream of three frames or more. Its second frame decompresses, but its plaintext breaks a rule; the
+              // frames after it in the stream are bad too, so recovery skips to the next restart.
+              size_t first = 0;
+              while (!(frames[first].info.restart() && !frames[first + 1].info.restart() && !frames[first + 2].info.restart()))
+              {
+                  first++;
+              }
+              size_t last = first + 2;
+              while (last + 1 < frames.size() && !frames[last + 1].info.restart())
+              {
+                  last++;
+              }
+              auto* dctx = ZSTD_createDCtx();
+              auto* cctx = ZSTD_createCCtx();
+              ZSTD_CCtx_setParameter(cctx, ZSTD_c_checksumFlag, 1);
+              ZSTD_CCtx_setParameter(cctx, ZSTD_c_contentSizeFlag, 0);
+              std::vector<uint8_t> rebuilt;
+              for (size_t i = first; i <= last; ++i)
+              {
+                  const auto&          f = frames[i];
+                  std::vector<uint8_t> plain(f.info.plainSize);
+                  ZSTD_inBuffer        in{ bytes.data() + f.offset + sizeof(FrameHeader), f.info.payloadSize, 0 };
+                  ZSTD_outBuffer       out{ plain.data(), plain.size(), 0 };
+                  expect(!ZSTD_isError(ZSTD_decompressStream(dctx, &out, &in)) && in.pos == in.size && out.pos == out.size, "the stream decodes");
+                  if (i == first + 1)
+                  {
+                      plain.push_back(0); // a byte after the last group: the group sizes no longer add up
+                  }
+                  std::vector<uint8_t> packed(ZSTD_compressBound(plain.size()) + 64);
+                  ZSTD_inBuffer        pin{ plain.data(), plain.size(), 0 };
+                  ZSTD_outBuffer       pout{ packed.data(), packed.size(), 0 };
+                  ZSTD_compressStream2(cctx, &pout, &pin, ZSTD_e_flush);
+                  packed.resize(pout.pos);
+                  auto header        = podAt<FrameHeader>(bytes, f.offset);
+                  header.payloadSize = static_cast<uint32_t>(packed.size());
+                  header.plainSize   = static_cast<uint32_t>(plain.size());
+                  const auto frame   = frameBytes(header, packed);
+                  rebuilt.insert(rebuilt.end(), frame.begin(), frame.end());
+              }
+              ZSTD_freeDCtx(dctx);
+              ZSTD_freeCCtx(cctx);
+              const auto start = frames[first].offset;
+              save(p, splice(bytes, start, frames[last].offset + frames[last].size - start, rebuilt));
+              uint64_t before = 0;
+              uint64_t after  = 0;
+              for (size_t i = 0; i < frames.size(); ++i)
+              {
+                  if (i <= first)
+                  {
+                      before += frames[i].info.packetCount;
+                  }
+                  else if (i > last)
+                  {
+                      after += frames[i].info.packetCount;
+                  }
+              }
+              expect(count(p) == before && count(p, { .recovery = true }) == before + after, "a bad plaintext ends its stream, though its zstd decodes");
+          } },
         { "sealed", [&](const fs::path& p)
           {
               session(tmp, 6, shortStreams());
