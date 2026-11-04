@@ -73,6 +73,7 @@ struct Writer::State
     };
 
     auto usable() const -> void;
+    auto start() -> void;
     auto add(uint64_t timestamp, uint16_t flags, uint8_t channel, uint16_t opcode, std::span<const uint8_t> data) -> void;
     auto endFrame() -> void;
     auto writeFrame() -> void;
@@ -190,11 +191,7 @@ auto Writer::close() -> void
         return;
     }
     s.endFrame();
-    if (!s.started)
-    {
-        s.emit(internal::encodeMetadata(s.metadata));
-        s.started = true;
-    }
+    s.start();
     auto t = format::Trailer{ .magic = format::TRAILER_MAGIC, .endTimestamp = s.lastTimestamp, .packetCount = s.packets, .crc = 0 };
     t.crc  = internal::crc32({ reinterpret_cast<const uint8_t*>(&t), offsetof(format::Trailer, crc) });
     s.emit({ reinterpret_cast<const uint8_t*>(&t), sizeof(t) });
@@ -211,6 +208,16 @@ auto Writer::State::usable() const -> void
     if (failed)
     {
         throw Error("xicap: an earlier write failed");
+    }
+}
+
+// The header and blocks go out with the first frame, once the start time is known.
+auto Writer::State::start() -> void
+{
+    if (!started)
+    {
+        emit(internal::encodeMetadata(metadata));
+        started = true;
     }
 }
 
@@ -268,11 +275,7 @@ auto Writer::State::endFrame() -> void
 
 auto Writer::State::writeFrame() -> void
 {
-    if (!started)
-    {
-        emit(internal::encodeMetadata(metadata));
-        started = true;
-    }
+    start();
     std::vector<internal::Record> records;
     for (const auto& p : framePackets)
     {
