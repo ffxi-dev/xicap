@@ -262,6 +262,28 @@ TEST_CASE("chat is stubbed before it reaches disk")
     CHECK(((packets[0].data[1] >> 1) & 0x7F) == 16); // original size, in words
 }
 
+TEST_CASE("a writer refuses a policy too large for a reader to take")
+{
+    TempCapture tmp;
+    auto        cfg = config();
+    cfg.policy.rules.clear();
+    // 33 rules of 65,535 ranges each: every count is in range, but the block is over 16 MiB.
+    for (uint16_t i = 0; i < 33; ++i)
+    {
+        cfg.policy.rules.push_back({ .channel = 0, .direction = ExclusionDirection::Both, .action = ExclusionAction::ZeroRange, .opcode = i, .ranges = std::vector<ByteRange>(UINT16_MAX, ByteRange{ 8, 4 }) });
+    }
+    try
+    {
+        Writer w(tmp.path, cfg);
+        w.close();
+        FAIL("the writer took the policy");
+    }
+    catch (const Error& e)
+    {
+        CHECK(e.code() == ErrorCode::InvalidPolicy);
+    }
+}
+
 TEST_CASE("the default policy stubs every chat opcode")
 {
     TempCapture                                             tmp;
