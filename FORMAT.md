@@ -659,8 +659,9 @@ it parses.
   a packet that would push its `deltaMs` past 2^32 − 1, its `packetCount` past
   1,048,576, its markers past 65,535, or its plaintext past its frame size
   limit (at most 16 MiB), and before each zone-in the server sends, so a zone-in
-  is the first packet of its frame and a frame never spans two zones. It also ends frames by its own packet and time settings and
-  when the host asks for a flush. The library's settings:
+  is the first packet of its frame and a frame never spans two zones. It also
+  ends frames by its own packet and time settings and when the host asks for a
+  flush. The library's settings:
 
   | | live (the default) | archive |
   |---|---|---|
