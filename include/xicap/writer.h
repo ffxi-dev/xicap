@@ -40,12 +40,11 @@ struct WriterConfig
     std::string       clientVersion;
     std::string       captureAgent;
     CharacterIdentity character{};
-    ClockSource       clockSource   = ClockSource::Live;
-    Origin            origin        = Origin::Live;
-    Network           network       = Network::Unknown;
-    StartContext      startContext  = StartContext::Login;
-    RecordingMode     recordingMode = RecordingMode::Default; // Everything takes a policy with no rules
-    CaptureId         captureId{};                            // all zero: the writer picks a random id
+    ClockSource       clockSource  = ClockSource::Live;
+    Origin            origin       = Origin::Live;
+    Network           network      = Network::Unknown;
+    StartContext      startContext = StartContext::Login;
+    CaptureId         captureId{}; // all zero: the writer picks a random id
     CaptureId         previousCaptureId{};
     SecretSeed        signingSeed{}; // the recorder install's Ed25519 seed
     ExclusionPolicy   policy = defaultExclusionPolicy();

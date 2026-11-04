@@ -9,8 +9,8 @@ compressed as one zstd stream that runs across frames and restarts every 4 MiB.
 The file only ever grows, and each frame is decodable the moment it is written,
 so a capture can be uploaded while it records, and a cut-off capture reads up to
 its last intact frame. Every block carries a CRC, the exclusion policy zeroes
-the text of chat before it reaches disk, keeping each packet's layout, unless
-the header's recording mode says the recorder kept everything, and the recorder's Ed25519 key signs the packets
+the text of chat before it reaches disk, keeping each packet's layout (a
+recording that keeps chat carries a policy with no rules), and the recorder's Ed25519 key signs the packets
 themselves, so a capture can be recompressed and keep its signature.
 
 See [FORMAT.md](FORMAT.md) for the on-disk specification, format 4, the only
@@ -27,7 +27,6 @@ cfg.captureAgent  = "Logbook 1.0";
 cfg.character     = character;   // content id, world, names
 cfg.network       = xicap::Network::Retail;
 cfg.signingSeed   = installSeed; // the recorder's Ed25519 seed
-cfg.recordingMode = xicap::RecordingMode::Default; // Everything takes a policy with no rules
 
 xicap::Writer w("session.xicap", cfg);   // FramePolicy::live(): level 7, about 5.5 MB
 w.mark(xicap::MarkerKind::Login);

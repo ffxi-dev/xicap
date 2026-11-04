@@ -403,14 +403,6 @@ Writer::Writer(const std::filesystem::path& path, WriterConfig config, FramePoli
         })
 {
     validatePolicy(config_.policy);
-    if (config_.recordingMode == RecordingMode::Everything && !config_.policy.rules.empty())
-    {
-        throw Error(ErrorCode::InvalidPolicy, "xicap: a recording that keeps everything has a policy with no rules");
-    }
-    if (std::to_underlying(config_.recordingMode) > std::to_underlying(RecordingMode::Anonymous))
-    {
-        throw Error(ErrorCode::UnknownRecordingMode, "xicap: unknown recording mode");
-    }
     if ((config_.origin == Origin::Converted) != config_.source.has_value())
     {
         throw Error(ErrorCode::InvalidExtension, "xicap: a source block goes with converted captures, and only them");
@@ -685,7 +677,6 @@ auto Writer::writeStart() -> void
         header.origin             = config_.origin;
         header.network            = config_.network;
         header.startContext       = config_.startContext;
-        header.recordingMode      = config_.recordingMode;
         header.dictionaryId       = 0;
         header.signingKey         = key_->publicKey();
         header.character          = config_.character;

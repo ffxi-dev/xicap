@@ -104,14 +104,6 @@ export const enum ErrorCode {
     PacketTooShort = 24,
     TranscodeRefused = 25,
     TranscodeMismatch = 26,
-    UnknownRecordingMode = 27,
-}
-
-// What the recorder kept of what players write. See FORMAT.md, Header.
-export const enum RecordingMode {
-    Default = 0,
-    Everything = 1,
-    Anonymous = 2,
 }
 
 export class XicapError extends Error {
@@ -278,7 +270,6 @@ export class Reader {
     get origin(): Origin { return this.native.origin(); }
     get network(): Network { return this.native.network(); }
     get startContext(): StartContext { return this.native.startContext(); }
-    get recordingMode(): RecordingMode { return this.native.recordingMode(); }
     get startTimestampMs(): number { return this.native.startTimestampMs(); }
     get endTimestampMs(): number { return this.native.endTimestampMs(); }
     get durationMs(): number { return this.native.durationMs(); }
