@@ -407,9 +407,9 @@ one frame, and the trailer. Offsets are in hex.
 00000040  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
 00000050  00 00 00 00 33 30 32 35 31 31 30 31 5f 32 00 00  clientVersion (from 54)
 00000060  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
-00000070  00 00 00 00 04 03 02 01 0d 0c 0b 0a 4e 6f 75 75  contentId (from 74); characterId; characterName
-00000080  72 73 00 00 00 00 00 00 00 00 00 00 41 73 75 72  worldName (from 8c)
-00000090  61 00 00 00 00 00 00 00 00 00 00 00 46 4a fa ab  header crc (from 9c)
+00000070  00 00 00 00 04 03 02 01 0d 0c 0b 0a 52 68 61 76  contentId (from 74); characterId; characterName
+00000080  79 6e 00 00 00 00 00 00 00 00 00 00 41 73 75 72  worldName (from 8c)
+00000090  61 00 00 00 00 00 00 00 00 00 00 00 bc a9 a7 b4  header crc (from 9c)
 000000a0  01 00 00 00 80 00 00 00 78 69 63 61 70 2d 64 65  block: type 1 (exclusion policy), length 128; name
 000000b0  66 61 75 6c 74 00 00 00 00 00 00 00 00 00 00 00
 000000c0  00 00 00 00 00 00 00 00 02 00 00 00 06 00 00 00  version 2 (from c8), ruleCount 6, first rule (from ce)

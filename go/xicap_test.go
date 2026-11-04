@@ -131,7 +131,7 @@ func TestVectors(t *testing.T) {
 func TestWriteThenRead(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "c.xicap")
 	w, err := Create(path, WriterInfo{
-		CaptureAgent: "mogsafe", ClientVersion: "1.0", Character: Character{CharacterID: 7, Name: "Nouurs"},
+		CaptureAgent: "mogsafe", ClientVersion: "1.0", Character: Character{CharacterID: 7, Name: "Rhavyn"},
 		Origin: OriginConverted, Network: NetworkPrivate, KeepChat: true, Archive: true,
 		Source: &Source{Format: "captain", FormatVersion: "1.4", Skipped: 2, Metadata: []byte("manifest")},
 	})
