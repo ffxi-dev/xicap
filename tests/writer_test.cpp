@@ -2,6 +2,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
+
 using namespace xicap;
 
 TEST_CASE("a capture reads back as written")
@@ -32,7 +34,7 @@ TEST_CASE("a capture reads back as written")
 
     const auto packets = test::readAll(file);
     REQUIRE(packets.size() == 3);
-    CHECK(packets[0].data == a);
+    CHECK(std::ranges::equal(packets[0].data, a));
     CHECK(packets[0].markers == std::vector<Marker>{ { MarkerKind::Login, "" } });
     CHECK(packets[1].flags == PacketFlag::ClientToServer);
     CHECK(packets[1].opcode == 0x015);

@@ -22,8 +22,8 @@ TEST_CASE("the default policy zeroes chat text and keeps the packet's layout")
 TEST_CASE("the default policy leaves other packets and directions alone")
 {
     const auto p = test::gamePacket(0x017, 40, 3, 0x41);
-    CHECK(applyPolicy(defaultExclusionPolicy(), test::out(1, p, PacketDirection::ClientToServer)).data == p);
-    CHECK(applyPolicy(ExclusionPolicy{}, test::out(1, p)).data == p);
+    CHECK(std::ranges::equal(applyPolicy(defaultExclusionPolicy(), test::out(1, p, PacketDirection::ClientToServer)).data, p));
+    CHECK(std::ranges::equal(applyPolicy(ExclusionPolicy{}, test::out(1, p)).data, p));
 }
 
 TEST_CASE("a stub keeps the 4-byte header")
@@ -32,7 +32,7 @@ TEST_CASE("a stub keeps the 4-byte header")
     const auto p      = test::gamePacket(0x0B6, 40, 3, 0x41);
     const auto stored = applyPolicy(policy, test::out(1, p, PacketDirection::ClientToServer));
     CHECK(stored.flags == (PacketFlag::Excluded | PacketFlag::ClientToServer));
-    CHECK(stored.data == std::vector(p.begin(), p.begin() + 4));
+    CHECK(std::ranges::equal(stored.data, std::span{ p }.first(4)));
 }
 
 TEST_CASE("a writer refuses a policy it cannot apply")
