@@ -48,7 +48,7 @@ Reader::Reader(const std::filesystem::path& path, ReaderOptions options)
     fileSize_ = static_cast<uint64_t>(file_.tellg());
 
     readStart();
-    decoder_ = std::make_unique<internal::Decoder>(header_.versionMajor, dictionary_);
+    decoder_ = std::make_unique<internal::Decoder>();
     readFooter();
     if (complete_)
     {
@@ -153,7 +153,6 @@ auto Reader::readStart() -> void
     header_      = start.header;
     headerBytes_ = std::move(start.headerBytes);
     blockBytes_  = std::move(start.blocks);
-    dictionary_  = std::move(start.dictionary);
     policy_      = std::move(start.policy);
     source_      = std::move(start.source);
     extensions_  = std::move(start.extensions);
@@ -173,10 +172,9 @@ auto Reader::readFooter() -> void
     {
         return;
     }
-    // Format 3 reserves trailerFlags; format 4 reads an unknown bit as a damaged footer.
-    const bool v4     = header_.versionMajor != 3;
-    const bool sealed = v4 && (trailer_.trailerFlags & TrailerFlag::Sealed) != 0;
-    if (v4 && (trailer_.trailerFlags & ~TrailerFlag::Known) != 0)
+    // An unknown bit reads as a damaged footer.
+    const bool sealed = (trailer_.trailerFlags & TrailerFlag::Sealed) != 0;
+    if ((trailer_.trailerFlags & ~TrailerFlag::Known) != 0)
     {
         return;
     }
@@ -215,15 +213,11 @@ auto Reader::readFooter() -> void
     footerDamaged_ = false;
 }
 
-// The index and the trailer are not signed, and seeks and zone lists follow them, so in format 4 they must agree
+// The index and the trailer are not signed, and seeks and zone lists follow them, so they must agree
 // with the frames: one entry per packet frame, in order, with its offset, time, zone, and restart bit, and the
 // frame and packet counts. Reads frame headers only. Returns what disagrees, or null.
 auto Reader::indexDisagreement() -> const char*
 {
-    if (header_.versionMajor == 3)
-    {
-        return nullptr;
-    }
     uint64_t offset  = dataStart_;
     uint64_t entry   = 0;
     uint64_t frames  = 0;
@@ -270,17 +264,16 @@ auto Reader::indexDisagreement() -> const char*
 
 auto Reader::readRawFrame(uint64_t offset, uint64_t limit, std::vector<uint8_t>& bytes, internal::FrameInfo& info) -> bool
 {
-    const auto headerSize = internal::frameHeaderSize(header_.versionMajor);
-    if (offset + headerSize + sizeof(uint32_t) > limit)
+    if (offset + sizeof(FrameHeader) + sizeof(uint32_t) > limit)
     {
         return false;
     }
-    bytes.resize(headerSize);
-    if (!readAt(file_, offset, bytes) || !internal::parseFrameHeader(header_.versionMajor, bytes, info))
+    bytes.resize(sizeof(FrameHeader));
+    if (!readAt(file_, offset, bytes) || !internal::parseFrameHeader(bytes, info))
     {
         return false;
     }
-    const uint64_t size = headerSize + uint64_t{ info.payloadSize } + sizeof(uint32_t);
+    const uint64_t size = sizeof(FrameHeader) + uint64_t{ info.payloadSize } + sizeof(uint32_t);
     if (info.payloadSize > internal::MAX_PAYLOAD_SIZE || offset + size > limit)
     {
         return false;
@@ -412,10 +405,9 @@ auto Reader::advance() -> bool
         {
             continue;
         }
-        const auto headerSize = internal::frameHeaderSize(header_.versionMajor);
         try
         {
-            decoder_->decode(info, { raw_.data() + headerSize, info.payloadSize }, *frame_);
+            decoder_->decode(info, { raw_.data() + sizeof(FrameHeader), info.payloadSize }, *frame_);
         }
         catch (const Error& error)
         {
@@ -429,9 +421,13 @@ auto Reader::advance() -> bool
                 skip(offset, size);
                 continue;
             }
-            // A cut-off capture ends at its first bad frame.
+            // A cut-off capture ends at its first bad frame, and so does its index: no seek lands past it.
             endOffset_   = offset;
             unreadBytes_ = fileSize_ - offset;
+            std::erase_if(indexEntries_, [offset](const FooterIndexEntry& e)
+                          {
+                              return e.fileOffset >= offset;
+                          });
             return false;
         }
         for (const auto& p : frame_->packets)
@@ -491,9 +487,9 @@ auto Reader::seekToFrame(uint64_t frameIndex) -> SeekResult
     {
         return SeekResult::OutOfRange;
     }
-    // In format 4, decode from the stream's start.
+    // Decode from the stream's start.
     uint64_t start = frameIndex;
-    while (header_.versionMajor != 3 && start > 0 && (indexEntries_[start].flags & IndexFlag::Restart) == 0)
+    while (start > 0 && (indexEntries_[start].flags & IndexFlag::Restart) == 0)
     {
         start--;
     }
@@ -579,89 +575,6 @@ auto Reader::durationMs() const -> uint64_t
 
 auto Reader::verify() -> Verification
 {
-    return header_.versionMajor == 3 ? verify3() : verify4();
-}
-
-auto Reader::verify3() -> Verification
-{
-    using internal::checkSignature;
-    using internal::signedMessage;
-    Verification result{ .key = header_.signingKey };
-
-    internal::Chain chain;
-    chain.start(headerBytes_);
-    for (const auto& block : blockBytes_)
-    {
-        chain.absorb(block);
-    }
-
-    const uint64_t       limit   = complete_ ? trailer_.indexOffset : fileSize_;
-    uint64_t             packets = 0;
-    uint64_t             offset  = dataStart_;
-    std::vector<uint8_t> frame;
-    internal::FrameInfo  info;
-    for (; offset < limit;)
-    {
-        if (!readRawFrame(offset, limit, frame, info))
-        {
-            if (complete_ && !result.firstFailureOffset)
-            {
-                result.firstFailureOffset = offset;
-            }
-            break;
-        }
-        if (info.kind == FrameKind::Checkpoint && info.payloadSize == sizeof(CheckpointPayload3))
-        {
-            CheckpointPayload3 checkpoint{};
-            std::memcpy(&checkpoint, frame.data() + sizeof(FrameHeader3), sizeof(checkpoint));
-            const bool good = checkpoint.chain == chain.value() &&
-                              checkSignature(header_.signingKey, checkpoint.signature, signedMessage(internal::CHECKPOINT_PREFIX3, chain.value()));
-            if (!result.firstFailureOffset)
-            {
-                if (good)
-                {
-                    result.goodCheckpoints++;
-                    result.verifiedPackets = packets;
-                }
-                else
-                {
-                    result.firstFailureOffset = offset;
-                }
-            }
-        }
-        chain.absorb(frame);
-        if (info.kind == FrameKind::Packets)
-        {
-            packets += info.packetCount;
-        }
-        offset += frame.size();
-    }
-
-    if (complete_ && offset == limit)
-    {
-        chain.begin();
-        chain.update({ reinterpret_cast<const uint8_t*>(indexEntries_.data()), indexEntries_.size() * sizeof(FooterIndexEntry) });
-        chain.update({ reinterpret_cast<const uint8_t*>(&trailer_), offsetof(FooterTrailer, signature) });
-        chain.end();
-        const bool good = checkSignature(header_.signingKey, trailer_.signature, signedMessage(internal::FOOTER_PREFIX3, chain.value()));
-        if (!result.firstFailureOffset)
-        {
-            if (good)
-            {
-                result.signedToEnd     = true;
-                result.verifiedPackets = packets;
-            }
-            else
-            {
-                result.firstFailureOffset = trailer_.indexOffset;
-            }
-        }
-    }
-    return result;
-}
-
-auto Reader::verify4() -> Verification
-{
     using internal::checkSignature;
     using internal::signedMessage;
     Verification result{ .key = header_.signingKey };
@@ -678,9 +591,12 @@ auto Reader::verify4() -> Verification
     uint64_t               offset  = dataStart_;
     std::vector<uint8_t>   frame;
     internal::FrameInfo    info;
-    internal::Decoder      decoder(header_.versionMajor, {});
+    internal::Decoder      decoder;
     internal::DecodedFrame decoded;
-    const auto             failAt = [&](uint64_t at)
+    // The seal covers the one checkpoint a sealed file keeps: its payload as stored, or zeros when there is none.
+    uint32_t                                       checkpointFrames = 0;
+    std::array<uint8_t, sizeof(CheckpointPayload)> keptCheckpoint{};
+    const auto                                     failAt = [&](uint64_t at)
     {
         if (!result.firstFailureOffset)
         {
@@ -703,6 +619,10 @@ auto Reader::verify4() -> Verification
         // from counting.
         if (info.kind == FrameKind::Checkpoint)
         {
+            if (checkpointFrames++ == 0 && payload.size() == keptCheckpoint.size())
+            {
+                std::ranges::copy(payload, keptCheckpoint.begin());
+            }
             CheckpointPayload checkpoint{};
             if (info.payloadSize == sizeof(CheckpointPayload))
             {
@@ -767,12 +687,14 @@ auto Reader::verify4() -> Verification
     }
     if (seal_)
     {
+        // A sealed file keeps at most one checkpoint, whole; the seal signs it and the footer's signature with D(end).
         const auto* bytes = reinterpret_cast<const uint8_t*>(&*seal_);
+        const bool  kept  = checkpointFrames == 0 || (checkpointFrames == 1 && keptCheckpoint != decltype(keptCheckpoint){});
         result.seal       = SealCheck{
             .key      = seal_->key,
             .agent    = textOf(seal_->agent),
             .sealedAt = seal_->sealedAt,
-            .good     = checkSignature(seal_->key, seal_->signature, signedMessage(internal::SEAL_PREFIX, end, std::span{ bytes, offsetof(SealBlock, signature) })),
+            .good     = kept && checkSignature(seal_->key, seal_->signature, signedMessage(internal::SEAL_PREFIX, end, trailer_.signature, keptCheckpoint, std::span{ bytes, offsetof(SealBlock, signature) })),
         };
     }
     return result;

@@ -92,17 +92,21 @@ auto parseSource(std::span<const uint8_t> payload) -> SourceInfo
     };
 }
 
+auto parseSourceSigner(std::span<const uint8_t> payload) -> SourceSigner
+{
+    size_t            pos = 0;
+    SourceSignerBlock block{};
+    if (!pop(payload, pos, block) || pos != payload.size())
+    {
+        throw Error(ErrorCode::InvalidExtension, "xicap: malformed source signer block");
+    }
+    return { .key = block.signingKey, .signedToEnd = (block.flags & SourceSignerFlag::SignedToEnd) != 0, .verifiedPackets = block.verifiedPackets };
+}
+
 } // namespace
 
-auto parseFrameHeader(uint8_t version, std::span<const uint8_t> bytes, FrameInfo& out) noexcept -> bool
+auto parseFrameHeader(std::span<const uint8_t> bytes, FrameInfo& out) noexcept -> bool
 {
-    if (version == 3)
-    {
-        FrameHeader3 h{};
-        std::memcpy(&h, bytes.data(), sizeof(h));
-        out = { .kind = h.kind, .frameFlags = FrameFlag::Restart, .markerCount = h.markerCount, .payloadSize = h.payloadSize, .packetCount = h.packetCount, .baseTimestamp = h.baseTimestamp, .zoneId = h.zoneId, .plainSize = 0 };
-        return h.magic == FRAME_MAGIC;
-    }
     FrameHeader h{};
     std::memcpy(&h, bytes.data(), sizeof(h));
     out = { .kind = h.kind, .frameFlags = h.frameFlags, .markerCount = h.markerCount, .payloadSize = h.payloadSize, .packetCount = h.packetCount, .baseTimestamp = h.baseTimestamp, .zoneId = h.zoneId, .plainSize = h.plainSize };
@@ -129,9 +133,9 @@ auto headerSize(std::span<const uint8_t> first) -> uint16_t
     {
         throw Error(ErrorCode::BadMagic, "xicap: bad magic");
     }
-    if (header.versionMajor != 3 && header.versionMajor != VERSION_MAJOR)
+    if (header.versionMajor != VERSION_MAJOR)
     {
-        throw Error(ErrorCode::UnsupportedVersion, std::format("xicap: unsupported version {} (this library reads 3 and 4)", header.versionMajor));
+        throw Error(ErrorCode::UnsupportedVersion, std::format("xicap: unsupported version {} (this library reads {})", header.versionMajor, VERSION_MAJOR));
     }
     if (header.headerSize < HEADER_SIZE || header.headerSize > HEADER_SIZE_MAX)
     {
@@ -150,7 +154,7 @@ auto readHeader(std::span<const uint8_t> header, Start& start) -> void
     }
     std::memcpy(&start.header, header.data(), sizeof(Header));
     start.headerBytes.assign(header.begin(), header.end());
-    if (start.version() != 3 && start.header.dictionaryId != 0)
+    if (start.header.dictionaryId != 0)
     {
         throw Error(ErrorCode::DictionaryMismatch, "xicap: format 4 has no dictionary");
     }
@@ -180,27 +184,8 @@ auto readBlock(std::span<const uint8_t> block, uint32_t index, Start& start) -> 
     const auto payload = block.subspan(sizeof(hdr), hdr.length);
     start.blocks.emplace_back(block.begin(), block.end());
 
-    const auto& header = start.header;
-    if (index == 0 && header.dictionaryId != 0 && hdr.type != EXT_ZSTD_DICT)
-    {
-        throw Error(ErrorCode::MissingDictionary, "xicap: the header names a dictionary the file does not carry");
-    }
     switch (hdr.type)
     {
-        case EXT_ZSTD_DICT:
-        {
-            if (index != 0 || header.dictionaryId == 0)
-            {
-                throw Error(ErrorCode::DictionaryMismatch, "xicap: dictionary block out of place");
-            }
-            const uint32_t id = ZSTD_getDictID_fromDict(payload.data(), payload.size());
-            if (id != header.dictionaryId)
-            {
-                throw Error(ErrorCode::DictionaryMismatch, std::format("xicap: dictionary id {:#010x}, header says {:#010x}", id, header.dictionaryId));
-            }
-            start.dictionary.assign(payload.begin(), payload.end());
-            break;
-        }
         case EXT_EXCLUSION_POLICY:
             if (start.havePolicy)
             {
@@ -210,7 +195,18 @@ auto readBlock(std::span<const uint8_t> block, uint32_t index, Start& start) -> 
             start.havePolicy = true;
             break;
         case EXT_SOURCE:
+            if (start.source)
+            {
+                throw Error(ErrorCode::InvalidExtension, "xicap: two source blocks");
+            }
             start.source = parseSource(payload);
+            break;
+        case EXT_SOURCE_SIGNER:
+            if (!start.source || start.source->signer)
+            {
+                throw Error(ErrorCode::InvalidExtension, "xicap: a source signer block goes once, after the source block");
+            }
+            start.source->signer = parseSourceSigner(payload);
             break;
         default:
             start.extensions.push_back({ hdr.type, { payload.begin(), payload.end() } });
@@ -220,10 +216,6 @@ auto readBlock(std::span<const uint8_t> block, uint32_t index, Start& start) -> 
 
 auto finishBlocks(Start& start) -> void
 {
-    if (start.header.dictionaryId != 0 && start.dictionary.empty())
-    {
-        throw Error(ErrorCode::MissingDictionary, "xicap: the header names a dictionary the file does not carry");
-    }
     if (!start.havePolicy)
     {
         throw Error(ErrorCode::MissingPolicy, "xicap: no exclusion policy block");
@@ -247,9 +239,8 @@ auto namesOtherCharacter(const Header& header, const DecodedPacket& packet, std:
            std::string_view(name, strnlen(name, LOGIN_NAME_SIZE)) != std::string_view(c.characterName.data(), strnlen(c.characterName.data(), c.characterName.size()));
 }
 
-Decoder::Decoder(uint8_t version, std::span<const uint8_t> dictionary)
-: version_(version)
-, dctx_(ZSTD_createDCtx(), [](ZSTD_DCtx* c) noexcept
+Decoder::Decoder()
+: dctx_(ZSTD_createDCtx(), [](ZSTD_DCtx* c) noexcept
         {
             ZSTD_freeDCtx(c);
         })
@@ -258,18 +249,7 @@ Decoder::Decoder(uint8_t version, std::span<const uint8_t> dictionary)
     {
         throw Error(ErrorCode::ZstdContextFailed, "xicap: ZSTD_createDCtx failed");
     }
-    if (!dictionary.empty())
-    {
-        const size_t rc = ZSTD_DCtx_loadDictionary(dctx_.get(), dictionary.data(), dictionary.size());
-        if (ZSTD_isError(rc))
-        {
-            throw Error(ErrorCode::DictionaryMismatch, std::string("xicap: zstd load dictionary: ") + ZSTD_getErrorName(rc));
-        }
-    }
-    if (version_ != 3)
-    {
-        ZSTD_DCtx_setParameter(dctx_.get(), ZSTD_d_windowLogMax, FrameLimits::MAX_WINDOW_LOG);
-    }
+    ZSTD_DCtx_setParameter(dctx_.get(), ZSTD_d_windowLogMax, FrameLimits::MAX_WINDOW_LOG);
 }
 
 Decoder::~Decoder() = default;
@@ -277,11 +257,6 @@ Decoder::~Decoder() = default;
 auto Decoder::decode(const FrameInfo& frame, std::span<const uint8_t> payload, DecodedFrame& out) -> void
 {
     out.clear();
-    if (version_ == 3)
-    {
-        decode3(frame, payload, out);
-        return;
-    }
     // Whatever goes wrong, the stream cannot go on.
     const bool restart = frame.restart();
     if (!restart && !streamOpen_)
@@ -289,10 +264,10 @@ auto Decoder::decode(const FrameInfo& frame, std::span<const uint8_t> payload, D
         throw Error(ErrorCode::CorruptFrame, "xicap: a frame continues a stream that is not open");
     }
     streamOpen_ = false;
-    decode4(frame, payload, out);
+    decodeStream(frame, payload, out);
 }
 
-auto Decoder::decode4(const FrameInfo& frame, std::span<const uint8_t> payload, DecodedFrame& out) -> void
+auto Decoder::decodeStream(const FrameInfo& frame, std::span<const uint8_t> payload, DecodedFrame& out) -> void
 {
     if (frame.plainSize == 0 || frame.plainSize > FrameLimits::MAX_CONTENT_SIZE)
     {
@@ -353,93 +328,6 @@ auto Decoder::decode4(const FrameInfo& frame, std::span<const uint8_t> payload, 
     decodeColumns({ plain_.data(), frame.plainSize }, frame.packetCount, frame.markerCount, frame.baseTimestamp, out);
     lastTimestamp_ = out.packets.back().timestamp;
     streamOpen_    = !ended;
-}
-
-auto Decoder::decode3(const FrameInfo& frame, std::span<const uint8_t> payload, DecodedFrame& out) -> void
-{
-    const auto rawSize = ZSTD_getFrameContentSize(payload.data(), payload.size());
-    if (rawSize == ZSTD_CONTENTSIZE_ERROR || rawSize == ZSTD_CONTENTSIZE_UNKNOWN)
-    {
-        throw Error(ErrorCode::CorruptFrame, "xicap: frame without a zstd content size");
-    }
-    if (rawSize > FrameLimits::MAX_CONTENT_SIZE)
-    {
-        throw Error(ErrorCode::CorruptFrame, std::format("xicap: frame content size {} over 16 MiB", rawSize));
-    }
-    if (ZSTD_findFrameCompressedSize(payload.data(), payload.size()) != payload.size())
-    {
-        throw Error(ErrorCode::CorruptFrame, "xicap: payload is not exactly one zstd frame");
-    }
-    const auto size = static_cast<size_t>(rawSize);
-    out.bytes.resize(size);
-    const size_t result = ZSTD_decompressDCtx(dctx_.get(), out.bytes.data(), size, payload.data(), payload.size());
-    if (ZSTD_isError(result))
-    {
-        throw Error(ErrorCode::DecompressFailed, std::string("xicap: zstd decompress: ") + ZSTD_getErrorName(result));
-    }
-    if (result != size || frame.packetCount == 0)
-    {
-        throw Error(ErrorCode::CorruptFrame, "xicap: corrupt frame");
-    }
-
-    const std::span<const uint8_t> content{ out.bytes };
-    size_t                         pos       = 0;
-    uint64_t                       timestamp = frame.baseTimestamp;
-    for (uint32_t i = 0; i < frame.packetCount; ++i)
-    {
-        PacketEntry3 entry{};
-        if (!pop(content, pos, entry) || entry.length > size - pos)
-        {
-            throw Error(ErrorCode::CorruptFrame, "xicap: packet runs past its frame");
-        }
-        if ((entry.flags & PacketFlag::Required & ~PacketFlag::KnownRequired) != 0)
-        {
-            throw Error(ErrorCode::UnknownPacketFlag, std::format("xicap: unknown packet flags {:#06x}", entry.flags));
-        }
-        if (entry.channel == static_cast<uint8_t>(Channel::Game))
-        {
-            uint16_t firstWord = 0;
-            if (entry.length < sizeof(FFXIPacketHeader))
-            {
-                throw Error(ErrorCode::CorruptFrame, "xicap: game packet under 4 bytes");
-            }
-            std::memcpy(&firstWord, content.data() + pos, sizeof(firstWord));
-            if ((firstWord & 0x1FFU) != entry.opcode)
-            {
-                throw Error(ErrorCode::CorruptFrame, "xicap: game packet opcode differs from its header");
-            }
-        }
-        timestamp += entry.deltaMs;
-        out.packets.push_back({ .timestamp = timestamp, .flags = entry.flags, .channel = entry.channel, .opcode = entry.opcode, .offset = pos, .length = entry.length, .firstMarker = 0, .markerCount = 0 });
-        pos += entry.length;
-    }
-
-    std::vector<std::pair<uint16_t, ReadMarker>> found;
-    for (uint16_t i = 0; i < frame.markerCount; ++i)
-    {
-        FrameMarker3 marker{};
-        if (!pop(content, pos, marker) || marker.textLength > size - pos || marker.packetIndex >= frame.packetCount)
-        {
-            throw Error(ErrorCode::CorruptFrame, "xicap: corrupt marker");
-        }
-        found.push_back({ marker.packetIndex, { marker.kind, std::string(reinterpret_cast<const char*>(content.data() + pos), marker.textLength) } });
-        pos += marker.textLength;
-    }
-    if (pos != size)
-    {
-        throw Error(ErrorCode::CorruptFrame, "xicap: bytes after the last marker");
-    }
-    std::ranges::stable_sort(found, {}, &std::pair<uint16_t, ReadMarker>::first);
-    for (auto& [index, marker] : found)
-    {
-        auto& packet = out.packets[index];
-        if (packet.markerCount == 0)
-        {
-            packet.firstMarker = out.markers.size();
-        }
-        packet.markerCount++;
-        out.markers.push_back(std::move(marker));
-    }
 }
 
 } // namespace xicap::internal

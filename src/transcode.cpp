@@ -3,16 +3,15 @@
 #include "internal/chain.h"
 #include "internal/crc32.h"
 
-#include "monocypher.h"
 #include "xicap/reader.h"
 
 #include <algorithm>
 #include <chrono>
 #include <cstring>
 #include <format>
+#include <memory>
 #include <optional>
 #include <random>
-#include <stdexcept>
 
 namespace xicap
 {
@@ -31,17 +30,6 @@ namespace
     throw Error(ErrorCode::TranscodeMismatch, "xicap: transcode check failed: " + why);
 }
 
-template <typename T>
-auto hexOf(const T& bytes) -> std::string
-{
-    std::string out;
-    for (const auto b : bytes)
-    {
-        out += std::format("{:02x}", static_cast<unsigned>(b));
-    }
-    return out;
-}
-
 auto blockType(const std::vector<uint8_t>& block) -> uint32_t
 {
     uint32_t type = 0;
@@ -49,38 +37,24 @@ auto blockType(const std::vector<uint8_t>& block) -> uint32_t
     return type;
 }
 
-// Resign: the header names the new key and format 4; the blocks lose the dictionary and gain a SOURCE block naming
-// src, unless src has one.
-auto resignStart(Reader& src, const Verification& v, const TranscodeOptions& options, std::vector<uint8_t>& header, std::vector<std::vector<uint8_t>>& blocks) -> void
+// Reissue with a signer: the blocks lose any SOURCE_SIGNER and gain the given one after SOURCE; the header counts them.
+auto restateSigner(const SourceSigner& signer, std::vector<uint8_t>& header, std::vector<std::vector<uint8_t>>& blocks) -> void
 {
     std::erase_if(blocks, [](const std::vector<uint8_t>& block)
                   {
-                      return blockType(block) == EXT_ZSTD_DICT;
+                      return blockType(block) == EXT_SOURCE_SIGNER;
                   });
-    if (!std::ranges::any_of(blocks, [](const std::vector<uint8_t>& block)
-                             {
-                                 return blockType(block) == EXT_SOURCE;
-                             }))
+    const auto source = std::ranges::find_if(blocks, [](const std::vector<uint8_t>& block)
+                                             {
+                                                 return blockType(block) == EXT_SOURCE;
+                                             });
+    if (source == blocks.end())
     {
-        const auto& trailer = Access::trailer(src);
-        std::string lines   = std::format("signing-key {}\nsigned-to-end {}\nverified-packets {}\nfooter-signature {}\ntranscoded-by {}\n",
-                                          hexOf(src.signingKey()),
-                                          v.signedToEnd ? "yes" : "no",
-                                          v.verifiedPackets,
-                                          src.complete() ? hexOf(trailer.signature) : "none",
-                                          options.agent);
-        SourceInfo  source{ .format = "xicap", .formatVersion = std::format("{}.{}", src.versionMajor(), src.versionMinor()), .skippedRecords = 0, .utcOffsetSeconds = 0, .sourceHash = options.sourceHash, .metadata = { lines.begin(), lines.end() } };
-        source.metadata.insert(source.metadata.end(), options.metadata.begin(), options.metadata.end());
-        blocks.push_back(encodeBlock(EXT_SOURCE, encodeSource(source)));
+        refuse("a source signer needs a SOURCE block");
     }
-
-    const SigningKey key(options.seed);
-    const auto       count                 = static_cast<uint32_t>(blocks.size());
-    header[offsetof(Header, versionMajor)] = VERSION_MAJOR;
-    header[offsetof(Header, versionMinor)] = VERSION_MINOR;
+    blocks.insert(std::next(source), encodeBlock(EXT_SOURCE_SIGNER, encodeSourceSigner(signer)));
+    const auto count = static_cast<uint32_t>(blocks.size());
     std::memcpy(header.data() + offsetof(Header, extensionCount), &count, sizeof(count));
-    std::memset(header.data() + offsetof(Header, dictionaryId), 0, sizeof(uint32_t));
-    std::memcpy(header.data() + offsetof(Header, signingKey), key.publicKey().data(), key.publicKey().size());
     const auto crc = crc32({ header.data(), header.size() - sizeof(uint32_t) });
     std::memcpy(header.data() + header.size() - sizeof(crc), &crc, sizeof(crc));
 }
@@ -155,11 +129,17 @@ auto transcode(const std::filesystem::path& src, const std::filesystem::path& ds
     Reader     in(src);
     const auto v    = in.verify();
     const bool seal = options.signing == Signing::Seal;
-    if (seal && in.versionMajor() == 3)
+    // A sealed file whose end was never signed stands for the cut-off recording it was made from.
+    const bool cutOff = !in.complete() || (Access::trailer(in).trailerFlags & TrailerFlag::EndUnsigned) != 0;
+    if (v.firstFailureOffset)
     {
-        refuse("a seal keeps the signer's signatures, which format 3 signs over compressed bytes; resign it");
+        refuse(std::format("a signature fails at offset {}", *v.firstFailureOffset));
     }
-    if (seal && in.complete() && !v.signedToEnd)
+    if (v.seal && !v.seal->good)
+    {
+        refuse("its seal fails");
+    }
+    if (in.complete() && !cutOff && !v.signedToEnd)
     {
         refuse("a complete file not signed to the end");
     }
@@ -168,13 +148,24 @@ auto transcode(const std::filesystem::path& src, const std::filesystem::path& ds
     auto blocks = Access::blockBytes(in);
     if (!seal)
     {
-        resignStart(in, v, options, header, blocks);
+        if (!v.signedToEnd)
+        {
+            refuse("a reissue takes a file signed to the end");
+        }
+        if (SigningKey(options.seed).publicKey() != in.signingKey())
+        {
+            refuse("a reissue is signed by the file's own signer");
+        }
+        if (options.signer)
+        {
+            restateSigner(*options.signer, header, blocks);
+        }
     }
     // A cut-off file keeps the last checkpoint that verifies.
-    std::optional<CheckpointPayload> carried;
-    if (seal && !in.complete() && v.verifiedPackets > 0)
+    std::optional<CheckpointPayload> kept;
+    if (seal && cutOff && v.verifiedPackets > 0)
     {
-        carried = CheckpointPayload{ .packets = v.verifiedPackets, .digest = v.checkpointDigest, .signature = v.checkpointSignature };
+        kept = CheckpointPayload{ .packets = v.verifiedPackets, .digest = v.checkpointDigest, .signature = v.checkpointSignature };
     }
 
     Staged          tmp(dst);
@@ -183,13 +174,13 @@ auto transcode(const std::filesystem::path& src, const std::filesystem::path& ds
         const auto writer = Access::rewriter(tmp.path(), options.policy, std::move(header), std::move(blocks), seal ? nullptr : &options.seed);
         if (seal)
         {
-            if (in.complete())
+            if (cutOff)
             {
-                Access::copyFooter(*writer, Access::trailer(in).signature);
+                Access::endUnsigned(*writer);
             }
             else
             {
-                Access::endUnsigned(*writer);
+                Access::copyFooter(*writer, Access::trailer(in).signature);
             }
             const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
             Access::seal(*writer, options.seed, options.agent, hooks.sealedAt != 0 ? hooks.sealedAt : static_cast<uint64_t>(now));
@@ -208,9 +199,9 @@ auto transcode(const std::filesystem::path& src, const std::filesystem::path& ds
             result.markers += p.markers.size();
             Access::add(*writer, p);
             result.packets++;
-            if (carried && result.packets == carried->packets)
+            if (kept && result.packets == kept->packets)
             {
-                Access::carry(*writer, *carried);
+                Access::keep(*writer, *kept);
             }
         }
         writer->close();
@@ -221,7 +212,7 @@ auto transcode(const std::filesystem::path& src, const std::filesystem::path& ds
         Reader     out(tmp.path());
         const auto w    = out.verify();
         const bool good = out.complete() && !w.firstFailureOffset &&
-                          (seal ? (in.complete() ? w.signedToEnd : w.verifiedPackets == (carried ? carried->packets : 0)) && w.seal && w.seal->good
+                          (seal ? (cutOff ? w.verifiedPackets == (kept ? kept->packets : 0) : w.signedToEnd) && w.seal && w.seal->good
                                 : w.signedToEnd);
         if (!good)
         {
@@ -238,6 +229,51 @@ auto transcode(const std::filesystem::path& src, const std::filesystem::path& ds
 auto transcode(const std::filesystem::path& src, const std::filesystem::path& dst, const TranscodeOptions& options) -> TranscodeResult
 {
     return internal::transcode(src, dst, options, {});
+}
+
+auto continueFrom(const std::filesystem::path& source, uint64_t fromByte, const std::filesystem::path& out, const SecretSeed& seed, FramePolicy policy) -> uint64_t
+{
+    using internal::Access;
+    Reader       in(source);
+    WriterConfig config{};
+    config.captureAgent      = in.captureAgent();
+    config.clientVersion     = in.clientVersion();
+    config.character         = in.character();
+    config.clockSource       = in.clockSource();
+    config.origin            = in.origin();
+    config.network           = in.network();
+    config.startContext      = StartContext::MidSession;
+    config.previousCaptureId = in.captureId();
+    config.signingSeed       = seed;
+    config.policy            = in.policy();
+    config.source            = in.source();
+
+    std::optional<internal::Staged> tmp;
+    std::unique_ptr<Writer>         writer;
+    uint64_t                        packets = 0;
+    ReadPacket                      p{};
+    while (in.next(p))
+    {
+        if (Access::frameEnd(in) <= fromByte)
+        {
+            continue;
+        }
+        if (!writer)
+        {
+            tmp.emplace(out);
+            writer = std::make_unique<Writer>(tmp->path(), config, policy);
+        }
+        Access::add(*writer, p);
+        packets++;
+    }
+    if (!writer)
+    {
+        return 0;
+    }
+    writer->close();
+    writer.reset();
+    tmp->publish();
+    return packets;
 }
 
 } // namespace xicap

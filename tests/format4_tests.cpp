@@ -108,7 +108,7 @@ auto shortStreams() -> FramePolicy
 
 auto mogsafe() -> TranscodeOptions
 {
-    return { .policy = FramePolicy::archive(), .signing = Signing::Seal, .seed = seed(9), .agent = "mogsafe test", .sourceHash = {}, .metadata = {} };
+    return { .policy = FramePolicy::archive(), .signing = Signing::Seal, .seed = seed(9), .agent = "mogsafe test", .signer = {} };
 }
 
 auto key(const SecretSeed& s) -> PublicKey
@@ -130,7 +130,8 @@ auto vectorFiles() -> std::vector<fs::path>
     return out;
 }
 
-// Splices frames into a complete file and rewrites its index and trailer to match, keeping the footer's signature.
+// Splices frames into a complete file and rewrites its index and trailer to match, keeping the footer's signature and
+// any seal.
 // `frames` is how many frames the splice adds.
 auto spliceComplete(const std::vector<uint8_t>& bytes, size_t at, size_t remove, std::span<const uint8_t> insert, int frames = 0) -> std::vector<uint8_t>
 {
@@ -150,6 +151,11 @@ auto spliceComplete(const std::vector<uint8_t>& bytes, size_t at, size_t remove,
     trailer.trailerCrc  = internal::crc32({ reinterpret_cast<const uint8_t*>(&trailer), offsetof(FooterTrailer, trailerCrc) });
     const auto* idx     = reinterpret_cast<const uint8_t*>(index.data());
     out.insert(out.end(), idx, idx + index.size() * sizeof(FooterIndexEntry));
+    if ((trailer.trailerFlags & TrailerFlag::Sealed) != 0)
+    {
+        const auto seal = bytes.end() - static_cast<std::ptrdiff_t>(sizeof(FooterTrailer) + sizeof(SealBlock));
+        out.insert(out.end(), seal, seal + sizeof(SealBlock));
+    }
     const auto* t = reinterpret_cast<const uint8_t*>(&trailer);
     out.insert(out.end(), t, t + sizeof(trailer));
     return out;
@@ -701,16 +707,10 @@ TEST_CASE("the footer reports seals, unsigned ends, and damage")
     }
 }
 
-TEST_CASE("the reader reads both formats")
+TEST_CASE("the reader keeps a stream across frames")
 {
     TempCapture tmp;
 
-    SECTION("it dispatches on the version")
-    {
-        CHECK(Reader(fs::path(XICAP_VECTORS_DIR) / "clean.xicap").versionMajor() == 3);
-        writeFrames(tmp.path, 1);
-        CHECK(Reader(tmp.path).versionMajor() == 4);
-    }
     SECTION("it keeps the decoder across frames and resets it at restarts")
     {
         writeFrames(tmp.path, 20, 3, shortStreams());
@@ -977,66 +977,126 @@ TEST_CASE("transcode")
         REQUIRE(v.seal);
         CHECK(v.seal->good);
     }
-    SECTION("Seal refuses format 3 and a complete file not signed to the end")
+    SECTION("Seal seals a sealed cut-off recording again, keeping its checkpoint")
     {
-        CHECK(refusal([&]
-                      {
-                          transcode(fs::path(XICAP_VECTORS_DIR) / "clean.xicap", dst.path, mogsafe());
-                      }) == ErrorCode::TranscodeRefused);
-        CHECK_FALSE(fs::exists(dst.path));
-        writeFrames(src.path, 3);
+        session(src.path, 9);
         truncateAt(src.path, footerOffset(bytesOf(src.path)));
         TempCapture sealed;
         transcode(src.path, sealed.path, mogsafe());
+        const auto first = Reader(sealed.path).verify();
+        REQUIRE(first.verifiedPackets > 0);
+        auto again = mogsafe();
+        again.seed = seed(10);
+        transcode(sealed.path, dst.path, again);
+        Reader     r(dst.path);
+        const auto v = r.verify();
+        CHECK(readAll(r) == readAll(src.path));
+        CHECK(v.verifiedPackets == first.verifiedPackets);
+        REQUIRE(v.seal);
+        CHECK(v.seal->good);
+        CHECK(v.seal->key == key(seed(10)));
+    }
+    SECTION("Seal refuses a complete file not signed to the end, and a failed checkpoint")
+    {
+        writeFrames(src.path, 3);
+        auto bytes   = bytesOf(src.path);
+        auto trailer = podAt<FooterTrailer>(bytes, bytes.size() - sizeof(FooterTrailer));
+        trailer.signature[0] ^= 1;
+        trailer.trailerCrc = internal::crc32({ reinterpret_cast<const uint8_t*>(&trailer), offsetof(FooterTrailer, trailerCrc) });
+        std::memcpy(bytes.data() + bytes.size() - sizeof(FooterTrailer), &trailer, sizeof(trailer));
+        save(src.path, bytes);
         CHECK(refusal([&]
                       {
-                          transcode(sealed.path, dst.path, mogsafe());
+                          transcode(src.path, dst.path, mogsafe());
                       }) == ErrorCode::TranscodeRefused);
         CHECK_FALSE(fs::exists(dst.path));
+
+        // A checkpoint that fails, with a later one that verifies.
+        session(src.path, 9);
+        bytes = bytesOf(src.path);
+        bytes.resize(footerOffset(bytes));
+        const auto frames = framesOf(bytes);
+        const auto first  = std::ranges::find_if(frames, [](const FrameRef& f)
+                                                 {
+                                                    return f.info.kind == FrameKind::Checkpoint;
+                                                 });
+        REQUIRE(first != frames.end());
+        auto checkpoint = podAt<CheckpointPayload>(bytes, first->offset + sizeof(FrameHeader));
+        checkpoint.signature[0] ^= 1;
+        save(src.path, splice(bytes, first->offset, first->size, frameBytes(podAt<FrameHeader>(bytes, first->offset), std::span{ reinterpret_cast<const uint8_t*>(&checkpoint), sizeof(checkpoint) })));
+        REQUIRE(Reader(src.path).verify().firstFailureOffset);
+        CHECK(refusal([&]
+                      {
+                          transcode(src.path, dst.path, mogsafe());
+                      }) == ErrorCode::TranscodeRefused);
     }
-    SECTION("Resign of each format-3 vector keeps every packet and names its source")
+    SECTION("the seal covers the recorder's footer signature and kept checkpoint")
     {
-        auto options       = mogsafe();
-        options.signing    = Signing::Resign;
-        options.metadata   = { 'c', 'a', 'p', 't', 'u', 'r', 'e', ' ', 'x' };
-        options.sourceHash = { 1, 2, 3 };
-        size_t resigned    = 0;
-        for (const auto& path : vectorFiles())
+        // Strip the kept checkpoint of a sealed cut-off recording: the packets and their digests stay right, the seal fails.
+        session(src.path, 9);
+        truncateAt(src.path, footerOffset(bytesOf(src.path)));
+        transcode(src.path, dst.path, mogsafe());
+        auto       bytes  = bytesOf(dst.path);
+        const auto frames = framesOf(bytes);
+        const auto kept   = std::ranges::find_if(frames, [](const FrameRef& f)
+                                                 {
+                                                   return f.info.kind == FrameKind::Checkpoint;
+                                                 });
+        REQUIRE(kept != frames.end());
+        TempCapture stripped;
+        save(stripped.path, spliceComplete(bytes, kept->offset, kept->size, {}, -1));
+        Reader     r(stripped.path);
+        const auto v = r.verify();
+        CHECK(readAll(r).size() == readAll(src.path).size());
+        CHECK(v.verifiedPackets == 0);
+        REQUIRE(v.seal);
+        CHECK_FALSE(v.seal->good);
+    }
+    SECTION("Reissue writes the signer's own file again with a source signer")
+    {
+        auto cfg   = config();
+        cfg.origin = Origin::Converted;
+        cfg.source = SourceInfo{ .format = "xicap", .formatVersion = "3.0", .skippedRecords = 0, .utcOffsetSeconds = 0, .sourceHash = { 1, 2, 3 }, .metadata = { 'x' }, .signer = {} };
         {
-            if (path.filename().string().starts_with("4-") || refused(path))
-            {
-                continue;
-            }
-            INFO(path.filename().string());
-            Reader in(path);
-            REQUIRE(in.versionMajor() == 3);
-            const auto v = in.verify();
-            transcode(path, dst.path, options);
-            Reader     r(dst.path);
-            const auto w = r.verify();
-            CHECK(r.versionMajor() == 4);
-            CHECK(w.signedToEnd);
-            CHECK(w.key == key(seed(9)));
-            CHECK(readAll(r) == readAll(path));
-            CHECK(r.captureId() == in.captureId());
-            CHECK(r.character().contentId == in.character().contentId);
-            CHECK(r.policy().name == in.policy().name);
-            REQUIRE(r.source());
-            if (in.source())
-            {
-                CHECK(r.source()->format == in.source()->format);
-                CHECK(r.source()->metadata == in.source()->metadata);
-                continue;
-            }
-            const std::string metadata(r.source()->metadata.begin(), r.source()->metadata.end());
-            CHECK(r.source()->format == "xicap");
-            CHECK(r.source()->formatVersion == "3.0");
-            CHECK(r.source()->sourceHash == options.sourceHash);
-            CHECK(metadata.starts_with(std::format("signing-key {}\nsigned-to-end {}\nverified-packets {}\nfooter-signature ", hexOf(in.signingKey()), v.signedToEnd ? "yes" : "no", v.verifiedPackets)));
-            CHECK(metadata.ends_with("transcoded-by mogsafe test\ncapture x"));
-            resigned++;
+            Writer w(src.path, cfg);
+            w.write(T0, PacketDirection::ServerToClient, gamePacket(0x0DF, 16));
+            w.close();
         }
-        CHECK(resigned >= 8);
+        auto options    = mogsafe();
+        options.signing = Signing::Reissue;
+        options.seed    = cfg.signingSeed;
+        options.signer  = SourceSigner{ .key = key(seed(3)), .signedToEnd = false, .verifiedPackets = 41 };
+        transcode(src.path, dst.path, options);
+        Reader r(dst.path);
+        CHECK(r.verify().signedToEnd);
+        CHECK_FALSE(r.verify().seal);
+        CHECK(r.captureId() == Reader(src.path).captureId());
+        REQUIRE(r.source());
+        CHECK(r.source()->metadata == std::vector<uint8_t>{ 'x' });
+        REQUIRE(r.source()->signer);
+        CHECK(r.source()->signer->key == key(seed(3)));
+        CHECK(r.source()->signer->verifiedPackets == 41);
+        CHECK_FALSE(r.source()->signer->signedToEnd);
+
+        // Again: the block is replaced, not added.
+        TempCapture twice;
+        options.signer->signedToEnd = true;
+        transcode(dst.path, twice.path, options);
+        CHECK(Reader(twice.path).source()->signer->signedToEnd);
+        CHECK(internal::Access::blockBytes(Reader(twice.path)).size() == 3);
+
+        // Another signer's seed, and a file without a source block, are refused.
+        options.seed = seed(11);
+        CHECK(refusal([&]
+                      {
+                          transcode(src.path, twice.path, options);
+                      }) == ErrorCode::TranscodeRefused);
+        session(src.path, 2);
+        options.seed = config().signingSeed;
+        CHECK(refusal([&]
+                      {
+                          transcode(src.path, twice.path, options);
+                      }) == ErrorCode::TranscodeRefused);
     }
     SECTION("a difference leaves no file at dst")
     {
@@ -1082,7 +1142,8 @@ TEST_CASE("the writer stores text as UTF-8, and copies keep markers whole")
     const std::string longText(2000, 'x');
     TempCapture       long_;
     auto              options = mogsafe();
-    options.signing           = Signing::Resign;
+    options.signing           = Signing::Reissue;
+    options.seed              = config().signingSeed;
     internal::transcode(src.path, long_.path, options, { .edit = [&](uint64_t, internal::CopiedPacket& p)
                                                          {
                                                              p.markers[0].text = longText;
@@ -1103,9 +1164,11 @@ TEST_CASE("transcode writes dst whole or not at all")
 
     SECTION("a refused transcode leaves dst as it was")
     {
+        auto reissue    = mogsafe();
+        reissue.signing = Signing::Reissue; // with a seed that did not sign src
         CHECK(refusal([&]
                       {
-                          transcode(fs::path(XICAP_VECTORS_DIR) / "clean.xicap", dst.path, mogsafe());
+                          transcode(src.path, dst.path, reissue);
                       }) == ErrorCode::TranscodeRefused);
         CHECK(bytesOf(dst.path) == before);
     }
@@ -1197,3 +1260,113 @@ TEST_CASE("the stream reader reads as the bytes arrive")
         }
     }
 }
+
+TEST_CASE("continueFrom writes the frames past a byte offset as a capture that continues the source")
+{
+    TempCapture src;
+    TempCapture out;
+    session(src.path, 6);
+    truncateAt(src.path, footerOffset(bytesOf(src.path))); // cut off, as an upload Mogsafe ended
+    const auto bytes  = bytesOf(src.path);
+    const auto frames = packetFrames(bytes);
+    const auto all    = readAll(src.path);
+    REQUIRE(frames.size() == 6);
+    Reader in(src.path);
+
+    SECTION("whole frames past the offset, and one it cuts through")
+    {
+        // The archive holds frames 0 and 1 and half of frame 2: frame 2 is sent again.
+        const auto from = frames[2].offset + frames[2].size / 2;
+        CHECK(continueFrom(src.path, from, out.path, seed(5)) == 12);
+        Reader     r(out.path);
+        const auto got = readAll(r);
+        CHECK(got == std::vector<Owned>(all.begin() + 6, all.end()));
+        CHECK(got[1].markers.size() == 1); // the note before each frame's second packet
+        CHECK(r.previousCaptureId() == in.captureId());
+        CHECK(r.captureId() != in.captureId());
+        CHECK(r.startContext() == StartContext::MidSession);
+        CHECK(r.character().contentId == in.character().contentId);
+        CHECK(r.clientVersion() == in.clientVersion());
+        CHECK(r.captureAgent() == in.captureAgent());
+        CHECK(r.policy().name == in.policy().name);
+        CHECK(r.signingKey() == key(seed(5)));
+        CHECK(r.verify().signedToEnd);
+    }
+    SECTION("the markers before the first packet it writes")
+    {
+        CHECK(continueFrom(src.path, frames[0].offset + frames[0].size, out.path, seed(5)) == 15);
+        CHECK(readAll(out.path)[1].markers[0].text == "frame 1");
+    }
+    SECTION("a torn last frame is left out")
+    {
+        truncateAt(src.path, frames[5].offset + frames[5].size - 5);
+        CHECK(continueFrom(src.path, frames[4].offset, out.path, seed(5)) == 3);
+    }
+    SECTION("nothing past the offset writes no file")
+    {
+        CHECK(continueFrom(src.path, bytes.size(), out.path, seed(5)) == 0);
+        CHECK_FALSE(fs::exists(out.path));
+    }
+}
+
+TEST_CASE("a cut-off file's index stops at its first bad frame")
+{
+    TempCapture tmp;
+    writeFrames(tmp.path, 4, 3, alone());
+    auto bytes = bytesOf(tmp.path);
+    bytes.resize(footerOffset(bytes));
+    const auto f     = packetFrames(bytes)[2];
+    auto       plain = plainOf(bytes, f);
+    plain.push_back(0); // the group sizes no longer add up
+    save(tmp.path, splice(bytes, f.offset, f.size, packetFrame(podAt<FrameHeader>(bytes, f.offset), plain)));
+    Reader r(tmp.path);
+    REQUIRE(r.totalFrames() == 4);
+    CHECK(readAll(r).size() == 6);
+    CHECK(r.totalFrames() == 2);
+    CHECK(r.seekToFrame(3) == SeekResult::OutOfRange);
+    CHECK(r.seekToFrame(1) == SeekResult::Ok);
+}
+
+TEST_CASE("a source signer block goes once, after the source block")
+{
+    TempCapture tmp;
+    auto        cfg = config();
+    cfg.origin      = Origin::Converted;
+    cfg.source      = SourceInfo{ .format = "xicap", .formatVersion = "3.0", .skippedRecords = 0, .utcOffsetSeconds = 0, .sourceHash = {}, .metadata = {}, .signer = SourceSigner{ .key = key(seed(3)), .signedToEnd = true, .verifiedPackets = 9 } };
+    writeFrames(tmp.path, 1);
+    {
+        Writer w(tmp.path, cfg);
+        w.write(T0, PacketDirection::ServerToClient, gamePacket(0x0DF, 16));
+        w.close();
+    }
+    REQUIRE(Reader(tmp.path).source()->signer->verifiedPackets == 9);
+    // Swap the two blocks: the signer comes first.
+    auto       bytes  = bytesOf(tmp.path);
+    const auto blocks = internal::Access::blockBytes(Reader(tmp.path));
+    REQUIRE(blocks.size() == 3);
+    std::vector<uint8_t> swapped = blocks[0];
+    swapped.insert(swapped.end(), blocks[2].begin(), blocks[2].end());
+    swapped.insert(swapped.end(), blocks[1].begin(), blocks[1].end());
+    save(tmp.path, splice(bytes, HEADER_SIZE, swapped.size(), swapped));
+    CHECK(refusal([&]
+                  {
+                      Reader r(tmp.path);
+                  }) == ErrorCode::InvalidExtension);
+}
+
+#ifdef __linux__
+TEST_CASE("a writer whose frame failed to write writes no footer")
+{
+    Writer w("/dev/full", config());
+    w.write(T0, PacketDirection::ServerToClient, gamePacket(0x010, 16));
+    CHECK_THROWS_AS(w.flush(), Error);
+    CHECK(refusal([&]
+                  {
+                      w.write(T0 + 1, PacketDirection::ServerToClient, gamePacket(0x010, 16));
+                  }) == ErrorCode::WriteFailed);
+    CHECK(refusal([&]
+                  {
+                      w.close();
+                  }) == ErrorCode::WriteFailed);
+}
+#endif

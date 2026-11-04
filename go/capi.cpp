@@ -64,7 +64,7 @@ extern "C" int xicap_header_size(const uint8_t* data, size_t size)
 {
     const auto version = size > offsetof(xicap::Header, versionMajor) ? data[offsetof(xicap::Header, versionMajor)] : 0;
     if (size < offsetof(xicap::Header, extensionCount) || !std::equal(xicap::MAGIC.begin(), xicap::MAGIC.end(), data) ||
-        (version != 3 && version != xicap::VERSION_MAJOR))
+        version != xicap::VERSION_MAJOR)
     {
         return -1;
     }
@@ -191,6 +191,13 @@ extern "C" int xicap_read(const char* path, xicap_summary* out, char* err, size_
                            copyString(out->source_format, source->format);
                            copyString(out->source_format_version, source->formatVersion);
                            out->skipped_records = source->skippedRecords;
+                           if (const auto& signer = source->signer)
+                           {
+                               out->has_source_signer       = 1;
+                               out->source_signed_to_end    = signer->signedToEnd ? 1 : 0;
+                               out->source_verified_packets = signer->verifiedPackets;
+                               std::ranges::copy(signer->key, out->source_signing_key);
+                           }
                        }
 
                        xicap::ReadPacket packet{};
@@ -198,6 +205,7 @@ extern "C" int xicap_read(const char* path, xicap_summary* out, char* err, size_
                        {
                            out->packets++;
                            out->end_timestamp = packet.timestamp;
+                           out->channels[packet.channel / 8] |= static_cast<uint8_t>(1U << (packet.channel % 8));
                        }
                        if (reader.totalFrames() > 0)
                        {
@@ -361,22 +369,22 @@ extern "C" int xicap_transcode(const char* src, const char* dst, const xicap_tra
     return guarded(err, errlen, [&]
                    {
                        xicap::TranscodeOptions options{
-                           .policy     = xicap::FramePolicy::archive(),
-                           .signing    = info->seal ? xicap::Signing::Seal : xicap::Signing::Resign,
-                           .seed       = {},
-                           .agent      = info->agent ? info->agent : "",
-                           .sourceHash = {},
-                           .metadata   = {},
+                           .policy  = xicap::FramePolicy::archive(),
+                           .signing = info->seal ? xicap::Signing::Seal : xicap::Signing::Reissue,
+                           .seed    = {},
+                           .agent   = info->agent ? info->agent : "",
+                           .signer  = {},
                        };
                        if (info->level != 0)
                        {
                            options.policy.compressionLevel = info->level;
                        }
                        std::ranges::copy(info->seed, options.seed.begin());
-                       std::ranges::copy(info->source_hash, options.sourceHash.begin());
-                       if (info->metadata_size > 0)
+                       if (info->has_signer)
                        {
-                           options.metadata.assign(info->metadata, info->metadata + info->metadata_size);
+                           xicap::SourceSigner signer{ .key = {}, .signedToEnd = info->signer_signed_to_end != 0, .verifiedPackets = info->signer_verified_packets };
+                           std::ranges::copy(info->signer_key, signer.key.begin());
+                           options.signer = signer;
                        }
                        xicap::transcode(src, dst, options);
                    });

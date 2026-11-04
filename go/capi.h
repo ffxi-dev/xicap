@@ -60,11 +60,16 @@ extern "C"
         char       source_format[16];
         char       source_format_version[16];
         uint32_t   skipped_records;
+        int        has_source_signer; // the source was a signed capture
+        uint8_t    source_signing_key[32];
+        int        source_signed_to_end;
+        uint64_t   source_verified_packets;
+        uint8_t    channels[32]; // bit c of byte c/8: a packet on channel c
         uint8_t    signing_key[32];
         int        signed_to_end;
         uint64_t   verified_packets;
         uint64_t   first_failure; // file offset of the first signature that fails; 0 when none does
-        // Format 4: the seal of a program that rewrote the file.
+        // The seal of a program that rewrote the file.
         int      sealed;
         int      seal_ok;
         uint8_t  seal_key[32];
@@ -72,7 +77,7 @@ extern "C"
         uint64_t sealed_at; // Unix ms
     } xicap_summary;
 
-    // The length of the header data starts with, from its first 12 bytes, or -1. Formats 3 and 4.
+    // The length of the header data starts with, from its first 12 bytes, or -1.
     int xicap_header_size(const uint8_t* data, size_t size);
 
     // Checks that data starts with a whole header this library can read.
@@ -158,17 +163,19 @@ extern "C"
 
     typedef struct
     {
-        int            seal;  // 1: keep the signer's signature and add a seal; 0: sign anew with seed
-        int            level; // zstd level; 0 for the archive preset's 19
-        const char*    agent;
-        uint8_t        seed[32];
-        uint8_t        source_hash[64]; // seal 0 only
-        const uint8_t* metadata;        // seal 0 only
-        size_t         metadata_size;
+        int         seal;  // 1: keep the signer's signature and add a seal; 0: reissue, signed by the file's own signer
+        int         level; // zstd level; 0 for the archive preset's 19
+        const char* agent;
+        uint8_t     seed[32];
+        // Reissue: the source signer to write, when has_signer is set.
+        int      has_signer;
+        uint8_t  signer_key[32];
+        int      signer_signed_to_end;
+        uint64_t signer_verified_packets;
     } xicap_transcode_info;
 
-    // Rewrites src as format 4 at dst with the archive preset, then reads dst back and checks its packets, markers, and
-    // signatures against src. On any difference it fails and leaves no file at dst.
+    // Rewrites src at dst with the archive preset, then reads dst back and checks its packets, markers, and signatures
+    // against src. On any difference it fails and leaves dst as it was.
     int xicap_transcode(const char* src, const char* dst, const xicap_transcode_info* info, char* err, size_t errlen);
 
 #ifdef __cplusplus

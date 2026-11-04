@@ -95,16 +95,15 @@ export const enum ErrorCode {
     CompressFailed = 15,
     HeaderChecksumMismatch = 16,
     ExtensionChecksumMismatch = 17,
-    MissingDictionary = 18,
-    MissingPolicy = 19,
-    UnknownFrameKind = 20,
-    UnknownPacketFlag = 21,
-    InvalidPolicy = 22,
-    InvalidExtension = 23,
-    WriteFailed = 24,
-    PacketTooShort = 25,
-    TranscodeRefused = 26,
-    TranscodeMismatch = 27,
+    MissingPolicy = 18,
+    UnknownFrameKind = 19,
+    UnknownPacketFlag = 20,
+    InvalidPolicy = 21,
+    InvalidExtension = 22,
+    WriteFailed = 23,
+    PacketTooShort = 24,
+    TranscodeRefused = 25,
+    TranscodeMismatch = 26,
 }
 
 export class XicapError extends Error {
@@ -148,6 +147,13 @@ export interface ExclusionPolicy {
     }[];
 }
 
+// A source that was a signed capture: its signer, and what its signatures covered.
+export interface SourceSigner {
+    key: Uint8Array;
+    signedToEnd: boolean;
+    verifiedPackets: number;
+}
+
 export interface SourceInfo {
     format: string;
     formatVersion: string;
@@ -155,9 +161,10 @@ export interface SourceInfo {
     utcOffsetSeconds: number;
     sourceHash: Uint8Array;
     metadata: Uint8Array;
+    signer: SourceSigner | null;
 }
 
-// Format 4: the seal of a program that rewrote the file.
+// The seal of a program that rewrote the file.
 export interface Seal {
     key: Uint8Array;
     agent: string;
@@ -327,7 +334,7 @@ export class Reader {
     }
 }
 
-// Reads a capture of format 3 or 4 as its bytes arrive, holding only the frame
+// Reads a capture as its bytes arrive, holding only the frame
 // being received and one zstd stream's history. It stops at the first bytes
 // that are not a whole, valid frame: in a complete file, the footer.
 export class StreamReader {

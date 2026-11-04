@@ -72,7 +72,6 @@ auto fixCrcs(std::vector<uint8_t>& b) -> void
         return;
     }
     putCrc(b, 0, headerSize - 4u);
-    const bool v3    = b[8] == 3;
     size_t     at    = headerSize;
     const auto count = get<uint32_t>(b, 12);
     for (uint32_t i = 0; i < count && at + 8 <= b.size(); ++i)
@@ -85,7 +84,7 @@ auto fixCrcs(std::vector<uint8_t>& b) -> void
         putCrc(b, at, static_cast<size_t>(end));
         at = static_cast<size_t>(end) + 4;
     }
-    const size_t frameHeader = v3 ? 28 : 32;
+    const size_t frameHeader = 32;
     while (at + frameHeader + 4 <= b.size() && std::memcmp(b.data() + at, "XCFR", 4) == 0)
     {
         const uint64_t end = uint64_t{ at } + frameHeader + get<uint32_t>(b, at + 8);

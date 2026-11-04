@@ -247,6 +247,13 @@ auto encodeSource(const SourceInfo& source) -> std::vector<uint8_t>
     return out;
 }
 
+auto encodeSourceSigner(const SourceSigner& signer) -> std::vector<uint8_t>
+{
+    std::vector<uint8_t> out;
+    appendPod(out, SourceSignerBlock{ .signingKey = signer.key, .verifiedPackets = signer.verifiedPackets, .flags = signer.signedToEnd ? SourceSignerFlag::SignedToEnd : uint8_t{ 0 }, .reserved = {} });
+    return out;
+}
+
 } // namespace
 
 namespace internal
@@ -264,6 +271,11 @@ auto encodeBlock(uint32_t type, std::span<const uint8_t> payload) -> std::vector
 auto encodeSource(const SourceInfo& source) -> std::vector<uint8_t>
 {
     return xicap::encodeSource(source);
+}
+
+auto encodeSourceSigner(const SourceSigner& signer) -> std::vector<uint8_t>
+{
+    return xicap::encodeSourceSigner(signer);
 }
 
 } // namespace internal
@@ -414,7 +426,7 @@ auto Writer::open(const std::filesystem::path& path) -> void
 
 Writer::~Writer()
 {
-    if (closed_ || !file_.is_open())
+    if (closed_ || failed_ || !file_.is_open())
     {
         return;
     }
@@ -452,12 +464,21 @@ auto Writer::addExtension(uint32_t type, std::span<const std::byte> data) -> voi
     extensions_.push_back({ type, std::vector<uint8_t>(p, p + data.size()) });
 }
 
-auto Writer::mark(MarkerKind kind, std::string_view text) -> void
+auto Writer::usable() const -> void
 {
     if (closed_)
     {
         throw Error(ErrorCode::WriterClosed, "xicap: writer is closed");
     }
+    if (failed_)
+    {
+        throw Error(ErrorCode::WriteFailed, "xicap: an earlier write failed; the file ends cut off before it");
+    }
+}
+
+auto Writer::mark(MarkerKind kind, std::string_view text) -> void
+{
+    usable();
     if ((kind == MarkerKind::Login || kind == MarkerKind::Logout) && checkpoints())
     {
         endFrame(false);
@@ -487,10 +508,7 @@ auto Writer::queueMarker(MarkerKind kind, std::string_view text) -> void
 
 auto Writer::write(const OutPacket& packet) -> void
 {
-    if (closed_)
-    {
-        throw Error(ErrorCode::WriterClosed, "xicap: writer is closed");
-    }
+    usable();
     if (packet.data.size() > FrameLimits::MAX_CONTENT_SIZE)
     {
         throw Error(ErrorCode::PacketTooLarge, std::format("xicap: packet of {} bytes is over the frame limit", packet.data.size()));
@@ -568,6 +586,7 @@ auto Writer::flush() -> void
     {
         return;
     }
+    usable();
     if (!framePackets_.empty())
     {
         endFrame(false);
@@ -584,6 +603,7 @@ auto Writer::close() -> void
     {
         return;
     }
+    usable();
     endFrame(true);
     if (!started_)
     {
@@ -604,6 +624,7 @@ auto Writer::emit(std::span<const uint8_t> block) -> void
     file_.flush();
     if (!file_)
     {
+        failed_ = true;
         throw Error(ErrorCode::WriteFailed, std::format("xicap: write failed at offset {}", offset_));
     }
     offset_ += block.size();
@@ -618,7 +639,7 @@ auto Writer::writeStart() -> void
         header.versionMajor       = VERSION_MAJOR;
         header.versionMinor       = VERSION_MINOR;
         header.headerSize         = HEADER_SIZE;
-        header.extensionCount     = static_cast<uint32_t>(extensions_.size() + 1U + (config_.source ? 1U : 0U));
+        header.extensionCount     = static_cast<uint32_t>(extensions_.size() + 1U + (config_.source ? 1U : 0U) + (config_.source && config_.source->signer ? 1U : 0U));
         header.captureId          = captureId_;
         header.previousCaptureId  = config_.previousCaptureId;
         header.startTimestamp     = totalPackets_ > 0 ? firstTimestamp_ : 0;
@@ -643,6 +664,10 @@ auto Writer::writeStart() -> void
         if (config_.source)
         {
             addBlock(EXT_SOURCE, encodeSource(*config_.source));
+            if (config_.source->signer)
+            {
+                addBlock(EXT_SOURCE_SIGNER, encodeSourceSigner(*config_.source->signer));
+            }
         }
         for (const auto& ext : extensions_)
         {
@@ -681,7 +706,22 @@ auto Writer::compress(std::span<const uint8_t> plain, bool endStream) -> size_t
     }
 }
 
+// The signed stream takes a frame's packets before the frame is written, so once writing a frame fails the footer
+// could sign packets the file does not hold: the writer stops, and the file reads as cut off.
 auto Writer::endFrame(bool last) -> void
+{
+    try
+    {
+        writeFrame(last);
+    }
+    catch (...)
+    {
+        failed_ = true;
+        throw;
+    }
+}
+
+auto Writer::writeFrame(bool last) -> void
 {
     if (framePackets_.empty())
     {
@@ -839,8 +879,10 @@ auto Writer::writeFooter() -> void
         SealBlock seal{ .magic = SEAL_MAGIC, .reserved0 = 0, .sealedAt = sealedAt_, .key = sealKey_->publicKey(), .agent = {}, .signature = {}, .reserved1 = {}, .crc = 0 };
         copyText(sealAgent_, seal.agent);
         const auto* bytes = reinterpret_cast<const uint8_t*>(&seal);
-        seal.signature    = sealKey_->sign(internal::signedMessage(internal::SEAL_PREFIX, end, std::span{ bytes, offsetof(SealBlock, signature) }));
-        seal.crc          = internal::crc32({ bytes, offsetof(SealBlock, crc) });
+        const auto* kept  = reinterpret_cast<const uint8_t*>(&keptCheckpoint_);
+        // The seal covers the signer's evidence too: its footer signature and the checkpoint it keeps.
+        seal.signature = sealKey_->sign(internal::signedMessage(internal::SEAL_PREFIX, end, trailer.signature, std::span{ kept, sizeof(CheckpointPayload) }, std::span{ bytes, offsetof(SealBlock, signature) }));
+        seal.crc       = internal::crc32({ bytes, offsetof(SealBlock, crc) });
         appendPod(blockBuffer_, seal);
     }
     appendPod(blockBuffer_, trailer);

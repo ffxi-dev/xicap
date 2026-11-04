@@ -217,7 +217,7 @@ func TestChannelsAndMarkers(t *testing.T) {
 // search messages on channel 1 between game packets, and reads them back.
 // The Go binding reads only a Summary; the conformance set checks the bytes.
 func TestSearchRoundTrip(t *testing.T) {
-	b, err := os.ReadFile("../tests/vectors/search.json")
+	b, err := os.ReadFile("../tests/vectors/4-search.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -458,24 +458,32 @@ func TestTranscode(t *testing.T) {
 		t.Fatal("a recorder's own file has a seal")
 	}
 
-	// A format-3 capture is re-signed, and keeps its packets.
-	resigned := filepath.Join(t.TempDir(), "resigned.xicap")
-	if err := Transcode("../tests/vectors/clean.xicap", resigned, TranscodeOptions{Agent: "mogsafe test", Seed: mogsafe, SourceHash: [64]byte{1}, Metadata: []byte("capture x")}); err != nil {
+	if !reflect.DeepEqual(in.Channels, []uint8{0}) {
+		t.Fatalf("channels: %v", in.Channels)
+	}
+
+	// The signer writes its own converted file again, naming a signed source.
+	ci := info()
+	ci.Origin = OriginConverted
+	ci.Source = &Source{Format: "xicap", FormatVersion: "3.0", Metadata: []byte("x")}
+	conv := capture(t, 2, ci)
+	reissued := filepath.Join(t.TempDir(), "reissued.xicap")
+	signer := SourceSigner{Key: [32]byte{5}, VerifiedPackets: 6}
+	if err := Transcode(conv, reissued, TranscodeOptions{Seed: ci.SigningSeed, Signer: &signer}); err != nil {
 		t.Fatal(err)
 	}
-	old, _ := Read("../tests/vectors/clean.xicap")
-	s, err = Read(resigned)
+	s, err = Read(reissued)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.VersionMajor != 4 || s.Packets != old.Packets || !s.SignedToEnd || s.SigningKey == old.SigningKey || s.Seal != nil || s.Source == nil || s.Source.Format != "xicap" || s.Source.FormatVersion != "3.0" {
-		t.Fatalf("resigned: %+v", s)
+	if !s.SignedToEnd || s.Seal != nil || s.Source == nil || s.Source.Signer == nil || *s.Source.Signer != signer {
+		t.Fatalf("reissued: %+v %+v", s, s.Source)
 	}
 
-	// A seal refuses format 3 and leaves no file.
+	// Another signer's seed is refused and leaves no file.
 	refused := filepath.Join(t.TempDir(), "refused.xicap")
-	if err := Transcode("../tests/vectors/clean.xicap", refused, TranscodeOptions{Seal: true, Seed: mogsafe}); err == nil {
-		t.Fatal("sealed format 3")
+	if err := Transcode(conv, refused, TranscodeOptions{Seed: mogsafe, Signer: &signer}); err == nil {
+		t.Fatal("reissued another signer's file")
 	}
 	if _, err := os.Stat(refused); !os.IsNotExist(err) {
 		t.Fatal("a refused transcode left a file")

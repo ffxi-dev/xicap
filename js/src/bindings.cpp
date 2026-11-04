@@ -247,6 +247,15 @@ public:
         o.set("utcOffsetSeconds", s->utcOffsetSeconds);
         o.set("sourceHash", copyBytes(s->sourceHash));
         o.set("metadata", copyBytes(s->metadata));
+        em::val signer = em::val::null();
+        if (s->signer)
+        {
+            signer = em::val::object();
+            signer.set("key", copyBytes(s->signer->key));
+            signer.set("signedToEnd", s->signer->signedToEnd);
+            signer.set("verifiedPackets", static_cast<double>(s->signer->verifiedPackets));
+        }
+        o.set("signer", signer);
         return o;
     }
 

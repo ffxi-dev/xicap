@@ -17,7 +17,7 @@ inline constexpr uint32_t               FRAME_MAGIC  = 0x52464358; // 'XCFR'
 inline constexpr uint32_t               FOOTER_MAGIC = 0x46504358; // 'XCPF'
 inline constexpr uint32_t               SEAL_MAGIC   = 0x4C534358; // 'XCSL'
 
-// The version the writer writes. Readers also read format 3 (FORMAT-3.md).
+// The version the writer writes and the reader reads.
 inline constexpr uint8_t VERSION_MAJOR = 4;
 inline constexpr uint8_t VERSION_MINOR = 0;
 

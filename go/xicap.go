@@ -15,11 +15,10 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"os"
 	"unsafe"
 )
 
-// HeaderSize is the length of a format 3.0 or 4.0 header, the least a
+// HeaderSize is the length of a format 4.0 header, the least a
 // capture's first bytes must hold before CheckHeader can judge them.
 const HeaderSize = 384
 
@@ -118,6 +117,14 @@ type SourceSummary struct {
 	Format        string
 	FormatVersion string
 	Skipped       uint32
+	Signer        *SourceSigner // set when the source was a signed capture
+}
+
+// SourceSigner is a signed source's signer, and what its signatures covered when its packets were taken.
+type SourceSigner struct {
+	Key             [32]byte
+	SignedToEnd     bool
+	VerifiedPackets uint64
 }
 
 // Summary describes a capture after reading every frame and checking its
@@ -148,10 +155,11 @@ type Summary struct {
 	RuleCount         uint32
 	Source            *SourceSummary // set on converted captures
 	SigningKey        [32]byte
-	SignedToEnd       bool   // the footer's signature verifies
-	VerifiedPackets   uint64 // packets covered by the last good signature
-	FirstFailure      uint64 // file offset of the first checkpoint or footer whose signature fails; 0 when none does
-	Seal              *Seal  // set on a format-4 file another program rewrote
+	SignedToEnd       bool    // the footer's signature verifies
+	VerifiedPackets   uint64  // packets covered by the last good signature
+	FirstFailure      uint64  // file offset of the first checkpoint or footer whose signature fails; 0 when none does
+	Seal              *Seal   // set on a file another program rewrote
+	Channels          []uint8 // the channels the packets use, in order
 }
 
 // Seal is what a program that rewrote a capture signed: every packet, with its key, name, and time.
@@ -175,7 +183,7 @@ func HeaderLength(b []byte) (int, error) {
 	}
 	n := C.xicap_header_size((*C.uint8_t)(unsafe.Pointer(&b[0])), C.size_t(len(b)))
 	if n < 0 {
-		return 0, errors.New("xicap: not a format 3 or 4 header")
+		return 0, errors.New("xicap: not a format 4 header")
 	}
 	return int(n), nil
 }
@@ -255,6 +263,18 @@ func Read(path string) (Summary, error) {
 			Format:        C.GoString(&s.source_format[0]),
 			FormatVersion: C.GoString(&s.source_format_version[0]),
 			Skipped:       uint32(s.skipped_records),
+		}
+		if s.has_source_signer != 0 {
+			out.Source.Signer = &SourceSigner{
+				Key:             *(*[32]byte)(unsafe.Pointer(&s.source_signing_key[0])),
+				SignedToEnd:     s.source_signed_to_end != 0,
+				VerifiedPackets: uint64(s.source_verified_packets),
+			}
+		}
+	}
+	for c := 0; c < 256; c++ {
+		if s.channels[c/8]&(1<<(c%8)) != 0 {
+			out.Channels = append(out.Channels, uint8(c))
 		}
 	}
 	return out, nil
@@ -498,34 +518,36 @@ func (w *Writer) Close() error {
 
 // TranscodeOptions says how Transcode signs and compresses.
 type TranscodeOptions struct {
-	// Seal keeps the signer's signatures and adds a seal made with Seed: format 4, complete and signed to the end,
-	// or cut off. Without it, Transcode signs anew with Seed, and names a format-3 src in a source block.
-	Seal       bool
-	Level      int // zstd level; 0 for the archive preset's 19
-	Agent      string
-	Seed       [32]byte
-	SourceHash [64]byte // without Seal: the SHA-512 of src as stored
-	Metadata   []byte   // without Seal: added to the source block's metadata
+	// Seal keeps the signer's signatures and adds a seal made with Seed: a file complete and signed to the end, cut
+	// off, or sealed with its end unsigned, and none whose signature fails. Without it, Transcode reissues a file
+	// signed to the end whose own signer Seed is, writing Signer as its source signer when set.
+	Seal   bool
+	Level  int // zstd level; 0 for the archive preset's 19
+	Agent  string
+	Seed   [32]byte
+	Signer *SourceSigner // without Seal: the file must have a source block
 }
 
-// Transcode rewrites src as format 4 at dst with the archive preset, then reads dst back and checks that it holds
-// the same packets and markers as src and that its signatures verify. On any difference it returns an error and
-// leaves dst as it was.
+// Transcode rewrites src at dst with the archive preset, then reads dst back and checks that it holds the same
+// packets and markers as src and that its signatures verify. Packets and capture id stay; bytes depend on the zstd
+// version. On any difference it returns an error and leaves dst as it was.
 func Transcode(src, dst string, opt TranscodeOptions) error {
 	s, d, a := C.CString(src), C.CString(dst), C.CString(opt.Agent)
 	defer C.free(unsafe.Pointer(s))
 	defer C.free(unsafe.Pointer(d))
 	defer C.free(unsafe.Pointer(a))
-	ci := C.xicap_transcode_info{level: C.int(opt.Level), agent: a, metadata_size: C.size_t(len(opt.Metadata))}
+	ci := C.xicap_transcode_info{level: C.int(opt.Level), agent: a}
 	if opt.Seal {
 		ci.seal = 1
 	}
 	*(*[32]byte)(unsafe.Pointer(&ci.seed[0])) = opt.Seed
-	*(*[64]byte)(unsafe.Pointer(&ci.source_hash[0])) = opt.SourceHash
-	if len(opt.Metadata) > 0 {
-		m := C.CBytes(opt.Metadata)
-		defer C.free(m)
-		ci.metadata = (*C.uint8_t)(m)
+	if g := opt.Signer; g != nil {
+		ci.has_signer = 1
+		*(*[32]byte)(unsafe.Pointer(&ci.signer_key[0])) = g.Key
+		ci.signer_verified_packets = C.uint64_t(g.VerifiedPackets)
+		if g.SignedToEnd {
+			ci.signer_signed_to_end = 1
+		}
 	}
 	var msg [256]C.char
 	if C.xicap_transcode(s, d, &ci, &msg[0], C.size_t(len(msg))) != 0 {

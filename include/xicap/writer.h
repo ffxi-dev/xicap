@@ -211,6 +211,8 @@ private:
     auto               writeStart() -> void;
     auto               writeFooter() -> void;
     auto               endFrame(bool last) -> void;
+    auto               writeFrame(bool last) -> void;
+    auto               usable() const -> void;
     auto               compress(std::span<const uint8_t> plain, bool endStream) -> size_t;
     auto               checkpoint() -> void;
     auto               writeCheckpoint(const CheckpointPayload& payload) -> void;
@@ -227,6 +229,7 @@ private:
     CaptureId     captureId_{};
     bool          started_{ false };
     bool          closed_{ false };
+    bool          failed_{ false }; // a write failed: no footer may follow
     uint64_t      offset_{ 0 };
 
     std::vector<ExtensionBlock>       extensions_;
@@ -264,6 +267,7 @@ private:
 
     FooterSignature                       footerSignature_{ FooterSignature::Sign };
     Signature                             copiedSignature_{};
+    CheckpointPayload                     keptCheckpoint_{}; // a rewrite's kept checkpoint, which its seal covers; zero for none
     std::unique_ptr<internal::SigningKey> sealKey_;
     std::string                           sealAgent_;
     uint64_t                              sealedAt_{ 0 };

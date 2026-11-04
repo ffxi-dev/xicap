@@ -16,58 +16,12 @@
 namespace xicap::internal
 {
 
-inline constexpr std::string_view CHECKPOINT_PREFIX3 = "xicap/3 checkpoint";
-inline constexpr std::string_view FOOTER_PREFIX3     = "xicap/3 footer";
-inline constexpr std::string_view CHECKPOINT_PREFIX  = "xicap/4 checkpoint";
-inline constexpr std::string_view FOOTER_PREFIX      = "xicap/4 footer";
-inline constexpr std::string_view SEAL_PREFIX        = "xicap/4 seal";
+inline constexpr std::string_view CHECKPOINT_PREFIX = "xicap/4 checkpoint";
+inline constexpr std::string_view FOOTER_PREFIX     = "xicap/4 footer";
+inline constexpr std::string_view SEAL_PREFIX       = "xicap/4 seal";
 
-// Format 3's SHA-512 hash chain (FORMAT-3.md, Signatures). Each block is
-// absorbed as h = SHA-512(h || block); a block may arrive in pieces between
-// begin() and end().
-class Chain
-{
-public:
-    auto start(std::span<const uint8_t> header) noexcept -> void
-    {
-        crypto_sha512(value_.data(), header.data(), header.size());
-    }
-
-    auto begin() noexcept -> void
-    {
-        crypto_sha512_init(&ctx_);
-        crypto_sha512_update(&ctx_, value_.data(), value_.size());
-    }
-
-    auto update(std::span<const uint8_t> bytes) noexcept -> void
-    {
-        crypto_sha512_update(&ctx_, bytes.data(), bytes.size());
-    }
-
-    auto end() noexcept -> void
-    {
-        crypto_sha512_final(&ctx_, value_.data());
-    }
-
-    auto absorb(std::span<const uint8_t> block) noexcept -> void
-    {
-        begin();
-        update(block);
-        end();
-    }
-
-    [[nodiscard]] auto value() const noexcept -> const ChainValue&
-    {
-        return value_;
-    }
-
-private:
-    ChainValue        value_{};
-    crypto_sha512_ctx ctx_{};
-};
-
-// Format 4's signed stream (FORMAT.md, Signatures): one SHA-512 over the header,
-// the blocks, and each packet's records.
+// The signed stream (FORMAT.md, Signatures): one SHA-512 over the header, the
+// blocks, and each packet's records.
 class SignedStream
 {
 public:

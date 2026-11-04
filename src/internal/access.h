@@ -17,6 +17,7 @@ namespace xicap::internal
 // A whole extension block, from type to crc. Defined in writer.cpp.
 auto encodeBlock(uint32_t type, std::span<const uint8_t> payload) -> std::vector<uint8_t>;
 auto encodeSource(const SourceInfo& source) -> std::vector<uint8_t>;
+auto encodeSourceSigner(const SourceSigner& signer) -> std::vector<uint8_t>;
 
 struct Access
 {
@@ -31,6 +32,11 @@ struct Access
     static auto trailer(const Reader& r) -> const FooterTrailer&
     {
         return r.trailer_;
+    }
+    // The file offset just past the packet frame the reader is in.
+    static auto frameEnd(const Reader& r) -> uint64_t
+    {
+        return r.nextOffset_;
     }
 
     // Writes header and blocks unchanged. With a signer, signs the footer with it; without, the caller says what the
@@ -53,11 +59,12 @@ struct Access
     {
         w.queueMarker(kind, text);
     }
-    // Ends the frame and writes a checkpoint frame, unchanged.
-    static auto carry(Writer& w, const CheckpointPayload& checkpoint) -> void
+    // Ends the frame and writes a checkpoint frame, unchanged; the seal covers it.
+    static auto keep(Writer& w, const CheckpointPayload& checkpoint) -> void
     {
         w.endFrame(false);
         w.writeCheckpoint(checkpoint);
+        w.keptCheckpoint_ = checkpoint;
     }
     static auto copyFooter(Writer& w, const Signature& signature) -> void
     {
