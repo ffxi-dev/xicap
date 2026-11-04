@@ -16,6 +16,9 @@
 #include <string>
 #include <vector>
 #include <zstd.h>
+#ifdef __linux__
+#include <sys/resource.h>
+#endif
 
 using namespace test;
 using namespace craft;
@@ -1180,6 +1183,40 @@ TEST_CASE("a cut carries the scene from before its range")
     // A cut from the first packet has nothing before it to carry.
     cut(src.path, again.path, { .first = 0, .last = 13, .seed = seed(9), .agent = "mogsafe", .sourceHash = {}, .metadata = {} });
     CHECK(readAll(again.path) == from);
+}
+
+TEST_CASE("the stream reader keeps nothing it receives after it stops")
+{
+    TempCapture tmp;
+    writeFrames(tmp.path, 2);
+    auto bytes = bytesOf(tmp.path);
+    bytes.resize(footerOffset(bytes));
+    StreamReader s;
+    s.push(bytes);
+    ReadPacket p{};
+    while (s.next(p))
+    {
+    }
+    const std::vector<uint8_t> junk(1 << 20, 0x5A);
+    s.push(junk);
+    REQUIRE(s.stopped());
+#ifdef __linux__
+    const auto maxRss = []
+    {
+        rusage u{};
+        getrusage(RUSAGE_SELF, &u);
+        return u.ru_maxrss; // KiB
+    };
+    const auto before = maxRss();
+#endif
+    for (int i = 0; i < 256; ++i)
+    {
+        s.push(junk); // the rest of a 256 MiB download after a bad frame
+    }
+    CHECK(s.unreadBytes() == 257ULL << 20);
+#ifdef __linux__
+    CHECK(maxRss() - before < 64 * 1024);
+#endif
 }
 
 TEST_CASE("the stream reader reads as the bytes arrive")
