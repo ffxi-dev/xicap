@@ -508,7 +508,9 @@ A reader computes the stream from the packets it reads and reports:
 - otherwise the last checkpoint that sits where its `packets` says, whose
   `digest` equals `D(packets)`, and whose signature verifies, and its `packets`;
 - the file offset of the first checkpoint that fails, or of the footer index if
-  the footer's signature fails;
+  the footer's signature fails. A checkpoint whose payload is not 136 bytes
+  fails. Checkpoints sit outside the signed stream, so a failed one does not stop
+  a later checkpoint or the footer from counting;
 - for a sealed file, the seal's key, agent, and time, and whether its signature
   verifies.
 

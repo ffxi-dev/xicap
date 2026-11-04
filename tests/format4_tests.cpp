@@ -127,6 +127,31 @@ auto vectorFiles() -> std::vector<fs::path>
     return out;
 }
 
+// Splices frames into a complete file and rewrites its index and trailer to match, keeping the footer's signature.
+// `frames` is how many frames the splice adds.
+auto spliceComplete(const std::vector<uint8_t>& bytes, size_t at, size_t remove, std::span<const uint8_t> insert, int frames = 0) -> std::vector<uint8_t>
+{
+    auto                          trailer = podAt<FooterTrailer>(bytes, bytes.size() - sizeof(FooterTrailer));
+    const auto                    shift   = static_cast<int64_t>(insert.size()) - static_cast<int64_t>(remove);
+    std::vector<FooterIndexEntry> index(trailer.entryCount);
+    std::memcpy(index.data(), bytes.data() + trailer.indexOffset, index.size() * sizeof(FooterIndexEntry));
+    for (auto& e : index)
+    {
+        e.fileOffset = e.fileOffset >= at + remove ? static_cast<uint64_t>(static_cast<int64_t>(e.fileOffset) + shift) : e.fileOffset;
+    }
+    std::vector<uint8_t> out(bytes.begin(), bytes.begin() + static_cast<std::ptrdiff_t>(trailer.indexOffset));
+    out                 = splice(out, at, remove, insert);
+    trailer.indexOffset = out.size();
+    trailer.frameCount  = static_cast<uint32_t>(static_cast<int64_t>(trailer.frameCount) + frames);
+    trailer.indexCrc    = internal::crc32({ reinterpret_cast<const uint8_t*>(index.data()), index.size() * sizeof(FooterIndexEntry) });
+    trailer.trailerCrc  = internal::crc32({ reinterpret_cast<const uint8_t*>(&trailer), offsetof(FooterTrailer, trailerCrc) });
+    const auto* idx     = reinterpret_cast<const uint8_t*>(index.data());
+    out.insert(out.end(), idx, idx + index.size() * sizeof(FooterIndexEntry));
+    const auto* t = reinterpret_cast<const uint8_t*>(&trailer);
+    out.insert(out.end(), t, t + sizeof(trailer));
+    return out;
+}
+
 auto refused(const fs::path& path) -> bool
 {
     return refusal([&]
@@ -419,6 +444,64 @@ TEST_CASE("checkpoints sit where their packet count says")
     CHECK(readAll(r).size() == 24);
     CHECK(v.firstFailureOffset == second->offset + std::next(second)->size);
     CHECK(v.goodCheckpoints == 1);
+}
+
+TEST_CASE("a bad checkpoint is reported but does not hide a later signature")
+{
+    TempCapture tmp;
+    session(tmp.path, 8, alone());
+    const auto bytes  = bytesOf(tmp.path);
+    const auto frames = framesOf(bytes);
+    const auto first  = std::ranges::find_if(frames, [](const FrameRef& f)
+                                             {
+                                                return f.info.kind == FrameKind::Checkpoint;
+                                             });
+    REQUIRE(first != frames.end());
+    std::vector<uint8_t> payload(bytes.begin() + static_cast<std::ptrdiff_t>(first->offset + sizeof(FrameHeader)),
+                                 bytes.begin() + static_cast<std::ptrdiff_t>(first->offset + sizeof(FrameHeader) + sizeof(CheckpointPayload)));
+    SECTION("a bad signature")
+    {
+        payload.back() ^= 1;
+    }
+    SECTION("a payload of the wrong size")
+    {
+        payload.pop_back();
+    }
+    auto header        = podAt<FrameHeader>(bytes, first->offset);
+    header.payloadSize = static_cast<uint32_t>(payload.size());
+    save(tmp.path, spliceComplete(bytes, first->offset, first->size, frameBytes(header, payload)));
+
+    Reader     r(tmp.path);
+    const auto v = r.verify();
+    CHECK(r.complete());
+    CHECK(v.firstFailureOffset == first->offset);
+    CHECK(v.signedToEnd);
+    CHECK(v.verifiedPackets == 24);
+    CHECK(v.goodCheckpoints == 1);
+
+    // Cut off: the later checkpoint still counts.
+    auto cut = bytesOf(tmp.path);
+    cut.resize(footerOffset(cut));
+    save(tmp.path, cut);
+    const auto c = Reader(tmp.path).verify();
+    CHECK(c.firstFailureOffset == first->offset);
+    CHECK(c.goodCheckpoints == 1);
+    CHECK(c.verifiedPackets > 0);
+}
+
+TEST_CASE("verify refuses a frame kind it must understand")
+{
+    TempCapture tmp;
+    writeFrames(tmp.path, 2);
+    const auto bytes = bytesOf(tmp.path);
+    const auto frame = frameBytes(FrameHeader{ .magic = FRAME_MAGIC, .kind = static_cast<FrameKind>(0x81), .frameFlags = 0, .markerCount = 0, .payloadSize = 0, .packetCount = 0, .baseTimestamp = 0, .zoneId = 0, .reserved = 0, .plainSize = 0 }, {});
+    save(tmp.path, spliceComplete(bytes, packetFrames(bytes).at(1).offset, 0, frame, 1));
+    Reader r(tmp.path);
+    REQUIRE(r.complete());
+    CHECK(refusal([&]
+                  {
+                      (void)r.verify();
+                  }) == ErrorCode::UnknownFrameKind);
 }
 
 TEST_CASE("one changed packet fails the footer, and every packet still reads")
