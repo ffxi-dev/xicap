@@ -28,6 +28,18 @@ auto text(const std::array<char, N>& field) -> std::string
     return { field.data(), ::strnlen(field.data(), N) };
 }
 
+// Marker text should be UTF-8, but a recorder may have stored other bytes, such as Shift-JIS; each reads as U+FFFD
+// instead of failing the packet.
+auto utf8(const std::string& text) -> py::str
+{
+    PyObject* s = PyUnicode_DecodeUTF8(text.data(), static_cast<Py_ssize_t>(text.size()), "replace");
+    if (s == nullptr)
+    {
+        throw py::error_already_set();
+    }
+    return py::reinterpret_steal<py::str>(s);
+}
+
 // One packet, owning its bytes: ReadPacket's spans point into Reader buffers
 // that the next call invalidates.
 struct PyPacket
@@ -58,7 +70,7 @@ public:
         py::list markers;
         for (const auto& m : pkt_.markers)
         {
-            markers.append(py::make_tuple(m.kind, m.text));
+            markers.append(py::make_tuple(m.kind, utf8(m.text)));
         }
         return PyPacket{
             .timestampMs = pkt_.timestamp,

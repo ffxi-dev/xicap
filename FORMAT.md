@@ -20,6 +20,9 @@ reader cannot follow needs a new major version.
 - A text field of N bytes holds UTF-8, padded with zero bytes. It holds at most
   N - 1 bytes of text, cut only between characters, so it always ends with at
   least one zero byte.
+- Text, in fields and markers, is UTF-8. A writer given other bytes, such as
+  Shift-JIS, writes U+FFFD for each byte that does not start a valid character.
+  A reader that finds such a byte anyway does not refuse the file.
 - Timestamps are milliseconds since the Unix epoch, in UTC.
 - A byte range `a..b` includes byte `a` and stops before byte `b`.
 - A **varint** is unsigned LEB128: 7 bits per byte, low bits first, the high

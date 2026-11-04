@@ -1,4 +1,6 @@
 import json
+import struct
+import zlib
 from pathlib import Path
 
 import pytest
@@ -156,3 +158,29 @@ def test_transcode_refuses_and_leaves_nothing(tmp_path):
         xicap.transcode(VECTORS / "clean.xicap", out, seal=True, seed=bytes(32), agent="x")
     assert exc_info.value.code == xicap.ErrorCode.TranscodeRefused
     assert not out.exists()
+
+
+def capture_with_marker(text: bytes) -> bytes:
+    """A cut-off format-4 capture of one 16-byte 0x0DF packet with a note marker; its frame is a raw zstd block."""
+    crc = lambda b: zlib.crc32(b) & 0xFFFFFFFF
+    header = bytearray(384)
+    header[0:8] = bytes([0x89, 0x58, 0x43, 0x50, 0x0D, 0x0A, 0x1A, 0x0A])
+    struct.pack_into("<BBHI", header, 8, 4, 0, 384, 1)
+    header[24:40] = bytes([0x11] * 16)
+    struct.pack_into("<I", header, 380, crc(header[:380]))
+    policy = b"empty".ljust(32, bytes(1)) + struct.pack("<IHH", 1, 0, 0)
+    block = struct.pack("<II", 9, len(policy)) + policy
+    block += struct.pack("<I", crc(block))
+    packet = struct.pack("<H", (4 << 9) | 0x0DF) + bytes(14)
+    plain = bytes([0, 0, 0, 0xDF, 0x01, 0, 0, 0, 0, len(text)]) + text + bytes([16]) + packet
+    payload = struct.pack("<I", 0xFD2FB528) + bytes(2) + (1 | len(plain) << 3).to_bytes(3, "little") + plain
+    frame = b"XCFR" + struct.pack("<BBHIIQHHI", 0x80, 1, 1, len(payload), 1, 1_790_000_000_000, 0, 0, len(plain)) + payload
+    return bytes(header) + block + frame + struct.pack("<I", crc(frame))
+
+
+def test_marker_text_not_utf8_reads(tmp_path):
+    # Memoria's notes come from Ashita in Shift-JIS: 0x93 0x8C is not UTF-8.
+    path = tmp_path / "sjis.xicap"
+    path.write_bytes(capture_with_marker(bytes.fromhex("938c") + "東京".encode()))
+    packets = list(xicap.Reader(path))
+    assert [p.markers for p in packets] == [[(xicap.MarkerKind.Note, "��東京")]]
