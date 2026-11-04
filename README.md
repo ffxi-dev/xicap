@@ -1,94 +1,118 @@
 # xicap
 
-Binary capture format and C++23 library for Final Fantasy XI network packets.
+A file format and C++23 library for recording Final Fantasy XI network
+packets, with readers for Go, Python, and JavaScript.
 
-A capture is a header written once, format-level extension blocks (the
-exclusion policy, the source of converted captures), packet
-frames, and a footer index once the capture is closed. Packet frames hold their packets in columns,
-compressed as one zstd stream that runs across frames and restarts every 4 MiB.
-The file only ever grows, and each frame is decodable the moment it is written,
-so a capture can be uploaded while it records, and a cut-off capture reads up to
-its last intact frame. Every block carries a CRC, the exclusion policy zeroes
-the text of chat before it reaches disk, keeping each packet's layout (a
-recording that keeps chat carries a policy with no rules), and the recorder's Ed25519 key signs the packets
-themselves, so a capture can be recompressed and keep its signature.
+A capture holds one character's session: a header, its exclusion policy, and
+packets in frames. Each frame stores its packets in columns and continues one
+zstd stream, so captures are small, and each frame can be read as soon as it
+is written: a capture can upload while it records, and a capture cut off by a
+crash reads up to its last whole frame. Every block and frame carries a CRC.
+The exclusion policy zeroes the text of chat before it reaches disk, keeping
+each packet's layout.
 
-See [FORMAT.md](FORMAT.md) for the on-disk specification, format 4, the only
-one the library reads or writes.
+[FORMAT.md](FORMAT.md) specifies the format, with enough detail to write a
+reader from it alone.
 
-## Library
+## C++
 
 ```cpp
 #include <xicap/xicap.h>
 
-xicap::WriterConfig cfg{};
-cfg.clientVersion = "30251101_2";
-cfg.captureAgent  = "Logbook 1.0";
-cfg.character     = character;   // content id, world, names
-cfg.network       = xicap::Network::Retail;
-cfg.signingSeed   = installSeed; // the recorder's Ed25519 seed
+xicap::Metadata m;                  // xicap's default policy zeroes chat text
+m.captureAgent  = "MyRecorder 1.0";
+m.clientVersion = "30251101_2";
+m.network       = xicap::Network::Retail;
+m.character     = { .contentId = contentId, .characterId = id, .name = "Nouurs", .world = "Asura" };
 
-xicap::Writer w("session.xicap", cfg);   // FramePolicy::live(): level 7, about 5.5 MB
+xicap::Writer w("session.xicap", m);
 w.mark(xicap::MarkerKind::Login);
-w.write(timestampMs, xicap::PacketDirection::ServerToClient,
-        std::as_bytes(std::span{packetBytes, packetLen}));
-w.write({ .timestamp = t, .direction = dir, .data = searchBytes,
-          .channel = 1, .opcode = type });   // search channel
-w.flush();   // on a timer: ends the frame, signs an idle capture
-w.close();   // appends the signed footer
-
-// A packet as a writer with this policy stores it: opcode, flags, and bytes.
-const auto stored = xicap::applyPolicy(cfg.policy, packet);
+w.write({ .timestamp = ms, .direction = xicap::PacketDirection::ServerToClient, .data = bytes });
+w.flush();                          // on a timer: what was written is on disk and readable
+w.close();                          // adds the trailer
 
 xicap::Reader r("session.xicap");
-for (const auto& pkt : r) {
-    // pkt.timestamp, pkt.channel, pkt.opcode, pkt.flags, pkt.direction,
-    // pkt.data, pkt.markers
+for (const auto& p : r)
+{
+    // p.timestamp, p.channel, p.opcode, p.flags, p.direction(), p.data, p.markers
 }
-const auto v = r.verify();   // v.signedToEnd, v.verifiedPackets, v.seal
 
-// Rewrite a capture at archive size and check it packet by packet. Seal keeps
-// the recorder's signatures and adds the archive's seal, which also covers the
-// recorder's footer signature and kept checkpoint. A rewrite keeps the packets and the capture id; its bytes depend on the zstd
-// version.
-xicap::transcode("upload.xicap", "archived.xicap",
-                 { .policy = xicap::FramePolicy::archive(),
-                   .seed = archiveSeed, .agent = "mogsafe 2026.11.4" });
-
-// The archive cut an upload off after its first `held` bytes: write the rest
-// of the recording as a new capture that names it as previous.
-const auto sent = xicap::continueFrom("session.xicap", held, "session-rest.xicap",
-                                      installSeed);   // 0: nothing to send, no file
-
-// Read a capture as it downloads.
-xicap::StreamReader s;
+xicap::StreamReader s;              // a capture as it downloads
 s.push(chunk);
-xicap::ReadPacket p{};
-while (s.next(p)) { /* every packet whose frame has arrived */ }
+xicap::Packet p;
+while (s.next(p)) { }
+
+xicap::transcode("upload.xicap", "archived.xicap");   // smaller, checked packet by packet
 ```
 
-## Build
+Build with CMake 3.21 or later and a C++23 compiler. The library uses the
+system's zstd, or fetches it.
 
 ```
-cmake -S . -B build -G Ninja
+cmake -S . -B build -G Ninja -DXICAP_BUILD_TESTS=ON
 cmake --build build
+ctest --test-dir build
 ```
 
-`xicap_dump <file>` prints what a capture holds: header, provenance,
-signatures, zones, and packet statistics (`--dump` adds hex dumps).
+Projects that use CMake can add the library with `FetchContent` and link
+`xicap`.
 
-Tests are off by default. Enable with `-DXICAP_BUILD_TESTS=ON` (fetches Catch2
-via FetchContent). Run via `ctest` or the produced `xicap_tests` executable.
+## Go
 
-## Bindings
+```go
+import xicap "github.com/ffxi-dev/xicap/v7/go"
 
-* **Python** — see [`python/`](python/). pybind11 module; `pip install ./python`.
-* **JavaScript / TypeScript** — see [`js/`](js/). C++ reader compiled to
-  WebAssembly via Emscripten + Embind. Works in browsers and Node.
-* **Go** — see [`go/`](go/). cgo wrapper that builds the C++ reader in place;
-  needs a C++23 compiler and libzstd (`apt install libzstd-dev`). Import
-  `github.com/ffxi-dev/xicap/v6/go`.
+s, err := xicap.Read("session.xicap")   // the header, blocks, markers, and a summary of the packets
+```
+
+The package builds the C++ library with cgo, so it needs a C++23 compiler and
+libzstd (`apt install libzstd-dev`). It also writes captures (`Create`) and
+rewrites them (`Transcode`).
+
+## Python
+
+```
+pip install ./python
+```
+
+```python
+import xicap
+
+r = xicap.Reader("session.xicap")
+print(r.character.name, r.client_version, r.start_timestamp)
+for p in r:
+    ...  # p.timestamp, p.channel, p.opcode, p.flags, p.direction, p.data (bytes), p.markers
+```
+
+## JavaScript
+
+The library compiled to WebAssembly, for browsers and Node. Build it in `js/`
+with Emscripten on the path: `npm run build`.
+
+```js
+import { Reader, StreamReader } from "./js/dist/index.js";
+
+const r = await Reader.open(bytes);
+for (const p of r) { /* p.timestamp, p.channel, p.opcode, p.flags, p.data, p.markers */ }
+r.close();
+
+const s = await StreamReader.create();
+for await (const chunk of download) for (const p of s.push(chunk)) { /* ... */ }
+s.close();
+```
+
+## Contributing
+
+- A change to the format changes FORMAT.md, the vectors, and
+  `tests/spec_reader.py`, a reader written from FORMAT.md alone that CI runs
+  over the vectors. Regenerate the vectors with
+  `build/tests/make_vectors tests/vectors`.
+- `tests/vectors/` holds captures with the reading each must give. The C++
+  tests and each binding read all of them.
+- The bindings wrap the C++ library; none reimplements the format.
+- A release sets its version in `CMakeLists.txt`, `js/package.json`, and
+  `python/pyproject.toml`, then tags `v<version>`.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT, see [LICENSE](LICENSE).

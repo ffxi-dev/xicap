@@ -1,216 +1,88 @@
-#include "internal/transcode.h"
-#include "internal/access.h"
-#include "internal/chain.h"
-#include "internal/crc32.h"
-
+#include "xicap/transcode.h"
+#include "staged.h"
 #include "xicap/reader.h"
 
 #include <algorithm>
-#include <chrono>
-#include <cstring>
 #include <format>
-#include <memory>
 #include <optional>
-#include <random>
 
 namespace xicap
-{
-namespace internal
 {
 namespace
 {
 
-[[noreturn]] auto refuse(const std::string& why) -> void
+auto same(const Packet& a, const Packet& b) -> bool
 {
-    throw Error(ErrorCode::TranscodeRefused, "xicap: transcode refused: " + why);
+    return a.timestamp == b.timestamp && a.flags == b.flags && a.channel == b.channel && a.opcode == b.opcode &&
+           std::ranges::equal(a.data, b.data) && std::ranges::equal(a.markers, b.markers);
 }
 
-[[noreturn]] auto mismatch(const std::string& why) -> void
-{
-    throw Error(ErrorCode::TranscodeMismatch, "xicap: transcode check failed: " + why);
-}
-
-// A file beside dst that no other call names, and that becomes dst only once whole: a failed call leaves dst as it
-// was, and no call can write over its own src.
-class Staged
-{
-public:
-    explicit Staged(const std::filesystem::path& dst)
-    : dst_(dst)
-    {
-        std::random_device rd;
-        path_ = std::filesystem::path(dst).concat(std::format(".{:08x}{:08x}.tmp", rd(), rd()));
-    }
-    ~Staged()
-    {
-        std::error_code ec;
-        std::filesystem::remove(path_, ec);
-    }
-    Staged(const Staged&)                    = delete;
-    auto operator=(const Staged&) -> Staged& = delete;
-
-    [[nodiscard]] auto path() const -> const std::filesystem::path&
-    {
-        return path_;
-    }
-    auto publish() -> void
-    {
-        std::filesystem::rename(path_, dst_);
-    }
-
-private:
-    std::filesystem::path dst_;
-    std::filesystem::path path_;
-};
-
-// Reads src and dst side by side; any difference is a mismatch.
+// Reads both files side by side; throws Error at the first difference.
 auto compare(const std::filesystem::path& src, const std::filesystem::path& dst) -> void
 {
-    Reader     a(src), b(dst);
-    ReadPacket pa{}, pb{};
+    Reader a(src);
+    Reader b(dst);
+    if (a.metadata() != b.metadata())
+    {
+        throw Error("xicap: transcode changed the metadata");
+    }
+    Packet pa;
+    Packet pb;
     for (uint64_t i = 0;; ++i)
     {
         const bool na = a.next(pa);
         const bool nb = b.next(pb);
-        if (na != nb)
+        if (na != nb || (na && !same(pa, pb)))
         {
-            mismatch(std::format("packet {} is in only one of the files", i));
+            throw Error(std::format("xicap: transcode changed packet {}", i));
         }
         if (!na)
         {
             return;
-        }
-        const bool same = pa.timestamp == pb.timestamp && pa.channel == pb.channel && pa.flags == pb.flags && pa.opcode == pb.opcode &&
-                          std::ranges::equal(pa.data, pb.data) && pa.markers.size() == pb.markers.size() &&
-                          std::ranges::equal(pa.markers, pb.markers, [](const ReadMarker& x, const ReadMarker& y)
-                                             {
-                                                 return x.kind == y.kind && x.text == y.text;
-                                             });
-        if (!same)
-        {
-            mismatch(std::format("packet {} differs", i));
         }
     }
 }
 
 } // namespace
 
-auto transcode(const std::filesystem::path& src, const std::filesystem::path& dst, const TranscodeOptions& options, const TranscodeHooks& hooks) -> TranscodeResult
+auto transcode(const std::filesystem::path& src, const std::filesystem::path& dst, FramePolicy policy) -> void
 {
-    Reader     in(src);
-    const auto v = in.verify();
-    // A sealed file whose end was never signed stands for the cut-off recording it was made from.
-    const bool cutOff = !in.complete() || (Access::trailer(in).trailerFlags & TrailerFlag::EndUnsigned) != 0;
-    if (v.firstFailureOffset)
+    const internal::Staged tmp(dst);
     {
-        refuse(std::format("a signature fails at offset {}", *v.firstFailureOffset));
-    }
-    if (in.complete() && !cutOff && !v.signedToEnd)
-    {
-        refuse("a complete file not signed to the end");
-    }
-
-    auto header = Access::headerBytes(in);
-    auto blocks = Access::blockBytes(in);
-    // A cut-off file keeps the last checkpoint that verifies.
-    std::optional<CheckpointPayload> kept;
-    if (cutOff && v.verifiedPackets > 0)
-    {
-        kept = CheckpointPayload{ .packets = v.verifiedPackets, .digest = v.checkpointDigest, .signature = v.checkpointSignature };
-    }
-
-    Staged          tmp(dst);
-    TranscodeResult result{ .packets = 0, .markers = 0, .bytesIn = std::filesystem::file_size(src), .bytesOut = 0 };
-    {
-        const auto writer = Access::rewriter(tmp.path(), options.policy, std::move(header), std::move(blocks), nullptr);
-        if (cutOff)
-        {
-            Access::endUnsigned(*writer);
-        }
-        else
-        {
-            Access::copyFooter(*writer, Access::trailer(in).signature);
-        }
-        const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-        Access::seal(*writer, options.seed, options.agent, hooks.sealedAt != 0 ? hooks.sealedAt : static_cast<uint64_t>(now));
-        ReadPacket   p{};
-        CopiedPacket copy;
+        Reader in(src);
+        Writer out(tmp.path(), in.metadata(), policy);
+        Packet p;
         while (in.next(p))
         {
-            if (hooks.edit)
-            {
-                const auto* d = reinterpret_cast<const uint8_t*>(p.data.data());
-                copy          = { p.timestamp, p.flags, p.channel, p.opcode, { d, d + p.data.size() }, { p.markers.begin(), p.markers.end() } };
-                hooks.edit(result.packets, copy);
-                p = { .timestamp = copy.timestamp, .channel = copy.channel, .opcode = copy.opcode, .flags = copy.flags, .direction = p.direction, .data = std::as_bytes(std::span{ copy.data }), .markers = copy.markers };
-            }
-            result.markers += p.markers.size();
-            Access::add(*writer, p);
-            result.packets++;
-            if (kept && result.packets == kept->packets)
-            {
-                Access::keep(*writer, *kept);
-            }
+            out.copy(p);
         }
-        writer->close();
+        out.close();
     }
-    if (hooks.check)
-    {
-        compare(src, tmp.path());
-        Reader     out(tmp.path());
-        const auto w    = out.verify();
-        const bool good = out.complete() && !w.firstFailureOffset &&
-                          (cutOff ? w.verifiedPackets == (kept ? kept->packets : 0) : w.signedToEnd) && w.seal && w.seal->good;
-        if (!good)
-        {
-            mismatch("its signatures do not verify as expected");
-        }
-    }
-    result.bytesOut = std::filesystem::file_size(tmp.path());
+    compare(src, tmp.path());
     tmp.publish();
-    return result;
 }
 
-} // namespace internal
-
-auto transcode(const std::filesystem::path& src, const std::filesystem::path& dst, const TranscodeOptions& options) -> TranscodeResult
+auto continueFrom(const std::filesystem::path& source, uint64_t fromByte, const std::filesystem::path& out, FramePolicy policy) -> uint64_t
 {
-    return internal::transcode(src, dst, options, {});
-}
-
-auto continueFrom(const std::filesystem::path& source, uint64_t fromByte, const std::filesystem::path& out, const SecretSeed& seed, FramePolicy policy) -> uint64_t
-{
-    using internal::Access;
-    Reader       in(source);
-    WriterConfig config{};
-    config.captureAgent      = in.captureAgent();
-    config.clientVersion     = in.clientVersion();
-    config.character         = in.character();
-    config.clockSource       = in.clockSource();
-    config.origin            = in.origin();
-    config.network           = in.network();
-    config.startContext      = StartContext::MidSession;
-    config.previousCaptureId = in.captureId();
-    config.signingSeed       = seed;
-    config.policy            = in.policy();
-    config.source            = in.source();
-
-    std::optional<internal::Staged> tmp;
-    std::unique_ptr<Writer>         writer;
-    uint64_t                        packets = 0;
-    ReadPacket                      p{};
+    Reader in(source);
+    auto   metadata            = in.metadata();
+    metadata.previousCaptureId = metadata.captureId;
+    metadata.captureId         = {};
+    const internal::Staged tmp(out);
+    std::optional<Writer>  writer;
+    uint64_t               packets = 0;
+    Packet                 p;
     while (in.next(p))
     {
-        if (Access::frameEnd(in) <= fromByte)
+        if (in.bytesRead() <= fromByte)
         {
             continue;
         }
         if (!writer)
         {
-            tmp.emplace(out);
-            writer = std::make_unique<Writer>(tmp->path(), config, policy);
+            writer.emplace(tmp.path(), metadata, policy);
         }
-        Access::add(*writer, p);
+        writer->copy(p);
         packets++;
     }
     if (!writer)
@@ -219,7 +91,7 @@ auto continueFrom(const std::filesystem::path& source, uint64_t fromByte, const 
     }
     writer->close();
     writer.reset();
-    tmp->publish();
+    tmp.publish();
     return packets;
 }
 

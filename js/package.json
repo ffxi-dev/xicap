@@ -1,32 +1,14 @@
 {
     "name": "@xicap/wasm",
-    "version": "6.0.0",
-    "description": "WebAssembly reader for xicap FFXI packet captures.",
+    "version": "7.0.0",
+    "description": "Reads xicap captures of Final Fantasy XI packets, in browsers and Node.",
     "type": "module",
     "main": "./dist/index.js",
-    "module": "./dist/index.js",
     "types": "./dist/index.d.ts",
-    "exports": {
-        ".": {
-            "types": "./dist/index.d.ts",
-            "import": "./dist/index.js"
-        },
-        "./xicap.wasm": "./dist/xicap.wasm"
-    },
-    "files": [
-        "dist/index.js",
-        "dist/index.d.ts",
-        "dist/xicap.js",
-        "dist/xicap.wasm"
-    ],
+    "files": ["dist/index.js", "dist/index.d.ts", "dist/xicap.js", "dist/xicap.wasm"],
     "scripts": {
-        "build:wasm": "node ./scripts/build-wasm.mjs",
-        "build:ts": "tsc",
-        "build": "npm run build:wasm && npm run build:ts",
-        "test": "node --test test/reader.test.mjs"
-    },
-    "engines": {
-        "node": ">=18"
+        "build": "emcmake cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build build && npx -y -p typescript@5.9.3 tsc",
+        "test": "node --test"
     },
     "license": "MIT"
 }

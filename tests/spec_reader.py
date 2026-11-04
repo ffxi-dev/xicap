@@ -1,88 +1,86 @@
-"""A reader for xicap format 4, written from FORMAT.md alone.
+"""A reader written from FORMAT.md alone, to show the document is enough to read every capture.
 
-It is a test, not a binding: it proves the specifications are enough to read a
-capture without this repository's library. It reads every file in the
-conformance set and compares its reading with the recorded one.
+    python spec_reader.py <vectors dir>      reads each vector and compares with its JSON
+    python spec_reader.py --example FORMAT.md checks the worked example against its vector
 
-    pip install zstandard cryptography
-    python tests/spec_reader.py tests/vectors
+Needs the zstandard package. For tests only: it is slow and not a binding.
 """
 
-from __future__ import annotations
-
-import hashlib
 import json
+import re
 import struct
 import sys
 import zlib
 from pathlib import Path
 
 import zstandard
-from cryptography.exceptions import InvalidSignature
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
-MAGIC = bytes([0x89, 0x58, 0x43, 0x50, 0x0D, 0x0A, 0x1A, 0x0A])
-FRAME_MAGIC = b"XCFR"
-FOOTER_MAGIC = b"XCPF"
-HEADER_SIZE, HEADER_SIZE_MAX = 384, 4096
-TRAILER, INDEX_ENTRY, SEAL, CHECKPOINT = 112, 24, 160, 136
-MAX_PACKETS, MAX_WINDOW = 1024 * 1024, 1 << 23
-MAX_CONTENT = 16 * 1024 * 1024
-MAX_EXTENSION = 16 * 1024 * 1024
-EXT_POLICY, EXT_SOURCE = 0x0009, 0x000A
-FRAME_HEADER = 32
-KIND_CHECKPOINT, KIND_PACKETS = 0x01, 0x80
-RESTART, SEALED, END_UNSIGNED = 0x01, 0x01, 0x02
-GAME = 0
+MAGIC = bytes.fromhex("89584350 0d0a1a0a")
+MIB = 1 << 20
 
 
 class Refused(Exception):
-    """The file must be refused. `kind` is the class of rule it broke."""
-
-    def __init__(self, kind: str, why: str) -> None:
-        super().__init__(why)
-        self.kind = kind
-
-
-class BadFrame(Exception):
     pass
 
 
-def crc(b: bytes) -> int:
-    return zlib.crc32(b) & 0xFFFFFFFF
+class Bad(Exception):
+    pass
 
 
-def text(b: bytes) -> str:
-    return b.split(b"\0", 1)[0].decode("utf-8")
+def text(field):
+    return field.split(b"\0", 1)[0]
 
 
-def varint(b: bytes, pos: int, bits: int) -> tuple[int, int]:
-    """An unsigned LEB128 varint filling a field `bits` wide, and the position after it."""
+def crc_ok(b):
+    return zlib.crc32(b[:-4]) == struct.unpack_from("<I", b, len(b) - 4)[0]
+
+
+def varint(b, pos, bits):
     value = 0
     for i in range((bits + 6) // 7):
         if pos >= len(b):
-            raise BadFrame("varint past the end")
+            raise Bad("varint runs past the end")
         byte = b[pos]
         pos += 1
         value |= (byte & 0x7F) << (7 * i)
         if not byte & 0x80:
             if value >> bits:
-                raise BadFrame("varint too large for its field")
-            if i and not byte:
-                raise BadFrame("varint longer than its value needs")
+                raise Bad("varint too large for its field")
             return value, pos
-    raise BadFrame("varint too long")
+    raise Bad("varint too long")
 
 
-def unzigzag(z: int) -> int:
-    return (z >> 1) ^ -(z & 1)
+def policy(p):
+    if len(p) < 38:
+        raise Refused("short policy")
+    name, version, count = struct.unpack_from("<32sIH", p)
+    pos, rules = 38, []
+    for _ in range(count):
+        if pos + 7 > len(p):
+            raise Refused("short rule")
+        channel, direction, action, opcode, ranges = struct.unpack_from("<BBBHH", p, pos)
+        pos += 7
+        if pos + 8 * ranges > len(p):
+            raise Refused("short ranges")
+        rs = [list(struct.unpack_from("<II", p, pos + 8 * i)) for i in range(ranges)]
+        pos += 8 * ranges
+        rules.append({"channel": channel, "direction": direction, "action": action, "opcode": opcode, "ranges": rs})
+    if pos != len(p):
+        raise Refused("policy does not fill its block")
+    return {"name": text(name).decode(), "version": version, "rules": rules}
 
 
-def columns(plain: bytes, packet_count: int, marker_count: int, base: int) -> list:
-    """A format-4 packet frame's plaintext, decoded as FORMAT.md, Packet frames, says."""
+def source(p):
+    if len(p) < 36:
+        raise Refused("short source")
+    fmt, version, skipped = struct.unpack_from("<16s16sI", p)
+    return {"format": text(fmt).decode(), "formatVersion": text(version).decode(), "skippedRecords": skipped, "metadata": p[36:].hex()}
+
+
+def plaintext(plain, count, markers, base):
     pos = 0
 
-    def column(bits: int, n: int) -> list:
+    def column(bits, n):
         nonlocal pos
         out = []
         for _ in range(n):
@@ -90,561 +88,154 @@ def columns(plain: bytes, packet_count: int, marker_count: int, base: int) -> li
             out.append(v)
         return out
 
-    delta = column(32, packet_count)
-    if delta[0]:
-        raise BadFrame("first deltaMs is not 0")
-    flags = column(16, packet_count)
-    if any(f & 0xFC00 for f in flags):
-        raise Refused("unknown-required", "packet flags")
-    channel = column(8, packet_count)
-    opcode = column(16, packet_count)
-    length = column(32, packet_count)
-    sync = column(16, sum(1 for c in channel if c == GAME))
-    markers = []
-    for _ in range(marker_count):
+    delta, flags, channel, opcode, length = (column(b, count) for b in (32, 16, 8, 16, 32))
+    sync = column(16, channel.count(0))
+    marks = []
+    for _ in range(markers):
         index, pos = varint(plain, pos, 32)
         if pos >= len(plain):
-            raise BadFrame("marker past the end")
+            raise Bad("short marker")
         kind = plain[pos]
         size, pos = varint(plain, pos + 1, 16)
-        if pos + size > len(plain):
-            raise BadFrame("marker text past the end")
-        if index >= packet_count or (markers and index < markers[-1][0]):
-            raise BadFrame("marker out of place")
-        markers.append((index, kind, plain[pos : pos + size].decode("utf-8")))
+        if pos + size > len(plain) or index >= count or (marks and index < marks[-1][0]):
+            raise Bad("bad marker")
+        marks.append((index, {"kind": kind, "text": plain[pos : pos + size].hex()}))
         pos += size
-    groups: dict = {}
-    group = [groups.setdefault((c, f & 1, o), len(groups)) for c, f, o in zip(channel, flags, opcode)]
-    sizes = column(32, len(groups))
+    if delta[0] != 0:
+        raise Bad("first delta is not 0")
+
+    keys = [(c, f & 1, o) for c, f, o in zip(channel, flags, opcode)]
+    order = list(dict.fromkeys(keys))
+    sizes = column(32, len(order))
     if sum(sizes) != len(plain) - pos:
-        raise BadFrame("group sizes do not add up")
-    cursor, end = [], []
-    for size in sizes:
-        cursor.append(pos)
+        raise Bad("group sizes do not add up")
+    cursor, end = {}, {}
+    for key, size in zip(order, sizes):
+        cursor[key], end[key] = pos, pos + size
         pos += size
-        end.append(pos)
-    packets, ts, last_sync, game = [], base, [0, 0], 0
-    for i in range(packet_count):
-        g = group[i]
-        if channel[i] == GAME:
-            if end[g] - cursor[g] < 4:
-                raise BadFrame("game packet under 4 bytes")
-            word = struct.unpack_from("<H", plain, cursor[g])[0]
+
+    packets, last, t, games = [], [0, 0], base, iter(sync)
+    for i, key in enumerate(keys):
+        at = cursor[key]
+        if channel[i] == 0:
+            if end[key] - at < 4:
+                raise Bad("game packet under 4 bytes")
+            word = struct.unpack_from("<H", plain, at)[0]
             if word & 0x1FF != opcode[i]:
-                raise BadFrame("opcode is not the header's id")
-            size = (word >> 9) * 4 if length[i] == 0 else length[i] - 1
-            if size < 4:
-                raise BadFrame("game packet under 4 bytes")
+                raise Bad("opcode differs from the header")
+            n = (word >> 9) * 4 if length[i] == 0 else length[i] - 1
+            if n < 4:
+                raise Bad("game packet under 4 bytes")
         else:
             if length[i] == 0:
-                raise BadFrame("implied length off the game channel")
-            size = length[i] - 1
-        if size > end[g] - cursor[g]:
-            raise BadFrame("packet past its group")
-        data = bytearray(plain[cursor[g] : cursor[g] + size])
-        cursor[g] += size
-        if channel[i] == GAME:
+                raise Bad("implied length off the game channel")
+            n = length[i] - 1
+        if at + n > end[key]:
+            raise Bad("packet runs past its group")
+        data = bytearray(plain[at : at + n])
+        cursor[key] = at + n
+        if channel[i] == 0:
+            z = next(games)
             d = flags[i] & 1
-            last_sync[d] = (last_sync[d] + unzigzag(sync[game])) & 0xFFFF
-            game += 1
-            struct.pack_into("<H", data, 2, last_sync[d])
-        ts += delta[i]
-        if ts >> 64:
-            raise BadFrame("timestamp past 2^64")
-        packets.append([ts, channel[i], opcode[i], flags[i], bytes(data), []])
+            last[d] = (last[d] + ((z >> 1) ^ -(z & 1))) & 0xFFFF
+            struct.pack_into("<H", data, 2, last[d])
+        t += delta[i]
+        if t >= 1 << 64:
+            raise Bad("timestamp past 2^64")
+        packets.append({"timestamp": t, "flags": flags[i], "channel": channel[i], "opcode": opcode[i], "data": data.hex(),
+                        "markers": [m for j, m in marks if j == i]})
     if cursor != end:
-        raise BadFrame("group bytes left over")
-    for index, kind, txt in markers:
-        packets[index][5].append([kind, txt])
+        raise Bad("group bytes left over")
     return packets
 
 
-class Stream:
-    """The zstd stream that runs across a format-4 file's packet frames."""
+def read(b):
+    if len(b) < 160 or b[:8] != MAGIC or b[8] != 5 or not crc_ok(b[:160]):
+        raise Refused("bad header")
+    origin, network, blocks = b[9], b[10], b[11]
+    cid, prev, start, agent, client, content, character, name, world = struct.unpack_from("<16s16sQ32s32sII16s16s", b, 12)
+    meta = {
+        "captureId": cid.hex(), "previousCaptureId": prev.hex(), "startTimestamp": start, "origin": origin, "network": network,
+        "captureAgent": text(agent).decode(), "clientVersion": text(client).decode(),
+        "character": {"contentId": content, "characterId": character, "name": text(name).decode(), "world": text(world).decode()},
+        "policy": None, "source": None,
+    }
+    pos = 160
+    for _ in range(blocks):
+        if pos + 8 > len(b):
+            raise Refused("short block")
+        kind, size = struct.unpack_from("<II", b, pos)
+        if size > 16 * MIB or pos + 12 + size > len(b) or not crc_ok(b[pos : pos + 12 + size]):
+            raise Refused("bad block")
+        payload = b[pos + 8 : pos + 8 + size]
+        if kind == 1:
+            if meta["policy"] is not None:
+                raise Refused("second policy")
+            meta["policy"] = policy(payload)
+        elif kind == 2:
+            if meta["source"] is not None:
+                raise Refused("second source")
+            meta["source"] = source(payload)
+        pos += 12 + size
+    if meta["policy"] is None:
+        raise Refused("no policy")
 
-    def __init__(self) -> None:
-        self.obj = None
-        self.last = 0  # the last packet's timestamp, 0 after a reset
+    trailer = b[-24:] if len(b) >= pos + 24 else b""
+    complete = trailer[:4] == b"XCPF" and crc_ok(trailer)
+    end = len(b) - 24 if complete else len(b)
 
-    def reset(self) -> None:
-        self.obj = None
-        self.last = 0
-
-    def decode(self, frame: bytes, header: int) -> bytes:
-        _, kind, flags, marker_count, payload_size, packet_count, base, zone, _, plain_size = struct.unpack_from("<4sBBHIIQHHI", frame, 0)
-        obj, self.obj = self.obj, None
-        if flags & RESTART:
-            payload = frame[header : header + payload_size]
-            # No Frame_Content_Size, Single_Segment, reserved bit or dictionary id; Content_Checksum set.
-            if payload[:4] != bytes.fromhex("28b52ffd") or len(payload) < 5 or payload[4] & 0xEB or not payload[4] & 0x04:
-                raise BadFrame("stream is not a zstd frame of the required kind")
-            obj = zstandard.ZstdDecompressor(max_window_size=MAX_WINDOW).decompressobj(write_size=MAX_CONTENT + 1)
-        elif obj is None:
-            raise BadFrame("no stream to continue")
-        if not 1 <= plain_size <= MAX_CONTENT or not 1 <= packet_count <= MAX_PACKETS:
-            raise BadFrame("sizes out of range")
+    packets, decoder, last = [], zstandard.ZstdDecompressor().decompressobj(), 0
+    while pos < end:
         try:
-            plain = obj.decompress(frame[header : header + payload_size])
-        except zstandard.ZstdError as e:
-            raise BadFrame("zstd") from e
-        if len(plain) != plain_size or obj.unused_data:
-            raise BadFrame("payload is not plainSize bytes")
-        if base < self.last:
-            raise BadFrame("frame starts before the last packet")
-        if not obj.eof:
-            self.obj = obj
-        return plain
+            if end - pos < 28 or b[pos : pos + 4] != b"XCFR":
+                raise Bad("not a frame")
+            size, plain_size, count, markers, base = struct.unpack_from("<IIIIQ", b, pos + 4)
+            if size > 17 * MIB or pos + 32 + size > end or not crc_ok(b[pos : pos + 32 + size]):
+                raise Bad("bad frame")
+            if not 1 <= plain_size <= 16 * MIB or not 1 <= count <= MIB or base < last:
+                raise Bad("frame out of range")
+            plain = decoder.decompress(b[pos + 28 : pos + 28 + size])
+            if len(plain) != plain_size:
+                raise Bad("wrong plain size")
+            frame = plaintext(plain, count, markers, base)
+        except (Bad, zstandard.ZstdError):
+            if complete:
+                raise Refused("bad frame in a complete file")
+            break
+        packets += frame
+        last = frame[-1]["timestamp"]
+        pos += 32 + size
+
+    end_time, count = struct.unpack_from("<QQ", trailer, 4) if complete else (0, 0)
+    if complete and (count != len(packets) or end_time != last):
+        raise Refused("trailer disagrees")
+    return {"refused": False, "complete": complete, "endTimestamp": end_time, "packetCount": count, "metadata": meta, "packets": packets}
 
 
-class Capture:
-    def __init__(self, data: bytes, recovery: bool = False) -> None:
-        self.data = data
-        self.recovery = recovery
-        self.stream = Stream()
-        self.read_header()
-        self.read_extensions()
-        self.read_footer()
-        self.skipped: dict[int, int] = {}
-        self.unread = 0
-        self.mismatch = False
-        if self.complete:
-            what = self.index_disagreement()
-            if what and not recovery:
-                raise Refused("frame", f"the footer's {what} disagrees with the frames")
-            if what:
-                self.complete, self.footer_damaged = False, True
-        if self.complete:
-            self.end = self.index_offset
-        else:
-            self.scan_cut_off()
-
-    # Header -----------------------------------------------------------------
-    def read_header(self) -> None:
-        d = self.data
-        if len(d) < HEADER_SIZE:
-            raise Refused("header", "short header")
-        if d[0:8] != MAGIC:
-            raise Refused("header", "bad magic")
-        if d[8] != 4:
-            raise Refused("header", "unsupported version")
-        size = struct.unpack_from("<H", d, 10)[0]
-        if not HEADER_SIZE <= size <= HEADER_SIZE_MAX or size > len(d):
-            raise Refused("header", "header size out of range")
-        if crc(d[: size - 4]) != struct.unpack_from("<I", d, size - 4)[0]:
-            raise Refused("header", "header crc")
-        self.header_bytes = d[:size]
-        self.version = f"{d[8]}.{d[9]}"
-        self.extension_count = struct.unpack_from("<I", d, 12)[0]
-        self.capture_id = d[24:40]
-        self.previous_capture_id = d[40:56]
-        self.start_timestamp = struct.unpack_from("<Q", d, 56)[0]
-        self.clock_source, self.origin, self.network, self.start_context = d[67], d[68], d[69], d[70]
-        self.dictionary_id = struct.unpack_from("<I", d, 72)[0]
-        if self.dictionary_id:
-            raise Refused("dictionary", "format 4 has no dictionary")
-        self.signing_key = d[80:112]
-        self.capture_agent = text(d[112:144])
-        self.client_version = text(d[144:176])
-        content_id, character_id, world_id = struct.unpack_from("<IIH", d, 176)
-        self.character = [content_id, character_id, world_id, text(d[188:204]), text(d[204:220])]
-
-    # Extension blocks -------------------------------------------------------
-    def read_extensions(self) -> None:
-        d, offset = self.data, len(self.header_bytes)
-        self.blocks: list[bytes] = []
-        self.policy = None
-        self.source = None
-        self.extensions = []
-        for i in range(self.extension_count):
-            if offset + 8 > len(d):
-                raise Refused("extension", "short extension")
-            type_, length = struct.unpack_from("<II", d, offset)
-            if length > MAX_EXTENSION:
-                raise Refused("extension", "extension over 16 MiB")
-            end = offset + 8 + length + 4
-            if end > len(d):
-                raise Refused("extension", "extension runs past the file")
-            block = d[offset:end]
-            if crc(block[:-4]) != struct.unpack_from("<I", block, len(block) - 4)[0]:
-                raise Refused("extension", "extension crc")
-            payload = block[8:-4]
-            self.blocks.append(block)
-            offset = end
-            if type_ == EXT_POLICY:
-                if self.policy is not None:
-                    raise Refused("extension", "two policies")
-                self.policy = self.parse_policy(payload)
-            elif type_ == EXT_SOURCE:
-                if self.source is not None:
-                    raise Refused("extension", "two sources")
-                self.source = self.parse_source(payload)
-            else:
-                self.extensions.append([type_, payload.hex()])
-        if self.policy is None:
-            raise Refused("extension", "no policy")
-        self.data_start = offset
-
-    @staticmethod
-    def parse_policy(p: bytes) -> list:
-        try:
-            name = text(p[0:32])
-            version, rule_count = struct.unpack_from("<IH", p, 32)
-            pos, rules = 40, []
-            for _ in range(rule_count):
-                channel, direction, action, _, opcode, range_count = struct.unpack_from("<BBBBHH", p, pos)
-                pos += 8
-                ranges = []
-                for _ in range(range_count):
-                    ranges.append(list(struct.unpack_from("<II", p, pos)))
-                    pos += 8
-                rules.append([channel, direction, action, opcode, ranges])
-        except struct.error as e:
-            raise Refused("extension", "malformed policy") from e
-        if pos != len(p):
-            raise Refused("extension", "malformed policy")
-        return [name, version, rules]
-
-    @staticmethod
-    def parse_source(p: bytes) -> list:
-        if len(p) < 108 or len(p) - 108 != struct.unpack_from("<I", p, 104)[0]:
-            raise Refused("extension", "malformed source")
-        skipped, offset = struct.unpack_from("<Ii", p, 32)
-        return [text(p[0:16]), text(p[16:32]), skipped, offset, p[40:104].hex(), p[108:].hex()]
-
-    # Footer -----------------------------------------------------------------
-    def read_footer(self) -> None:
-        d = self.data
-        self.complete = self.footer_damaged = False
-        if len(d) < self.data_start + TRAILER or d[-4:] != FOOTER_MAGIC:
-            return
-        self.footer_damaged = True
-        t = d[-TRAILER:]
-        if crc(t[:104]) != struct.unpack_from("<I", t, 104)[0]:
-            return
-        end_ts, total, flags, entries, index_offset, index_crc, frame_count = struct.unpack_from("<QQIIQII", t, 0)
-        if flags & ~(SEALED | END_UNSIGNED):
-            return
-        seal_size = SEAL if flags & SEALED else 0
-        index_bytes = entries * INDEX_ENTRY
-        if index_offset < self.data_start or index_offset + index_bytes + seal_size + TRAILER != len(d):
-            return
-        index = d[index_offset : index_offset + index_bytes]
-        if crc(index) != index_crc:
-            return
-        self.seal = None
-        if seal_size:
-            seal = d[len(d) - TRAILER - SEAL : len(d) - TRAILER]
-            if seal[0:4] != b"XCSL" or crc(seal[:156]) != struct.unpack_from("<I", seal, 156)[0]:
-                return
-            self.seal = seal
-        self.trailer_flags = flags
-        self.complete, self.footer_damaged = True, False
-        self.end_timestamp, self.total_packets = end_ts, total
-        self.index_offset, self.index, self.trailer = index_offset, index, t
-
-    def index_disagreement(self):
-        """What in the footer disagrees with the frame headers, or None."""
-        d, offset, entry, frames, packets = self.data, self.data_start, 0, 0, 0
-        entries = len(self.index) // INDEX_ENTRY
-        while offset < self.index_offset:
-            if offset + 36 > self.index_offset or d[offset : offset + 4] != FRAME_MAGIC:
-                return "index offset"
-            _, kind, flags, _, payload_size, packet_count, base, zone = struct.unpack_from("<4sBBHIIQH", d, offset)
-            end = offset + 32 + payload_size + 4
-            if end > self.index_offset:
-                return "index offset"
-            if kind == KIND_PACKETS:
-                if entry >= entries:
-                    return "index"
-                ts, at, z, f = struct.unpack_from("<QQHB", self.index, entry * INDEX_ENTRY)
-                if (ts, at, z, f & RESTART) != (base, offset, zone, flags & RESTART):
-                    return "index"
-                entry, packets = entry + 1, packets + packet_count
-            frames, offset = frames + 1, end
-        if entry != entries:
-            return "index"
-        frame_count = struct.unpack_from("<I", self.trailer, 36)[0]
-        if frames != frame_count or packets != self.total_packets:
-            return "trailer"
-        return None
-
-    # Frames -----------------------------------------------------------------
-    def raw_frame(self, offset: int, limit: int):
-        """The frame at offset if it is whole, has the magic, and passes its CRC."""
-        d = self.data
-        if offset + FRAME_HEADER + 4 > limit or d[offset : offset + 4] != FRAME_MAGIC:
-            return None
-        payload_size = struct.unpack_from("<I", d, offset + 8)[0]
-        end = offset + FRAME_HEADER + payload_size + 4
-        if end > limit:
-            return None
-        if crc(d[offset : end - 4]) != struct.unpack_from("<I", d, end - 4)[0]:
-            return None
-        return d[offset:end]
-
-    def resync(self, start: int, limit: int):
-        pos = start
-        while True:
-            pos = self.data.find(FRAME_MAGIC, pos, limit)
-            if pos < 0:
-                return None
-            if self.raw_frame(pos, limit) is not None:
-                return pos
-            pos += 1
-
-    def scan_cut_off(self) -> None:
-        offset, size = self.data_start, len(self.data)
-        while offset < size:
-            frame = self.raw_frame(offset, size)
-            if frame is None:
-                if not self.recovery:
-                    self.unread = size - offset
-                    break
-                nxt = self.resync(offset + 1, size)
-                self.skip(offset, (nxt if nxt is not None else size) - offset)
-                offset = nxt if nxt is not None else size
-                continue
-            kind = frame[4]
-            if kind not in (KIND_PACKETS, KIND_CHECKPOINT) and kind >= 0x80:
-                raise Refused("unknown-required", f"frame kind {kind:#x}")
-            offset += len(frame)
-        self.end = size if self.recovery else offset
-
-    def decode(self, frame: bytes) -> list:
-        _, _, _, marker_count, _, packet_count, base = struct.unpack_from("<4sBBHIIQ", frame, 0)
-        packets = columns(self.stream.decode(frame, FRAME_HEADER), packet_count, marker_count, base)
-        self.stream.last = packets[-1][0]
-        self.check_character(packets)
-        return packets
-
-    def check_character(self, packets: list) -> None:
-        # A zone-in names the character: UniqueNo at byte 4, name at 132.
-        for _, channel, opcode, flags, data, _ in packets:
-            if channel == GAME and opcode == 0x00A and not flags & 0x0301 and len(data) >= 148:
-                if struct.unpack_from("<I", data, 4)[0] != self.character[1] or text(data[132:148]) != self.character[3]:
-                    self.mismatch = True
-
-    def skip(self, offset: int, length: int) -> None:
-        """Records a skipped region, joined to the one before when they touch."""
-        if self.skipped:
-            last = max(self.skipped)
-            if last + self.skipped[last] == offset:
-                self.skipped[last] += length
-                return
-        self.skipped[offset] = length
-
-    def packets(self):
-        offset = self.data_start
-        self.stream.reset()
-        while True:
-            if offset in self.skipped:
-                offset += self.skipped[offset]
-                self.stream.reset()
-            if offset >= self.end:
-                return
-            frame = self.raw_frame(offset, self.end)
-            if frame is None:
-                if self.recovery:
-                    nxt = self.resync(offset + 1, self.end)
-                    self.skip(offset, (nxt if nxt is not None else self.end) - offset)
-                    offset = nxt if nxt is not None else self.end
-                    self.stream.reset()
-                    continue
-                if self.complete:
-                    raise Refused("frame", f"bad frame at {offset}")
-                return
-            kind = frame[4]
-            if kind != KIND_PACKETS:
-                if kind != KIND_CHECKPOINT and kind >= 0x80:
-                    raise Refused("unknown-required", f"frame kind {kind:#x}")
-                offset += len(frame)
-                continue
-            try:
-                decoded = self.decode(frame)
-            except BadFrame as e:
-                if self.complete and not self.recovery:
-                    raise Refused("frame", str(e)) from e
-                if self.recovery:
-                    # The stream ends at a bad frame, even one whose zstd decoded: the next frames may copy from it.
-                    self.stream.reset()
-                    self.skip(offset, len(frame))
-                    offset += len(frame)
-                    continue
-                self.end = offset
-                self.unread = len(self.data) - offset
-                return
-            for p in decoded:
-                yield p[:4] + [p[4].hex(), p[5]]
-            offset += len(frame)
-
-    # Signatures -------------------------------------------------------------
-    def check(self, prefix: bytes, chain: bytes, signature: bytes) -> bool:
-        try:
-            Ed25519PublicKey.from_public_bytes(self.signing_key).verify(signature, prefix + chain)
-            return True
-        except InvalidSignature:
-            return False
-
-    def verify(self) -> list:
-        s = hashlib.sha512(self.header_bytes + b"".join(self.blocks))
-        limit = self.index_offset if self.complete else len(self.data)
-        offset, packets = self.data_start, 0
-        signed_to_end, verified, good, failure = False, 0, 0, None
-        stream = Stream()
-        checkpoints = []  # each checkpoint frame's payload, which a seal covers
-        while offset < limit:
-            frame = self.raw_frame(offset, limit)
-            if frame is None:
-                if self.complete and failure is None:
-                    failure = offset
-                break
-            payload = frame[FRAME_HEADER:-4]
-            if frame[4] not in (KIND_PACKETS, KIND_CHECKPOINT) and frame[4] >= 0x80:
-                raise Refused("unknown-required", f"frame kind {frame[4]:#x}")
-            if frame[4] == KIND_CHECKPOINT:
-                checkpoints.append(payload)
-                # A failed checkpoint is reported; a later good signature still counts.
-                ok = len(payload) == 136
-                if ok:
-                    count, digest, signature = struct.unpack_from("<Q", payload)[0], payload[8:72], payload[72:136]
-                    ok = count == packets and digest == s.copy().digest() and self.check(b"xicap/4 checkpoint", digest, signature)
-                if ok:
-                    good, verified = good + 1, packets
-                elif failure is None:
-                    failure = offset
-            elif frame[4] == KIND_PACKETS:
-                _, _, _, marker_count, _, packet_count, base = struct.unpack_from("<4sBBHIIQ", frame, 0)
-                try:
-                    decoded = columns(stream.decode(frame, FRAME_HEADER), packet_count, marker_count, base)
-                    stream.last = decoded[-1][0]
-                except (BadFrame, Refused):
-                    if self.complete and failure is None:
-                        failure = offset
-                    break
-                for ts, channel, opcode, flags, data, markers in decoded:
-                    for kind, txt in markers:
-                        t = txt.encode("utf-8")
-                        s.update(b"M" + struct.pack("<BH", kind, len(t)) + t)
-                    s.update(b"P" + struct.pack("<QHBHI", ts, flags, channel, opcode, len(data)) + data)
-                    packets += 1
-            offset += len(frame)
-        self.seal_reading = None
-        if self.complete and offset == limit:
-            s.update(b"E" + struct.pack("<QQ", self.total_packets, self.end_timestamp))
-            end = s.digest()
-            if not self.trailer_flags & END_UNSIGNED:
-                if self.check(b"xicap/4 footer", end, self.trailer[40:104]):
-                    signed_to_end, verified = True, packets
-                elif failure is None:
-                    failure = self.index_offset
-            if self.seal:
-                # The seal signs D(end), the footer's signature, and the one checkpoint a sealed file keeps (zeros for none).
-                key, signature = self.seal[16:48], self.seal[80:144]
-                ok = len(checkpoints) == 0 or (len(checkpoints) == 1 and len(checkpoints[0]) == CHECKPOINT)
-                kept = checkpoints[0] if checkpoints and ok else bytes(CHECKPOINT)
-                try:
-                    Ed25519PublicKey.from_public_bytes(key).verify(signature, b"xicap/4 seal" + end + self.trailer[40:104] + kept + self.seal[:80])
-                except InvalidSignature:
-                    ok = False
-                self.seal_reading = [key.hex(), text(self.seal[48:80]), struct.unpack_from("<Q", self.seal, 8)[0], ok]
-        return [signed_to_end, verified, good, failure is not None]
-
-
-def reading(path: Path) -> dict:
-    data = path.read_bytes()
-    out: dict = {}
+def describe(path):
     try:
-        c = Capture(data)
-        out["result"] = "ok"
-        out["header"] = {
-            "version": c.version,
-            "captureId": c.capture_id.hex(),
-            "previousCaptureId": c.previous_capture_id.hex(),
-            "startTimestamp": c.start_timestamp,
-            "clockSource": c.clock_source,
-            "origin": c.origin,
-            "network": c.network,
-            "startContext": c.start_context,
-            "signingKey": c.signing_key.hex(),
-            "captureAgent": c.capture_agent,
-            "clientVersion": c.client_version,
-            "character": c.character,
-        }
-        out["policy"] = c.policy
-        out["source"] = c.source
-        out["extensions"] = c.extensions
-        out["complete"] = c.complete
-        out["footerDamaged"] = c.footer_damaged
-        out["endTimestamp"] = c.end_timestamp if c.complete else 0
-        out["totalPacketCount"] = c.total_packets if c.complete else 0
-        out["packets"] = list(c.packets())
-        out["characterMismatch"] = c.mismatch
-        out["unreadBytes"] = c.unread
-        out["verify"] = c.verify()
-        if c.seal_reading:
-            out["seal"] = c.seal_reading
-    except Refused as e:
-        out = {"refusal": e.kind}
-    try:
-        r = Capture(data, recovery=True)
-        count = sum(1 for _ in r.packets())
-        out["recovery"] = [count, [[k, v] for k, v in sorted(r.skipped.items())]]
-    except Refused as e:
-        out["recovery"] = e.kind
-    return out
+        return read(Path(path).read_bytes())
+    except Refused:
+        return {"refused": True}
 
 
-def main(directory: str) -> int:
-    failures = 0
-    files = sorted(Path(directory).glob("*.xicap"))
-    for path in files:
-        expected = json.loads(path.with_suffix(".json").read_text())
-        expected.pop("result", None)  # this library's error name; refusal classes are compared
-        got = reading(path)
-        got.pop("result", None)
-        if got != expected:
-            failures += 1
-            print(f"MISMATCH {path.name}")
-            for key in sorted(set(got) | set(expected)):
-                if got.get(key) != expected.get(key):
-                    print(f"  {key}: spec reader {json.dumps(got.get(key))[:300]}")
-                    print(f"  {key}: recorded    {json.dumps(expected.get(key))[:300]}")
-        else:
-            print(f"ok {path.name}")
-    print(f"{len(files) - failures}/{len(files)} match")
-    return 1 if failures or not files else 0
-
-
-def example(format_md: str) -> int:
-    """Checks FORMAT.md's worked example: its dump is the conformance file it
-    names, this reader reads it, and the second dump is its frame decompressed."""
-    import re
-
-    md = Path(format_md).read_text(encoding="utf-8")
-    section = md[md.index("## Worked example") : md.index("## Versioning")]
-    blocks = re.findall(r"```\n(.*?)```", section, re.S)
-    dumps = [bytes.fromhex("".join(line[10:57] for line in b.splitlines())) for b in blocks]
-    name = re.search(r"`(tests/vectors/[\w-]+\.xicap)`", section).group(1)
-    path = Path(format_md).parent / name
-    capture, content = dumps
-    if capture != path.read_bytes():
-        print(f"the worked example is not {name}")
-        return 1
-    c = Capture(capture)
-    packets = list(c.packets())
-    if not c.complete or not c.verify()[0]:
-        print("the worked example does not read as complete and signed")
-        return 1
-    frame = c.raw_frame(c.data_start, c.end)
-    plain = Stream().decode(frame, FRAME_HEADER)
-    if plain != content:
-        print("the decompressed dump is not the frame's content")
-        return 1
-    print(f"worked example ok: {len(capture)} bytes, {len(packets)} packets")
-    return 0
+def main(args):
+    if args[:1] == ["--example"]:
+        doc = Path(args[1]).read_text(encoding="utf-8").split("## Worked example", 1)[1]
+        rows = re.findall(r"^[0-9a-f]{8}  ((?:[0-9a-f]{2} ?){1,16})", doc, re.M)
+        example = bytes.fromhex("".join(rows))
+        vector = Path(args[1]).parent / "tests" / "vectors" / "5-example.xicap"
+        assert example == vector.read_bytes(), "the worked example is not tests/vectors/5-example.xicap"
+        assert len(read(example)["packets"]) == 3
+        print("worked example: ok")
+        return 0
+    failed = 0
+    for want in sorted(Path(args[0]).glob("*.json")):
+        ok = describe(want.with_suffix(".xicap")) == json.loads(want.read_text())
+        failed += not ok
+        print(f"{want.stem}: {'ok' if ok else 'DIFFERS'}")
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
-    if len(sys.argv) > 2 and sys.argv[1] == "--example":
-        sys.exit(example(sys.argv[2]))
-    sys.exit(main(sys.argv[1] if len(sys.argv) > 1 else str(Path(__file__).parent / "vectors")))
+    sys.exit(main(sys.argv[1:]))
