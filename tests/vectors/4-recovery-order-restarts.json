@@ -1,0 +1,20 @@
+{
+  "result": "ok",
+  "header": {"version": "4.0", "captureId": "33333333333333333333333333333333", "previousCaptureId": "00000000000000000000000000000000", "startTimestamp": 1790000000000, "clockSource": 1, "origin": 1, "network": 1, "startContext": 1, "signingKey": "d759793bbc13a2819a827c76adb6fba8a49aee007f49f2d0992d99b825ad2c48", "captureAgent": "xicap_make_vectors", "clientVersion": "vectors-1.0", "character": [16909060, 168496141, 42, "Nouurs", "Asura"]},
+  "policy": ["xicap-default", 2, [[0, 0, 2, 23, [[23, 4294967295]]], [0, 1, 2, 181, [[6, 4294967295]]], [0, 1, 2, 182, [[21, 4294967295]]], [0, 1, 2, 183, [[21, 4294967295]]], [0, 0, 2, 204, [[8, 128]]], [0, 1, 2, 226, [[16, 128]]]]],
+  "source": null,
+  "extensions": [],
+  "complete": false,
+  "footerDamaged": false,
+  "endTimestamp": 0,
+  "totalPacketCount": 0,
+  "packets": [
+    [1790000000000, 0, 256, 0, "00090000000000000000000000000000", [[1, "in"]]],
+    [1790000000001, 0, 256, 1, "00090100000000000000000000000000", [[0, "n0"]]],
+    [1790000000002, 0, 256, 0, "00090200000000000000000000000000", []]
+  ],
+  "characterMismatch": false,
+  "unreadBytes": 346,
+  "verify": [false, 0, 0, false],
+  "recovery": [6, [[622, 85]]]
+}

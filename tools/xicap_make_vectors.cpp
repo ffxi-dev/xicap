@@ -248,6 +248,12 @@ auto badMiddle(const fs::path& tmp, const fs::path& p, const std::vector<uint8_t
     save(p, splice(bytes, f.offset, f.size, packetFrame({ .magic = 0, .kind = FrameKind::Packets, .frameFlags = 0, .markerCount = 0, .payloadSize = 0, .packetCount = 3, .baseTimestamp = h.baseTimestamp, .zoneId = 0, .reserved = 0, .plainSize = 0 }, plain)));
 }
 
+template <typename T>
+auto put(std::vector<uint8_t>& bytes, size_t offset, const T& v) -> void
+{
+    std::memcpy(bytes.data() + offset, &v, sizeof(v));
+}
+
 } // namespace
 
 int main(int argc, char* argv[])
@@ -508,6 +514,42 @@ int main(int argc, char* argv[])
               seal(tmp2, p);
               const auto v = Reader(p).verify();
               expect(before.verifiedPackets > 0 && v.verifiedPackets == before.verifiedPackets && !v.signedToEnd && v.seal && v.seal->good, "sealed-cut-off carries its last checkpoint");
+          } },
+        { "sealed-zero-checkpoint", [&](const fs::path& p)
+          {
+              // A sealed file holding one checkpoint frame of 136 zero bytes: the seal covers those bytes, which are the
+              // same as the zeros it covers for a file with none, so adding the frame keeps the seal good.
+              session(tmp, 3, shortStreams());
+              seal(tmp, tmp2);
+              auto       bytes   = bytesOf(tmp2);
+              auto       trailer = podAt<FooterTrailer>(bytes, bytes.size() - sizeof(FooterTrailer));
+              const auto zeros   = std::vector<uint8_t>(sizeof(CheckpointPayload));
+              const auto frame   = frameBytes(FrameHeader{ .magic = FRAME_MAGIC, .kind = FrameKind::Checkpoint, .frameFlags = 0, .markerCount = 0, .payloadSize = sizeof(CheckpointPayload), .packetCount = 0, .baseTimestamp = trailer.endTimestamp, .zoneId = 0, .reserved = 0, .plainSize = 0 }, zeros);
+              const auto at      = trailer.indexOffset;
+              trailer.indexOffset += frame.size();
+              trailer.frameCount++;
+              trailer.trailerCrc = internal::crc32({ reinterpret_cast<const uint8_t*>(&trailer), offsetof(FooterTrailer, trailerCrc) });
+              bytes              = splice(bytes, at, 0, frame);
+              put(bytes, bytes.size() - sizeof(trailer), trailer);
+              save(p, bytes);
+              const auto v = Reader(p).verify();
+              expect(v.signedToEnd && v.goodCheckpoints == 0 && v.seal && v.seal->good, "a sealed file's zero checkpoint is covered by its seal");
+          } },
+        { "recovery-order-restarts", [&](const fs::path& p)
+          {
+              // The second frame is bad, though its CRC holds; the third starts before the first's last packet. Recovery
+              // skips the second, and the order check starts again after it, so the third reads.
+              auto plain = examplePlain();
+              plain[21]  = 0x2F;
+              badMiddle(tmp, tmp2, plain);
+              auto       bytes     = bytesOf(tmp2);
+              const auto third     = packetFrames(bytes).at(2);
+              auto       header    = podAt<FrameHeader>(bytes, third.offset);
+              header.baseTimestamp = T0 + 1;
+              put(bytes, third.offset, header);
+              put(bytes, third.offset + third.size - 4, internal::crc32({ bytes.data() + third.offset, third.size - 4 }));
+              save(p, bytes);
+              expect(count(p) == 3 && count(p, { .recovery = true }) == 6, "recovery reads a frame earlier than the packets before a skip");
           } },
         { "converted", [&](const fs::path& p)
           {

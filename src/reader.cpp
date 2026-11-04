@@ -419,6 +419,7 @@ auto Reader::advance() -> bool
             if (options_.recovery)
             {
                 skip(offset, size);
+                decoder_->reset();
                 continue;
             }
             // A cut-off capture ends at its first bad frame, and so does its index: no seek lands past it.
@@ -595,6 +596,7 @@ auto Reader::verify() -> Verification
     internal::DecodedFrame decoded;
     // The seal covers the one checkpoint a sealed file keeps: its payload as stored, or zeros when there is none.
     uint32_t                                       checkpointFrames = 0;
+    bool                                           checkpointWhole  = false;
     std::array<uint8_t, sizeof(CheckpointPayload)> keptCheckpoint{};
     const auto                                     failAt = [&](uint64_t at)
     {
@@ -622,6 +624,7 @@ auto Reader::verify() -> Verification
             if (checkpointFrames++ == 0 && payload.size() == keptCheckpoint.size())
             {
                 std::ranges::copy(payload, keptCheckpoint.begin());
+                checkpointWhole = true;
             }
             CheckpointPayload checkpoint{};
             if (info.payloadSize == sizeof(CheckpointPayload))
@@ -689,7 +692,7 @@ auto Reader::verify() -> Verification
     {
         // A sealed file keeps at most one checkpoint, whole; the seal signs it and the footer's signature with D(end).
         const auto* bytes = reinterpret_cast<const uint8_t*>(&*seal_);
-        const bool  kept  = checkpointFrames == 0 || (checkpointFrames == 1 && keptCheckpoint != decltype(keptCheckpoint){});
+        const bool  kept  = checkpointFrames == 0 || (checkpointFrames == 1 && checkpointWhole);
         result.seal       = SealCheck{
             .key      = seal_->key,
             .agent    = textOf(seal_->agent),
