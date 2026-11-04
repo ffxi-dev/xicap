@@ -49,6 +49,7 @@ endif()
 set(XICAP_SOURCES
     src/columns.cpp
     src/decoder.cpp
+    src/pseudonym.cpp
     src/reader.cpp
     src/stream_reader.cpp
     src/transcode.cpp
@@ -62,6 +63,7 @@ set(XICAP_HEADERS
     include/xicap/types.h
     include/xicap/constants.h
     include/xicap/writer.h
+    include/xicap/pseudonym.h
     include/xicap/reader.h
     include/xicap/stream_reader.h
     include/xicap/transcode.h
@@ -136,11 +138,11 @@ if(XICAP_BUILD_TESTS)
     )
     FetchContent_MakeAvailable(Catch2)
 
-    add_executable(xicap_tests tests/xicap_tests.cpp tests/format4_tests.cpp)
+    add_executable(xicap_tests tests/xicap_tests.cpp tests/format4_tests.cpp tests/pseudonym_tests.cpp)
     target_link_libraries(xicap_tests PRIVATE xicap Catch2::Catch2WithMain)
     # Tests reach into src/internal to rebuild CRCs and chains when crafting bad files.
     target_include_directories(xicap_tests PRIVATE src tools third_party/monocypher)
-    target_compile_definitions(xicap_tests PRIVATE XICAP_VECTORS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors")
+    target_compile_definitions(xicap_tests PRIVATE XICAP_VECTORS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors" XICAP_PSEUDONYM_CORPUS="${CMAKE_CURRENT_SOURCE_DIR}/tests/pseudonym_corpus.txt")
 
     list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
     include(Catch)
