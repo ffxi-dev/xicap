@@ -16,185 +16,161 @@ constexpr uint32_t NPC_IDS      = 0x01000000; // NPC and mob ids carry the zone 
 constexpr uint32_t LOW_ID_BITS  = 0xFFFFF;    // search replies carry these 20 bits of a player id
 constexpr uint32_t SWEEP_MIN_ID = 0x10000;    // smaller numbers match too much else to sweep for
 
-enum class Kind : uint8_t
-{
-    Id,        // u32, little-endian
-    Name,      // text of `size` bytes, NUL-padded
-    Signature, // an item's 24-byte extra data, whose bytes 12 to 23 may hold a crafter's name in 6-bit codes
-};
+constexpr uint8_t GAME   = 0;
+constexpr uint8_t SEARCH = 1;
+constexpr auto    S2C    = PacketDirection::ServerToClient;
+constexpr auto    C2S    = PacketDirection::ClientToServer;
 
-// A field holding a player's id or name: `count` of them, `stride` bytes apart. With `mask` set, only when byte `when`
-// of the packet, masked, equals `is`. A field past the packet's end is skipped.
-struct Place
+constexpr auto id(uint8_t channel, PacketDirection direction, uint16_t opcode, uint16_t offset, uint8_t count = 1, uint8_t stride = 0) -> PseudonymPlace
 {
-    PacketDirection direction;
-    uint16_t        opcode;
-    uint16_t        offset;
-    Kind            kind;
-    uint8_t         size   = 0;
-    uint8_t         count  = 1;
-    uint8_t         stride = 0;
-    uint8_t         when   = 0;
-    uint8_t         mask   = 0;
-    uint8_t         is     = 0;
-};
-
-constexpr auto S2C = PacketDirection::ServerToClient;
-constexpr auto C2S = PacketDirection::ClientToServer;
-
-constexpr auto id(PacketDirection direction, uint16_t opcode, uint16_t offset, uint8_t count = 1, uint8_t stride = 0) -> Place
-{
-    return { .direction = direction, .opcode = opcode, .offset = offset, .kind = Kind::Id, .count = count, .stride = stride };
+    return { channel, direction, opcode, offset, PseudonymKind::Id, 4, count, stride, 0, 0, 0 };
 }
 
-constexpr auto name(PacketDirection direction, uint16_t opcode, uint16_t offset, uint8_t size = 16, uint8_t count = 1, uint8_t stride = 0) -> Place
+constexpr auto name(uint8_t channel, PacketDirection direction, uint16_t opcode, uint16_t offset, uint8_t size = 16, uint8_t count = 1, uint8_t stride = 0) -> PseudonymPlace
 {
-    return { .direction = direction, .opcode = opcode, .offset = offset, .kind = Kind::Name, .size = size, .count = count, .stride = stride };
+    return { channel, direction, opcode, offset, PseudonymKind::Name, size, count, stride, 0, 0, 0 };
 }
 
-constexpr auto signature(uint16_t opcode, uint16_t offset, uint8_t count = 1, uint8_t stride = 0) -> Place
+constexpr auto signature(uint16_t opcode, uint16_t offset, uint8_t count = 1, uint8_t stride = 0) -> PseudonymPlace
 {
-    return { .direction = S2C, .opcode = opcode, .offset = offset, .kind = Kind::Signature, .count = count, .stride = stride };
+    return { GAME, S2C, opcode, offset, PseudonymKind::Signature, 24, count, stride, 0, 0, 0 };
 }
 
-constexpr auto when(Place place, uint8_t byte, uint8_t mask, uint8_t is) -> Place
+constexpr auto when(PseudonymPlace place, uint8_t at, uint16_t mask, uint16_t is) -> PseudonymPlace
 {
-    place.when = byte;
+    place.when = at;
     place.mask = mask;
     place.is   = is;
     return place;
 }
 
-// The field map: offsets count from the packet's 4-byte header, after ffxi-dev/packets' layouts (atom0s's XiPackets),
-// each checked on retail packets from public Mogsafe captures where any were found. An id field may also hold an NPC's
-// id, which passes unchanged. Bump anonymousExclusionPolicy's version with every change.
-constexpr Place FIELD_MAP[] = {
-    id(S2C, 0x009, 4), // message: UniqueNo
-    id(S2C, 0x00A, 4),
-    id(S2C, 0x00A, 44),    // zone-in: UniqueNo, BtTargetID
-    name(S2C, 0x00A, 132), //   name
-    id(S2C, 0x00D, 4),
-    id(S2C, 0x00D, 44),   // PC update: UniqueNo, BtTargetID
-    name(S2C, 0x00D, 90), //   name
-    id(S2C, 0x00E, 4),
-    id(S2C, 0x00E, 44), // NPC update: UniqueNo, BtTargetID (who it fights)
-    id(S2C, 0x013, 4),  // GM command: GMUniqueNo
-    id(S2C, 0x021, 4),
-    id(S2C, 0x022, 4), // trade request and result: UniqueNo
-    id(S2C, 0x027, 4),
-    id(S2C, 0x02A, 4), // talk with numbers: UniqueNo
-    id(S2C, 0x029, 4),
-    id(S2C, 0x029, 8), // battle message: UniqueNoCas, UniqueNoTar
-    id(S2C, 0x02C, 4), // channel state: UniqueNo
-    id(S2C, 0x02D, 4),
-    id(S2C, 0x02D, 8), // battle message 2: UniqueNoCas, UniqueNoTar
-    id(S2C, 0x02F, 4), // dig: TarUniqueNo
-    id(S2C, 0x030, 4),
-    id(S2C, 0x032, 4), // effect, event: UniqueNo
-    id(S2C, 0x033, 4),
-    id(S2C, 0x034, 4), // event with strings, numbers: UniqueNo
-    id(S2C, 0x036, 4),
-    id(S2C, 0x03B, 4),  // talk, event message: UniqueNo
-    id(S2C, 0x037, 36), // server status: UniqueNo
-    id(S2C, 0x038, 4),
-    id(S2C, 0x038, 8), // schedulers: UniqueNoCas, UniqueNoTar
-    id(S2C, 0x039, 4),
-    id(S2C, 0x039, 8), //
-    id(S2C, 0x03A, 4),
-    id(S2C, 0x03A, 8),               //
-    id(S2C, 0x041, 4, 12, 20),       // blacklist: 12 of ID, Name
-    name(S2C, 0x041, 8, 16, 12, 20), //
-    id(S2C, 0x042, 4),
-    name(S2C, 0x042, 8), // blacklist edit: ID, Name
-    id(S2C, 0x043, 4),
-    name(S2C, 0x043, 16), // talk with a name: UniqueNo, sName
-    name(S2C, 0x04B, 20), // delivery box: the sender or recipient of a box slot
-    name(S2C, 0x04C, 24), // auction house: Parcel.Name
-    id(S2C, 0x058, 4),    // assist: UniqueNo
-    id(S2C, 0x05A, 4),
-    id(S2C, 0x05A, 8),        // emote: CasUniqueNo, TarUniqueNo
-    id(S2C, 0x05A, 24, 5, 4), //   FaithUniqueNo
-    id(S2C, 0x05B, 16),
-    id(S2C, 0x065, 16), // positions: UniqueNo
-    id(S2C, 0x067, 8),
-    id(S2C, 0x068, 8),                    // pet and trust updates: UniqueNo
-    when(id(S2C, 0x067, 32), 4, 0x3F, 2), //   mode 2: UniqueNoMog
-    when(id(S2C, 0x068, 32), 4, 0x3F, 2), //
-    when(id(S2C, 0x067, 20), 4, 0x3F, 4), //   mode 4: UniqueNoTarget
-    when(id(S2C, 0x068, 20), 4, 0x3F, 4), //
-    name(S2C, 0x070, 30),                 // synthesis by another player: name
-    id(S2C, 0x076, 4, 5, 48),             // party effects: Members[5].UniqueNo
-    id(S2C, 0x0A0, 4),                    // party map: UniqueID
-    id(S2C, 0x0B7, 68),
-    name(S2C, 0x0B7, 72),                            // GM item: UniqueNo, sName
-    id(S2C, 0x0C8, 8, 20, 12),                       // alliance: GroupTbl[20].UniqueNo
-    id(S2C, 0x0C9, 4),                               // check: UniqNo
-    when(signature(0x0C9, 16, 16, 28), 10, 0xFF, 3), //   OptionFlag 3: Equip[16].Data
-    name(S2C, 0x0CA, 128),                           // bazaar message: sName
-    id(S2C, 0x0D2, 8),
-    id(S2C, 0x0D2, 32),   // treasure pool: TargetUniqueNo, LootUniqueNo
-    name(S2C, 0x0D2, 40), //   LootActName
-    id(S2C, 0x0D3, 4),
-    id(S2C, 0x0D3, 8), // treasure lot: LootUniqueNo, EntryUniqueNo
-    name(S2C, 0x0D3, 22),
-    name(S2C, 0x0D3, 38), //   sLootName, sLootName2
-    id(S2C, 0x0DC, 4),
-    name(S2C, 0x0DC, 12), // party invite: UniqueNo, sName
-    id(S2C, 0x0DD, 4),
-    name(S2C, 0x0DD, 40), // party member: UniqueNo, Name
-    id(S2C, 0x0DF, 4),    // party member state: UniqueNo
-    id(S2C, 0x0E2, 4),
-    name(S2C, 0x0E2, 40), // party member 2: UniqueNo, Name
-    id(S2C, 0x0F9, 4),    // raise: UniqueNo
-    signature(0x020, 17),
-    signature(0x023, 14), // item, trade item: Attr
-    signature(0x105, 17), // bazaar item: Attr
-    name(S2C, 0x106, 8),
-    name(S2C, 0x107, 4), // bazaar buy and close: sName
-    id(S2C, 0x108, 4),
-    name(S2C, 0x108, 16), // bazaar shopper: UniqueNo, sName
-    id(S2C, 0x109, 4),
-    name(S2C, 0x109, 12), // bazaar sale: UniqueNo, sName
-    name(S2C, 0x10A, 10), // bazaar sold: sName
-    id(S2C, 0x11D, 4),
-    name(S2C, 0x11D, 12), // party request: UniqueNo, sName
+// A name that belongs to the id at `id`: rewritten only when that id is a player's, whose top byte is 0. A trust in a
+// party list keeps its name.
+constexpr auto ofPlayer(PseudonymPlace place, uint8_t id) -> PseudonymPlace
+{
+    return when(place, static_cast<uint8_t>(id + 2), 0xFF00, 0);
+}
 
-    id(C2S, 0x00A, 12),
-    name(C2S, 0x00A, 34, 15), // zone-in: UniqueNo, sName
-    id(C2S, 0x017, 8),
-    id(C2S, 0x017, 12), // character request: UniqueNo2, UniqueNo3
-    id(C2S, 0x01A, 4),  // action: UniqueNo
-    id(C2S, 0x01F, 4),  // GM command: GMUniqueNo
-    id(C2S, 0x032, 4),
-    id(C2S, 0x036, 4), // trade request, item transfer: UniqueNo
-    id(C2S, 0x037, 4), // item use: UniqueNo
-    id(C2S, 0x03D, 4),
-    name(C2S, 0x03D, 8),  // blacklist edit: ID, Name
-    name(C2S, 0x04D, 16), // delivery box: TargetName
-    id(C2S, 0x05B, 4),
-    id(C2S, 0x05C, 16), // event end: UniqueNo
-    id(C2S, 0x05D, 4),  // emote: UniqueNo
-    id(C2S, 0x060, 4),
-    id(C2S, 0x063, 4), // event password, dig: UniqueNo
-    id(C2S, 0x064, 4), // key item: UniqueNo
-    id(C2S, 0x06E, 4), // party invite: UniqueNo
-    id(C2S, 0x071, 4),
-    name(C2S, 0x071, 12, 15), // party kick: UniqueNo, sName
-    id(C2S, 0x073, 4),        // party change: UniqueNo
-    name(C2S, 0x077, 4),      // party change 2: sName
-    id(C2S, 0x0D8, 12),       // private dungeon: UniqueNo
-    id(C2S, 0x0DD, 4),        // check: UniqueNo
-    id(C2S, 0x105, 4),        // bazaar open: UniqueNo
+// The field map. Offsets count from the packet's first byte: the 4-byte header on the game channel, the size on the
+// search channel. Layouts after ffxi-dev/packets (atom0s's XiPackets) and LandSandBoat; pseudonym_fields.tsv says which
+// were checked on retail packets. An id field may also hold an NPC's id, which stays. Keep pseudonym_fields.tsv in step,
+// and bump anonymousExclusionPolicy's version with every change.
+// clang-format off
+constexpr PseudonymPlace FIELD_MAP[] = {
+    id(GAME, S2C, 0x009, 4),                                   // message: UniqueNo
+    id(GAME, S2C, 0x00A, 4), id(GAME, S2C, 0x00A, 44),         // zone-in: UniqueNo, BtTargetID
+    name(GAME, S2C, 0x00A, 132),                               //   name
+    id(GAME, S2C, 0x00D, 4), id(GAME, S2C, 0x00D, 44),         // PC update: UniqueNo, BtTargetID
+    name(GAME, S2C, 0x00D, 90),                                //   name
+    id(GAME, S2C, 0x00E, 4), id(GAME, S2C, 0x00E, 44),         // NPC update: UniqueNo, BtTargetID (who it fights)
+    id(GAME, S2C, 0x013, 4),                                   // GM command: GMUniqueNo
+    id(GAME, S2C, 0x014, 4),                                   // tell: UniqueNo
+    name(GAME, S2C, 0x017, 8, 15),                             // chat: sName
+    id(GAME, S2C, 0x021, 4), id(GAME, S2C, 0x022, 4),          // trade request and result: UniqueNo
+    id(GAME, S2C, 0x027, 4), id(GAME, S2C, 0x02A, 4),          // talk with numbers: UniqueNo
+    id(GAME, S2C, 0x029, 4), id(GAME, S2C, 0x029, 8),          // battle message: UniqueNoCas, UniqueNoTar
+    id(GAME, S2C, 0x02C, 4),                                   // channel state: UniqueNo
+    id(GAME, S2C, 0x02D, 4), id(GAME, S2C, 0x02D, 8),          // battle message 2: UniqueNoCas, UniqueNoTar
+    id(GAME, S2C, 0x02F, 4),                                   // dig: TarUniqueNo
+    id(GAME, S2C, 0x030, 4), id(GAME, S2C, 0x032, 4),          // effect, event: UniqueNo
+    id(GAME, S2C, 0x033, 4), id(GAME, S2C, 0x034, 4),          // event with strings, numbers: UniqueNo
+    id(GAME, S2C, 0x036, 4), id(GAME, S2C, 0x03B, 4),          // talk, event message: UniqueNo
+    id(GAME, S2C, 0x037, 36),                                  // server status: UniqueNo
+    id(GAME, S2C, 0x038, 4), id(GAME, S2C, 0x038, 8),          // scheduler: UniqueNoCas, UniqueNoTar
+    id(GAME, S2C, 0x039, 4), id(GAME, S2C, 0x039, 8),          // map scheduler: UniqueNoCas, UniqueNoTar
+    id(GAME, S2C, 0x03A, 4), id(GAME, S2C, 0x03A, 8),          // magic scheduler: UniqueNoCas, UniqueNoTar
+    id(GAME, S2C, 0x042, 4), name(GAME, S2C, 0x042, 8),        // blacklist edit: ID, Name
+    id(GAME, S2C, 0x043, 4), ofPlayer(name(GAME, S2C, 0x043, 16), 4),       // talk with a name: UniqueNo, sName
+    name(GAME, S2C, 0x04B, 20),                                // delivery box: State.box_state To or From
+    name(GAME, S2C, 0x04C, 24),                                // auction house: Parcel.Name
+    id(GAME, S2C, 0x058, 4),                                   // assist: UniqueNo
+    id(GAME, S2C, 0x05A, 4), id(GAME, S2C, 0x05A, 8),          // emote: CasUniqueNo, TarUniqueNo
+    id(GAME, S2C, 0x05A, 24, 5, 4),                            //   FaithUniqueNo[5]
+    id(GAME, S2C, 0x05B, 16), id(GAME, S2C, 0x065, 16),        // positions: UniqueNo
+    id(GAME, S2C, 0x067, 8), id(GAME, S2C, 0x068, 8),          // pet and trust updates: UniqueNo
+    when(id(GAME, S2C, 0x067, 32), 4, 0x3F, 2),                //   mode 2: UniqueNoMog
+    when(id(GAME, S2C, 0x068, 32), 4, 0x3F, 2),                //   mode 2: UniqueNoMog
+    when(id(GAME, S2C, 0x067, 20), 4, 0x3F, 4),                //   mode 4: UniqueNoTarget
+    when(id(GAME, S2C, 0x068, 20), 4, 0x3F, 4),                //   mode 4: UniqueNoTarget
+    name(GAME, S2C, 0x070, 30),                                // synthesis by another player: name
+    id(GAME, S2C, 0x076, 4, 5, 48),                            // party effects: Members[5].UniqueNo
+    id(GAME, S2C, 0x078, 4), ofPlayer(name(GAME, S2C, 0x078, 14, 15), 4),   // proposal: UniqueNo, sName
+    name(GAME, S2C, 0x079, 29, 15),                            // proposal state: sPropName
+    id(GAME, S2C, 0x0A0, 4),                                   // party map: UniqueID
+    id(GAME, S2C, 0x0B7, 68), name(GAME, S2C, 0x0B7, 72),      // GM item: UniqueNo, sName
+    id(GAME, S2C, 0x0C8, 8, 20, 12),                           // alliance: GroupTbl[20].UniqueNo
+    id(GAME, S2C, 0x0C9, 4),                                   // check: UniqNo
+    when(signature(0x0C9, 16, 16, 28), 10, 0xFF, 3),           //   OptionFlag 3: Equip[16].Data
+    name(GAME, S2C, 0x0CA, 128),                               // bazaar message: sName
+    name(GAME, S2C, 0x0CC, 140),                               // linkshell message: modifier
+    id(GAME, S2C, 0x0D2, 8), id(GAME, S2C, 0x0D2, 32),         // treasure pool: TargetUniqueNo, LootUniqueNo
+    ofPlayer(name(GAME, S2C, 0x0D2, 40), 32),                  //   LootActName
+    id(GAME, S2C, 0x0D3, 4), id(GAME, S2C, 0x0D3, 8),          // treasure lot: LootUniqueNo, EntryUniqueNo
+    ofPlayer(name(GAME, S2C, 0x0D3, 22), 4), ofPlayer(name(GAME, S2C, 0x0D3, 38), 8),    //   sLootName, sLootName2
+    id(GAME, S2C, 0x0DC, 4), name(GAME, S2C, 0x0DC, 12),       // party invite: UniqueNo, sName
+    id(GAME, S2C, 0x0DD, 4), ofPlayer(name(GAME, S2C, 0x0DD, 40), 4),       // party member: UniqueNo, Name
+    id(GAME, S2C, 0x0DF, 4),                                   // party member state: UniqueNo
+    id(GAME, S2C, 0x0E2, 4), ofPlayer(name(GAME, S2C, 0x0E2, 40), 4),       // party member 2: UniqueNo, Name
+    when(id(GAME, S2C, 0x0E6, 8), 4, 0xFFC0, 3 << 6),          // ballista, mode 3 (scout): RookUniqueNo
+    id(GAME, S2C, 0x0F9, 4),                                   // raise: UniqueNo
+    signature(0x020, 17), signature(0x023, 14),                // item, trade item: Attr
+    signature(0x105, 17),                                      // bazaar item: Attr
+    name(GAME, S2C, 0x106, 8), name(GAME, S2C, 0x107, 4),      // bazaar buy and close: sName
+    id(GAME, S2C, 0x108, 4), name(GAME, S2C, 0x108, 16),       // bazaar shopper: UniqueNo, sName
+    id(GAME, S2C, 0x109, 4), name(GAME, S2C, 0x109, 12),       // bazaar sale: UniqueNo, sName
+    name(GAME, S2C, 0x10A, 10),                                // bazaar sold: sName
+    id(GAME, S2C, 0x11D, 4), name(GAME, S2C, 0x11D, 12),       // party request: UniqueNo, sName
+
+    id(GAME, C2S, 0x00A, 12), name(GAME, C2S, 0x00A, 34, 15),  // zone-in: UniqueNo, sName
+    id(GAME, C2S, 0x017, 8), id(GAME, C2S, 0x017, 12),         // character request: UniqueNo2, UniqueNo3
+    id(GAME, C2S, 0x01A, 4),                                   // action: UniqueNo
+    id(GAME, C2S, 0x01F, 4),                                   // GM command: GMUniqueNo
+    id(GAME, C2S, 0x032, 4), id(GAME, C2S, 0x036, 4),          // trade request, item transfer: UniqueNo
+    id(GAME, C2S, 0x037, 4),                                   // item use: UniqueNo
+    id(GAME, C2S, 0x03D, 4), name(GAME, C2S, 0x03D, 8),        // blacklist edit: ID, Name
+    name(GAME, C2S, 0x04D, 16),                                // delivery box: TargetName
+    id(GAME, C2S, 0x05B, 4), id(GAME, C2S, 0x05C, 16),         // event end: UniqueNo
+    id(GAME, C2S, 0x05D, 4),                                   // emote: UniqueNo
+    id(GAME, C2S, 0x060, 4), id(GAME, C2S, 0x063, 4),          // event password, dig: UniqueNo
+    id(GAME, C2S, 0x064, 4),                                   // key item: UniqueNo
+    id(GAME, C2S, 0x06E, 4),                                   // party invite: UniqueNo
+    id(GAME, C2S, 0x071, 4), name(GAME, C2S, 0x071, 12, 15),   // party kick: UniqueNo, sName
+    id(GAME, C2S, 0x073, 4),                                   // party change: UniqueNo
+    name(GAME, C2S, 0x077, 4),                                 // party change 2: sName
+    name(GAME, C2S, 0x0A1, 5, 15),                             // vote: Name
+    name(GAME, C2S, 0x0B6, 6, 15),                             // tell: sName
+    name(GAME, C2S, 0x0B7, 6, 15),                             // assist channel: sName
+    id(GAME, C2S, 0x0D8, 12),                                  // private dungeon: UniqueNo
+    id(GAME, C2S, 0x0DD, 4),                                   // check: UniqueNo
+    id(GAME, C2S, 0x0E2, 12),                                  // linkshell message post: uniqNo
+    id(GAME, C2S, 0x105, 4),                                   // bazaar open: UniqueNo
+
+    id(SEARCH, C2S, 0x01, 0x12, 20, 4),                        // players by id: the ids
+    id(SEARCH, C2S, 0x02, 0x10), id(SEARCH, C2S, 0x02, 0x14),  // party list: party id, alliance id
+    id(SEARCH, C2S, 0x08, 0x10),                               // comment request: player id
+    name(SEARCH, S2C, 0x85, 0x28, 16, 10, 40),                 // auction history: Name1 of each of 10 sales
+    name(SEARCH, S2C, 0x85, 0x38, 16, 10, 40),                 //   Name2
+    name(SEARCH, S2C, 0x86, 0x28, 16, 10, 40),                 // auction history of a stack: Name1 of each of 10 sales
+    name(SEARCH, S2C, 0x86, 0x38, 16, 10, 40),                 //   Name2
+    id(SEARCH, S2C, 0x88, 0x18),                               // comment: player id
 };
+// clang-format on
+
+constexpr size_t SEARCH_BODY = 0x0C; // after the size, the magic, the length, and the type
 
 auto byteAt(std::span<const std::byte> data, size_t i) -> uint8_t
 {
     return std::to_integer<uint8_t>(data[i]);
 }
 
+auto u16At(std::span<const std::byte> data, size_t i) -> uint16_t
+{
+    return static_cast<uint16_t>(byteAt(data, i) | byteAt(data, i + 1) << 8);
+}
+
 auto u32At(std::span<const std::byte> data, size_t i) -> uint32_t
 {
-    return byteAt(data, i) | byteAt(data, i + 1) << 8 | byteAt(data, i + 2) << 16 | static_cast<uint32_t>(byteAt(data, i + 3)) << 24;
+    return u16At(data, i) | static_cast<uint32_t>(u16At(data, i + 2)) << 16;
 }
 
 auto putU32(std::span<std::byte> data, size_t i, uint32_t value) -> void
@@ -224,7 +200,7 @@ auto isName(std::string_view text) -> bool
                                                                      });
 }
 
-// Bit fields, least significant bit first (the action packet) or most significant first (search replies).
+// Bit fields, least significant bit first (the action packet) or most significant first (the search server's).
 struct Bits
 {
     std::span<std::byte> data;
@@ -263,10 +239,18 @@ struct Bits
             data[p / 8]      = static_cast<std::byte>(b);
         }
     }
+
+    auto zero(size_t from, size_t to) const -> void
+    {
+        for (; from < to; ++from)
+        {
+            set(from, 1, 0);
+        }
+    }
 };
 
 // Bits after a search reply entry's 5-bit tag, by tag, after LandSandBoat's search server; 0 for a tag not known.
-auto searchTagBits(uint32_t tag) -> size_t
+auto replyTagBits(uint32_t tag) -> size_t
 {
     switch (tag)
     {
@@ -301,13 +285,31 @@ auto searchTagBits(uint32_t tag) -> size_t
     }
 }
 
-// Search request types kept as they are: the auction house's item lists name no one.
-auto searchKept(uint8_t type) -> bool
+// Search types this library reads. Any other is zeroed past its type: its layout is not known.
+auto searchKnown(uint8_t type) -> bool
 {
-    return type == 0x10 || type == 0x15 || type == 0x90 || type == 0x95;
+    switch (type)
+    {
+        case 0x00: // search all
+        case 0x01: // players by id
+        case 0x02: // party and linkshell list
+        case 0x03: // search
+        case 0x05: // auction history
+        case 0x06: // auction history of a stack
+        case 0x08: // comment
+        case 0x10: // auction list, more
+        case 0x15: // auction list
+            return true;
+        default:
+            return type >= 0x80 && searchKnown(type & 0x7F);
+    }
 }
 
-constexpr size_t SEARCH_BODY = 0x0C; // after the size, the magic, the length, and the type
+// Replies whose bytes after the length at 0x08 hold the client's hash of the plaintext, which would confirm a guessed name.
+auto searchHashed(uint8_t type) -> bool
+{
+    return (type >= 0x80 && type <= 0x83) || type == 0x85 || type == 0x86 || type == 0x88;
+}
 
 auto signatureCode(char c) -> uint32_t
 {
@@ -341,6 +343,11 @@ auto signatureChar(uint32_t code) -> char
 
 } // namespace
 
+auto pseudonymFieldMap() -> std::span<const PseudonymPlace>
+{
+    return FIELD_MAP;
+}
+
 auto deriveKey(const SecretSeed& seed, std::string_view label) -> std::array<uint8_t, 32>
 {
     std::array<uint8_t, 32> out{};
@@ -352,32 +359,20 @@ auto anonymousExclusionPolicy() -> const ExclusionPolicy&
 {
     static const ExclusionPolicy policy = []
     {
-        ExclusionPolicy p{ .name = "xicap-anonymous", .version = 1, .rules = defaultExclusionPolicy().rules };
-        const auto      stub = [&](ExclusionDirection direction, uint16_t opcode)
+        ExclusionPolicy p{ .name = "xicap-anonymous", .version = 2, .rules = defaultExclusionPolicy().rules };
+        // Text players write that the default keeps. Only the text: the rest of each packet stays.
+        const auto text = [&](uint8_t channel, ExclusionDirection direction, uint16_t opcode, uint32_t offset, uint32_t length)
         {
-            p.rules.push_back({ .channel = 0, .direction = direction, .action = ExclusionAction::Stub, .opcode = opcode, .ranges = {} });
+            p.rules.push_back({ .channel = channel, .direction = direction, .action = ExclusionAction::ZeroRange, .opcode = opcode, .ranges = { { .offset = offset, .length = length } } });
         };
-        // Free text players write, or names at places the field map does not know.
-        stub(ExclusionDirection::ServerToClient, 0x014); // tell status, with text
-        stub(ExclusionDirection::ServerToClient, 0x016); // talk, with text
-        stub(ExclusionDirection::ServerToClient, 0x048); // linkshell concierge
-        stub(ExclusionDirection::ServerToClient, 0x078); // proposal start: sName, Str
-        stub(ExclusionDirection::ServerToClient, 0x079); // proposal: Str
-        stub(ExclusionDirection::ServerToClient, 0x0E6); // ballista: Data
-        stub(ExclusionDirection::ClientToServer, 0x0A0); // proposal: Str
-        stub(ExclusionDirection::ClientToServer, 0x0A1); // vote: Name
-        stub(ExclusionDirection::ClientToServer, 0x0B7); // assist channel: sName, Mes
-        stub(ExclusionDirection::ClientToServer, 0x0D3); // call for a GM: Data
-        // Search types that name players in layouts not confirmed on retail packets: a search, a party or linkshell list,
-        // a comment, and the auction house's sale history. The pseudonymizer zeroes any other type it does not read.
-        for (const uint16_t type : { 0x00, 0x02, 0x03, 0x05, 0x06, 0x08, 0x80, 0x82, 0x83, 0x85, 0x86, 0x88 })
-        {
-            p.rules.push_back({ .channel   = static_cast<uint8_t>(Channel::Search),
-                                .direction = ExclusionDirection::Both,
-                                .action    = ExclusionAction::ZeroRange,
-                                .opcode    = type,
-                                .ranges    = { { .offset = SEARCH_BODY, .length = 0xFFFFFFFF } } });
-        }
+        constexpr uint32_t TO_END = 0xFFFFFFFF;
+        text(GAME, ExclusionDirection::ServerToClient, 0x014, 12, TO_END); // tell: Str
+        text(GAME, ExclusionDirection::ServerToClient, 0x016, 7, TO_END);  // talk: Str
+        text(GAME, ExclusionDirection::ServerToClient, 0x078, 30, TO_END); // proposal: Str
+        text(GAME, ExclusionDirection::ServerToClient, 0x079, 44, TO_END); // proposal state: Str
+        text(GAME, ExclusionDirection::ServerToClient, 0x0CA, 4, 123);     // bazaar message: sInspectMessage
+        text(GAME, ExclusionDirection::ClientToServer, 0x0A0, 5, TO_END);  // proposal: Str
+        text(SEARCH, ExclusionDirection::ServerToClient, 0x88, 0x1E, 123); // search comment
         return p;
     }();
     return policy;
@@ -469,10 +464,28 @@ auto Pseudonymizer::character(const CharacterIdentity& real) -> CharacterIdentit
 
 auto Pseudonymizer::packet(uint8_t channel, PacketDirection direction, std::span<std::byte> data) -> void
 {
+    if (channel != GAME && channel != SEARCH)
+    {
+        return; // a channel this library does not define
+    }
+    const size_t start = channel == GAME ? 4 : SEARCH_BODY;
+    if (data.size() <= start)
+    {
+        return;
+    }
     std::vector<bool> done(data.size()); // rewritten bytes, which the sweep leaves alone
     const auto        mark = [&](size_t from, size_t to)
     {
-        std::fill(done.begin() + static_cast<ptrdiff_t>(from), done.begin() + static_cast<ptrdiff_t>(to), true);
+        std::fill(done.begin() + static_cast<ptrdiff_t>(from), done.begin() + static_cast<ptrdiff_t>(std::min(to, data.size())), true);
+    };
+    const auto zero = [&](size_t from, size_t to)
+    {
+        to = std::min(to, data.size());
+        if (from < to)
+        {
+            std::fill(data.begin() + static_cast<ptrdiff_t>(from), data.begin() + static_cast<ptrdiff_t>(to), std::byte{ 0 });
+            mark(from, to);
+        }
     };
     const auto rewriteId = [&](size_t at)
     {
@@ -531,106 +544,238 @@ auto Pseudonymizer::packet(uint8_t channel, PacketDirection direction, std::span
         mark(at + 12, at + 24);
     };
 
-    size_t sweepFrom = 4;
-    if (channel == static_cast<uint8_t>(Channel::Game))
+    const auto opcode = channel == GAME ? static_cast<uint16_t>(u16At(data, 0) & 0x1FF) : std::to_integer<uint16_t>(data[0x0B]);
+    for (const auto& place : FIELD_MAP)
     {
-        if (data.size() < 4)
+        if (place.channel != channel || place.direction != direction || place.opcode != opcode)
         {
-            return;
+            continue;
         }
-        const auto opcode = static_cast<uint16_t>((byteAt(data, 0) | byteAt(data, 1) << 8) & 0x1FF);
-        for (const auto& place : FIELD_MAP)
+        if (place.mask != 0 && (place.when + 2u > data.size() || (u16At(data, place.when) & place.mask) != place.is))
         {
-            if (place.direction != direction || place.opcode != opcode)
-            {
-                continue;
-            }
-            if (place.mask != 0 && (place.when >= data.size() || (byteAt(data, place.when) & place.mask) != place.is))
-            {
-                continue;
-            }
-            for (size_t i = 0; i < place.count; ++i)
-            {
-                const size_t at = place.offset + i * place.stride;
-                switch (place.kind)
-                {
-                    case Kind::Id:
-                        if (at + 4 <= data.size())
-                        {
-                            rewriteId(at);
-                        }
-                        break;
-                    case Kind::Name:
-                        if (at < data.size())
-                        {
-                            rewriteName(at, place.size);
-                        }
-                        break;
-                    case Kind::Signature:
-                        if (at + 24 <= data.size())
-                        {
-                            rewriteSignature(at);
-                        }
-                        break;
-                }
-            }
+            continue;
         }
-        // The action packet's actor and targets sit in a bit stream: the walk follows ffxi-dev/packets' decoder.
-        if (direction == S2C && opcode == 0x028)
+        for (size_t i = 0; i < place.count; ++i)
         {
-            const Bits bits{ data, false };
-            const auto rewriteBits = [&](size_t pos)
+            const size_t at = place.offset + i * place.stride;
+            switch (place.kind)
             {
-                bits.set(pos, 32, playerId(bits.get(pos, 32)));
-                mark(pos / 8, std::min(data.size(), (pos + 39) / 8));
-            };
-            if (bits.size() >= 72)
-            {
-                rewriteBits(40);
-                const auto targets = bits.get(72, 6);
-                size_t     pos     = 72 + 6 + 4 + 4 + 32 + 32;
-                for (uint32_t t = 0; t < targets && pos + 36 <= bits.size(); ++t)
-                {
-                    rewriteBits(pos);
-                    const auto results = bits.get(pos + 32, 4);
-                    pos += 36;
-                    for (uint32_t r = 0; r < results && pos + 87 <= bits.size(); ++r)
+                case PseudonymKind::Id:
+                    if (at + 4 <= data.size())
                     {
-                        pos += 85;
-                        pos += bits.get(pos, 1) ? 1 + 37 : 1;
-                        if (pos >= bits.size())
-                        {
-                            break;
-                        }
-                        pos += bits.get(pos, 1) ? 1 + 34 : 1;
+                        rewriteId(at);
                     }
+                    break;
+                case PseudonymKind::Name:
+                    if (at < data.size())
+                    {
+                        rewriteName(at, place.size);
+                    }
+                    break;
+                case PseudonymKind::Signature:
+                    if (at + 24 <= data.size())
+                    {
+                        rewriteSignature(at);
+                    }
+                    break;
+            }
+        }
+    }
+
+    // The walkers, for fields at places that depend on the packet. FORMAT.md, Anonymous captures, states each.
+    if (channel == GAME && direction == S2C && opcode == 0x028)
+    {
+        // Action: the actor at bit 40, a 6-bit target count at bit 72, and from bit 150 each target's 32-bit id, a 4-bit
+        // result count, and per result 85 bits, a flag with 37 more, and a flag with 34 more. Least significant bit first.
+        const Bits bits{ data, false };
+        const auto rewriteBits = [&](size_t pos)
+        {
+            bits.set(pos, 32, playerId(bits.get(pos, 32)));
+            mark(pos / 8, (pos + 39) / 8);
+        };
+        if (bits.size() >= 72)
+        {
+            rewriteBits(40);
+            const auto targets = bits.get(72, 6);
+            size_t     pos     = 72 + 6 + 4 + 4 + 32 + 32;
+            for (uint32_t t = 0; t < targets && pos + 36 <= bits.size(); ++t)
+            {
+                rewriteBits(pos);
+                const auto results = bits.get(pos + 32, 4);
+                pos += 36;
+                for (uint32_t r = 0; r < results && pos + 87 <= bits.size(); ++r)
+                {
+                    pos += 85;
+                    pos += bits.get(pos, 1) ? 1 + 37 : 1;
+                    if (pos >= bits.size())
+                    {
+                        break;
+                    }
+                    pos += bits.get(pos, 1) ? 1 + 34 : 1;
                 }
             }
         }
     }
-    else if (channel == static_cast<uint8_t>(Channel::Search))
+    else if (channel == GAME && direction == C2S && opcode == 0x0D3 && data.size() >= 8)
     {
-        sweepFrom = SEARCH_BODY;
-        if (data.size() <= SEARCH_BODY)
+        // Call for a GM: byte 7 counts the blocks from byte 8, each a type, its length counting this 4-byte header, and
+        // 2 bytes. A string block (3) is "KEY:value": the value is what the player typed unless the key starts with
+        // GENERIC., GAME. or EXEC., and is zeroed. A lobby block (4) holds 28-byte entries: an id at 8 and a name at 12.
+        // Blocks 0 to 2 hold numbers; any other type is zeroed, as is anything past a block that does not fit.
+        size_t at = 8;
+        for (uint8_t b = 0; b < byteAt(data, 7) && at < data.size(); ++b)
         {
+            const auto type   = at + 4 <= data.size() ? byteAt(data, at) : 0xFF;
+            const auto length = at + 4 <= data.size() ? byteAt(data, at + 1) : 0;
+            if (length < 4 || at + length > data.size())
+            {
+                zero(at, data.size());
+                break;
+            }
+            const auto body = at + 4;
+            const auto end  = at + length;
+            if (type == 3)
+            {
+                const auto* text  = reinterpret_cast<const char*>(data.data() + body);
+                const auto  value = std::string_view(text, end - body);
+                const auto  colon = value.find(':');
+                const auto  key   = value.substr(0, colon == std::string_view::npos ? 0 : colon);
+                if (!key.starts_with("GENERIC.") && !key.starts_with("GAME.") && !key.starts_with("EXEC."))
+                {
+                    zero(colon == std::string_view::npos ? body : body + colon + 1, end);
+                }
+            }
+            else if (type == 4)
+            {
+                for (size_t e = body; e + 28 <= end; e += 28)
+                {
+                    const auto ident = u32At(data, e + 8);
+                    putU32(data, e + 8, ident < NPC_IDS ? playerId(ident) : contentId(ident));
+                    mark(e + 8, e + 12);
+                    rewriteName(e + 12, 16);
+                }
+            }
+            else if (type > 4)
+            {
+                zero(body, end);
+            }
+            at = end;
+        }
+    }
+    else if (channel == SEARCH)
+    {
+        const auto type = byteAt(data, 0x0B);
+        const Bits bits{ data, true };
+        if (!searchKnown(type))
+        {
+            zero(SEARCH_BODY, data.size());
             return;
         }
-        const auto type = byteAt(data, 0x0B);
-        if (type == 0x01 && direction == C2S && data.size() >= 0x12)
+        if (direction == C2S && (type == 0x00 || type == 0x03) && data.size() > 0x11)
         {
-            // A request for the players with these ids: a count, then the ids.
-            const size_t count = byteAt(data, 0x10) | byteAt(data, 0x11) << 8;
-            for (size_t i = 0; i < count && 0x12 + i * 4 + 4 <= data.size(); ++i)
+            // A search: from byte 0x11, as many bytes as byte 0x10 says, of 5-bit tags. Most tags then have a sort bit
+            // and a presence bit; a present name is a 5-bit length and 7-bit characters. A tag not known is zeroed
+            // from it on, as LandSandBoat's server reads them.
+            const size_t first = 0x11 * 8;
+            const size_t stop  = std::min(data.size(), size_t{ 0x11 } + byteAt(data, 0x10)) * 8;
+            for (size_t pos = first; pos + 5 < stop;)
             {
-                rewriteId(0x12 + i * 4);
+                const auto tag   = bits.get(pos, 5);
+                const auto tagAt = pos;
+                pos += 5;
+                const bool flagged = tag != 0x0C && tag != 0x18 && tag != 0x0B && tag != 0x13 && tag != 0x14 && tag != 0x11 && tag != 0x16;
+                bool       present = true;
+                if (flagged)
+                {
+                    if (pos + 3 >= stop)
+                    {
+                        break;
+                    }
+                    present = bits.get(pos + 1, 1) != 0;
+                    pos += 2;
+                }
+                size_t n = 0;
+                switch (tag)
+                {
+                    case 0x00: // name
+                        if (present)
+                        {
+                            if (pos + 5 >= stop)
+                            {
+                                pos = stop;
+                                break;
+                            }
+                            const auto length = bits.get(pos, 5);
+                            pos += 5;
+                            if (pos + length * 7 > stop)
+                            {
+                                bits.zero(pos, stop);
+                                pos = stop;
+                                break;
+                            }
+                            std::string text;
+                            for (uint32_t i = 0; i < length; ++i)
+                            {
+                                text += static_cast<char>(bits.get(pos + i * 7, 7));
+                            }
+                            if (isName(text))
+                            {
+                                const auto fake = name(text);
+                                for (uint32_t i = 0; i < length; ++i)
+                                {
+                                    bits.set(pos + i * 7, 7, static_cast<uint8_t>(fake[i]));
+                                }
+                            }
+                            else
+                            {
+                                bits.zero(pos, pos + length * 7);
+                            }
+                            pos += length * 7;
+                        }
+                        break;
+                    case 0x01:
+                        n = present ? 10 : 0;
+                        break; // zone
+                    case 0x02:
+                        n = present ? 2 : 0;
+                        break; // nation
+                    case 0x03:
+                        n = present ? 5 : 0;
+                        break; // job
+                    case 0x04: // levels
+                    case 0x07: // master levels
+                    case 0x10: // ranks
+                    case 0x06:
+                        n = present ? 16 : 0;
+                        break; // flags
+                    case 0x05:
+                        n = present ? 4 : 0;
+                        break; // race
+                    case 0x0B: // linkshells
+                    case 0x13:
+                    case 0x14:
+                    case 0x11: // comment type
+                    case 0x16:
+                        n = 32;
+                        break; // flags
+                    case 0x0C: // friends
+                    case 0x18:
+                        n = 0;
+                        break; // party requests
+                    default:
+                        bits.zero(tagAt, stop);
+                        pos = stop;
+                        break;
+                }
+                pos += n;
             }
+            mark(0x11, stop / 8);
         }
-        else if (type == 0x81 && direction == S2C && data.size() >= 0x18)
+        else if (direction == S2C && type >= 0x80 && type <= 0x83 && data.size() >= 0x18)
         {
-            // The reply: entries from 0x18 to the length at 0x08, each a size byte and then tagged fields. A name is a
+            // Players: entries from 0x18 to the length at 0x08, each a size byte and then tagged fields. A name is a
             // 4-bit length and 7-bit characters; an id is 20 bits. An entry with a tag not known is zeroed from it on.
-            const auto end = std::min<size_t>(data.size(), byteAt(data, 8) | byteAt(data, 9) << 8);
-            const Bits bits{ data, true };
+            const auto end = std::min<size_t>(data.size(), u16At(data, 8));
             for (size_t at = 0x18; at < end;)
             {
                 const auto   last = std::min(end, at + 1 + byteAt(data, at));
@@ -672,38 +817,28 @@ auto Pseudonymizer::packet(uint8_t channel, PacketDirection direction, std::span
                         bits.set(pos, 20, playerId(bits.get(pos, 20)) & LOW_ID_BITS);
                         pos += 20;
                     }
-                    else if (const auto n = searchTagBits(tag); n != 0 && pos + n <= stop)
+                    else if (const auto n = replyTagBits(tag); n != 0 && pos + n <= stop)
                     {
                         pos += n;
                     }
                     else
                     {
-                        for (; pos < stop; ++pos)
-                        {
-                            bits.set(pos, 1, 0);
-                        }
+                        bits.zero(pos, stop);
+                        pos = stop;
                     }
                 }
                 mark(at, last);
                 at = last;
             }
-            // After the entries: the client's hash of the plaintext, which would confirm a guessed name, and stale bytes.
-            std::fill(data.begin() + static_cast<ptrdiff_t>(end), data.end(), std::byte{ 0 });
-            mark(end, data.size());
         }
-        else if (!searchKept(type))
+        if (direction == S2C && searchHashed(type) && data.size() >= 0x0A)
         {
-            std::fill(data.begin() + SEARCH_BODY, data.end(), std::byte{ 0 });
-            return;
+            zero(std::max<size_t>(SEARCH_BODY, u16At(data, 8)), data.size());
         }
-    }
-    else
-    {
-        return; // a channel this library does not define
     }
 
     // The sweep: every real name and id met so far, wherever else it sits. A name stands alone, between non-letters.
-    for (size_t i = sweepFrom; i < data.size();)
+    for (size_t i = start; i < data.size();)
     {
         if (done[i] || !isUpper(byteAt(data, i)) || isLetter(byteAt(data, i - 1)))
         {
@@ -727,10 +862,12 @@ auto Pseudonymizer::packet(uint8_t channel, PacketDirection direction, std::span
         }
         i = j;
     }
-    // Ids at any bit, least significant first: the bytes retail leaves in a packet may be what is left of an action
-    // packet's bit stream. Byte-aligned, this reads a little-endian u32.
-    const Bits bits{ data, false };
-    for (size_t pos = sweepFrom * 8; pos + 32 <= bits.size(); ++pos)
+    // Ids at any byte, as little-endian u32s. In 0x062, at any bit, least significant first: retail leaves what is left
+    // of an action packet's bit stream there. Every bit everywhere would also hit positions, prices and flags that
+    // happen to equal an id.
+    const Bits   bits{ data, false };
+    const size_t step = channel == GAME && direction == S2C && opcode == 0x062 ? 1 : 8;
+    for (size_t pos = start * 8; pos + 32 <= bits.size(); pos += step)
     {
         const auto first = pos / 8;
         const auto last  = (pos + 31) / 8;
@@ -750,7 +887,7 @@ auto Pseudonymizer::packet(uint8_t channel, PacketDirection direction, std::span
         {
             bits.set(pos, 32, it->second);
             mark(first, last + 1);
-            pos += 31;
+            pos += 32 - step;
         }
     }
 }

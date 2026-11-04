@@ -1,0 +1,159 @@
+# The anonymous field map, as data. FORMAT.md, Anonymous captures, says what each kind does; src/pseudonym.cpp holds the same rows.
+# channel: 0 game, 1 search. opcode: the game header id, or byte 0x0B of a search packet. offset: bytes from the packet start (the game header, the search size).
+# size: bytes per field; end runs to the packet end. count fields, stride bytes apart; a field past the packet end is skipped.
+# kind: id (u32, a player id gets its pseudonym), name (NUL-padded letters get their pseudonym, the rest of the field zeroed), signature (item extra data: a crafter name at bytes 12-23 in 6-bit codes), text (zeroed by the anonymous policy), stream (a walker, FORMAT.md).
+# when: the row applies only when the u16 at that offset, masked, equals the value. checked: captures (seen on retail packets of public Mogsafe captures) or layout (XiPackets, LandSandBoat).
+channel	direction	opcode	offset	size	count	stride	kind	when	field	checked
+0	s2c	0x009	4	4	1	0	id	-	message: UniqueNo	layout
+0	s2c	0x00A	4	4	1	0	id	-	zone-in: UniqueNo	captures
+0	s2c	0x00A	44	4	1	0	id	-	zone-in: BtTargetID	captures
+0	s2c	0x00A	132	16	1	0	name	-	zone-in: name	captures
+0	s2c	0x00D	4	4	1	0	id	-	PC update: UniqueNo	captures
+0	s2c	0x00D	44	4	1	0	id	-	PC update: BtTargetID	captures
+0	s2c	0x00D	90	16	1	0	name	-	PC update: name	captures
+0	s2c	0x00E	4	4	1	0	id	-	NPC update: UniqueNo	layout
+0	s2c	0x00E	44	4	1	0	id	-	NPC update: BtTargetID (who it fights)	captures
+0	s2c	0x013	4	4	1	0	id	-	GM command: GMUniqueNo	layout
+0	s2c	0x014	4	4	1	0	id	-	tell: UniqueNo	layout
+0	s2c	0x017	8	15	1	0	name	-	chat: sName	layout
+0	s2c	0x021	4	4	1	0	id	-	trade request and result: UniqueNo	layout
+0	s2c	0x022	4	4	1	0	id	-	trade request and result: UniqueNo	layout
+0	s2c	0x027	4	4	1	0	id	-	talk with numbers: UniqueNo	layout
+0	s2c	0x02A	4	4	1	0	id	-	talk with numbers: UniqueNo	captures
+0	s2c	0x029	4	4	1	0	id	-	battle message: UniqueNoCas	captures
+0	s2c	0x029	8	4	1	0	id	-	battle message: UniqueNoTar	captures
+0	s2c	0x02C	4	4	1	0	id	-	channel state: UniqueNo	layout
+0	s2c	0x02D	4	4	1	0	id	-	battle message 2: UniqueNoCas	captures
+0	s2c	0x02D	8	4	1	0	id	-	battle message 2: UniqueNoTar	captures
+0	s2c	0x02F	4	4	1	0	id	-	dig: TarUniqueNo	layout
+0	s2c	0x030	4	4	1	0	id	-	effect, event: UniqueNo	layout
+0	s2c	0x032	4	4	1	0	id	-	effect, event: UniqueNo	captures
+0	s2c	0x033	4	4	1	0	id	-	event with strings, numbers: UniqueNo	layout
+0	s2c	0x034	4	4	1	0	id	-	event with strings, numbers: UniqueNo	captures
+0	s2c	0x036	4	4	1	0	id	-	talk, event message: UniqueNo	captures
+0	s2c	0x03B	4	4	1	0	id	-	talk, event message: UniqueNo	layout
+0	s2c	0x037	36	4	1	0	id	-	server status: UniqueNo	captures
+0	s2c	0x038	4	4	1	0	id	-	scheduler: UniqueNoCas	captures
+0	s2c	0x038	8	4	1	0	id	-	scheduler: UniqueNoTar	captures
+0	s2c	0x039	4	4	1	0	id	-	map scheduler: UniqueNoCas	layout
+0	s2c	0x039	8	4	1	0	id	-	map scheduler: UniqueNoTar	layout
+0	s2c	0x03A	4	4	1	0	id	-	magic scheduler: UniqueNoCas	layout
+0	s2c	0x03A	8	4	1	0	id	-	magic scheduler: UniqueNoTar	layout
+0	s2c	0x042	4	4	1	0	id	-	blacklist edit: ID	layout
+0	s2c	0x042	8	16	1	0	name	-	blacklist edit: Name	layout
+0	s2c	0x043	4	4	1	0	id	-	talk with a name: UniqueNo	layout
+0	s2c	0x043	16	16	1	0	name	u16@6&0xff00==0x0	talk with a name: sName	layout
+0	s2c	0x04B	20	16	1	0	name	-	delivery box: State.box_state To or From	layout
+0	s2c	0x04C	24	16	1	0	name	-	auction house: Parcel.Name	layout
+0	s2c	0x058	4	4	1	0	id	-	assist: UniqueNo	captures
+0	s2c	0x05A	4	4	1	0	id	-	emote: CasUniqueNo	layout
+0	s2c	0x05A	8	4	1	0	id	-	emote: TarUniqueNo	layout
+0	s2c	0x05A	24	4	5	4	id	-	emote: FaithUniqueNo[5]	layout
+0	s2c	0x05B	16	4	1	0	id	-	positions: UniqueNo	captures
+0	s2c	0x065	16	4	1	0	id	-	positions: UniqueNo	captures
+0	s2c	0x067	8	4	1	0	id	-	pet and trust updates: UniqueNo	captures
+0	s2c	0x068	8	4	1	0	id	-	pet and trust updates: UniqueNo	captures
+0	s2c	0x067	32	4	1	0	id	u16@4&0x3f==0x2	pet and trust updates, mode 2: UniqueNoMog	layout
+0	s2c	0x068	32	4	1	0	id	u16@4&0x3f==0x2	pet and trust updates, mode 2: UniqueNoMog	layout
+0	s2c	0x067	20	4	1	0	id	u16@4&0x3f==0x4	pet and trust updates, mode 4: UniqueNoTarget	layout
+0	s2c	0x068	20	4	1	0	id	u16@4&0x3f==0x4	pet and trust updates, mode 4: UniqueNoTarget	layout
+0	s2c	0x070	30	16	1	0	name	-	synthesis by another player: name	layout
+0	s2c	0x076	4	4	5	48	id	-	party effects: Members[5].UniqueNo	captures
+0	s2c	0x078	4	4	1	0	id	-	proposal: UniqueNo	layout
+0	s2c	0x078	14	15	1	0	name	u16@6&0xff00==0x0	proposal: sName	layout
+0	s2c	0x079	29	15	1	0	name	-	proposal state: sPropName	layout
+0	s2c	0x0A0	4	4	1	0	id	-	party map: UniqueID	layout
+0	s2c	0x0B7	68	4	1	0	id	-	GM item: UniqueNo	layout
+0	s2c	0x0B7	72	16	1	0	name	-	GM item: sName	layout
+0	s2c	0x0C8	8	4	20	12	id	-	alliance: GroupTbl[20].UniqueNo	captures
+0	s2c	0x0C9	4	4	1	0	id	-	check: UniqNo	captures
+0	s2c	0x0C9	16	24	16	28	signature	u16@10&0xff==0x3	check, OptionFlag 3: Equip[16].Data	layout
+0	s2c	0x0CA	128	16	1	0	name	-	bazaar message: sName	captures
+0	s2c	0x0CC	140	16	1	0	name	-	linkshell message: modifier	layout
+0	s2c	0x0D2	8	4	1	0	id	-	treasure pool: TargetUniqueNo	layout
+0	s2c	0x0D2	32	4	1	0	id	-	treasure pool: LootUniqueNo	layout
+0	s2c	0x0D2	40	16	1	0	name	u16@34&0xff00==0x0	treasure pool: LootActName	layout
+0	s2c	0x0D3	4	4	1	0	id	-	treasure lot: LootUniqueNo	captures
+0	s2c	0x0D3	8	4	1	0	id	-	treasure lot: EntryUniqueNo	captures
+0	s2c	0x0D3	22	16	1	0	name	u16@6&0xff00==0x0	treasure lot: sLootName	captures
+0	s2c	0x0D3	38	16	1	0	name	u16@10&0xff00==0x0	treasure lot: sLootName2	captures
+0	s2c	0x0DC	4	4	1	0	id	-	party invite: UniqueNo	captures
+0	s2c	0x0DC	12	16	1	0	name	-	party invite: sName	captures
+0	s2c	0x0DD	4	4	1	0	id	-	party member: UniqueNo	captures
+0	s2c	0x0DD	40	16	1	0	name	u16@6&0xff00==0x0	party member: Name	captures
+0	s2c	0x0DF	4	4	1	0	id	-	party member state: UniqueNo	captures
+0	s2c	0x0E2	4	4	1	0	id	-	party member 2: UniqueNo	captures
+0	s2c	0x0E2	40	16	1	0	name	u16@6&0xff00==0x0	party member 2: Name	captures
+0	s2c	0x0E6	8	4	1	0	id	u16@4&0xffc0==0xc0	ballista, mode 3 (scout): RookUniqueNo	layout
+0	s2c	0x0F9	4	4	1	0	id	-	raise: UniqueNo	layout
+0	s2c	0x020	17	24	1	0	signature	-	item, trade item: Attr	captures
+0	s2c	0x023	14	24	1	0	signature	-	item, trade item: Attr	layout
+0	s2c	0x105	17	24	1	0	signature	-	bazaar item: Attr	layout
+0	s2c	0x106	8	16	1	0	name	-	bazaar buy and close: sName	layout
+0	s2c	0x107	4	16	1	0	name	-	bazaar buy and close: sName	layout
+0	s2c	0x108	4	4	1	0	id	-	bazaar shopper: UniqueNo	layout
+0	s2c	0x108	16	16	1	0	name	-	bazaar shopper: sName	layout
+0	s2c	0x109	4	4	1	0	id	-	bazaar sale: UniqueNo	layout
+0	s2c	0x109	12	16	1	0	name	-	bazaar sale: sName	layout
+0	s2c	0x10A	10	16	1	0	name	-	bazaar sold: sName	layout
+0	s2c	0x11D	4	4	1	0	id	-	party request: UniqueNo	layout
+0	s2c	0x11D	12	16	1	0	name	-	party request: sName	layout
+0	c2s	0x00A	12	4	1	0	id	-	zone-in: UniqueNo	captures
+0	c2s	0x00A	34	15	1	0	name	-	zone-in: sName	layout
+0	c2s	0x017	8	4	1	0	id	-	character request: UniqueNo2	captures
+0	c2s	0x017	12	4	1	0	id	-	character request: UniqueNo3	captures
+0	c2s	0x01A	4	4	1	0	id	-	action: UniqueNo	captures
+0	c2s	0x01F	4	4	1	0	id	-	GM command: GMUniqueNo	layout
+0	c2s	0x032	4	4	1	0	id	-	trade request, item transfer: UniqueNo	layout
+0	c2s	0x036	4	4	1	0	id	-	trade request, item transfer: UniqueNo	layout
+0	c2s	0x037	4	4	1	0	id	-	item use: UniqueNo	captures
+0	c2s	0x03D	4	4	1	0	id	-	blacklist edit: ID	layout
+0	c2s	0x03D	8	16	1	0	name	-	blacklist edit: Name	layout
+0	c2s	0x04D	16	16	1	0	name	-	delivery box: TargetName	layout
+0	c2s	0x05B	4	4	1	0	id	-	event end: UniqueNo	captures
+0	c2s	0x05C	16	4	1	0	id	-	event end: UniqueNo	captures
+0	c2s	0x05D	4	4	1	0	id	-	emote: UniqueNo	layout
+0	c2s	0x060	4	4	1	0	id	-	event password, dig: UniqueNo	layout
+0	c2s	0x063	4	4	1	0	id	-	event password, dig: UniqueNo	layout
+0	c2s	0x064	4	4	1	0	id	-	key item: UniqueNo	layout
+0	c2s	0x06E	4	4	1	0	id	-	party invite: UniqueNo	layout
+0	c2s	0x071	4	4	1	0	id	-	party kick: UniqueNo	layout
+0	c2s	0x071	12	15	1	0	name	-	party kick: sName	layout
+0	c2s	0x073	4	4	1	0	id	-	party change: UniqueNo	layout
+0	c2s	0x077	4	16	1	0	name	-	party change 2: sName	layout
+0	c2s	0x0A1	5	15	1	0	name	-	vote: Name	layout
+0	c2s	0x0B6	6	15	1	0	name	-	tell: sName	layout
+0	c2s	0x0B7	6	15	1	0	name	-	assist channel: sName	layout
+0	c2s	0x0D8	12	4	1	0	id	-	private dungeon: UniqueNo	layout
+0	c2s	0x0DD	4	4	1	0	id	-	check: UniqueNo	captures
+0	c2s	0x0E2	12	4	1	0	id	-	linkshell message post: uniqNo	layout
+0	c2s	0x105	4	4	1	0	id	-	bazaar open: UniqueNo	captures
+1	c2s	0x01	18	4	20	4	id	-	players by id: the ids	captures
+1	c2s	0x02	16	4	1	0	id	-	party list: party id	layout
+1	c2s	0x02	20	4	1	0	id	-	party list: alliance id	layout
+1	c2s	0x08	16	4	1	0	id	-	comment request: player id	layout
+1	s2c	0x85	40	16	10	40	name	-	auction history: Name1 of each of 10 sales	layout
+1	s2c	0x85	56	16	10	40	name	-	auction history: Name2	layout
+1	s2c	0x86	40	16	10	40	name	-	auction history of a stack: Name1 of each of 10 sales	layout
+1	s2c	0x86	56	16	10	40	name	-	auction history of a stack: Name2	layout
+1	s2c	0x88	24	4	1	0	id	-	comment: player id	layout
+0	s2c	0x014	12	end	1	0	text	-	tell: Str	layout
+0	s2c	0x016	7	end	1	0	text	-	talk: Str	layout
+0	s2c	0x078	30	end	1	0	text	-	proposal: Str	layout
+0	s2c	0x079	44	end	1	0	text	-	proposal state: Str	layout
+0	s2c	0x0CA	4	123	1	0	text	-	bazaar message: sInspectMessage	layout
+0	c2s	0x0A0	5	end	1	0	text	-	proposal: Str	layout
+1	s2c	0x88	30	123	1	0	text	-	comment: the text	layout
+0	s2c	0x028	-	-	-	-	stream	-	action: the actor and each target id, in its bit stream	captures
+0	c2s	0x0D3	-	-	-	-	stream	-	call for a GM: lobby block ids and names; typed text after the colon of string blocks; other blocks zeroed	layout
+1	c2s	0x00	-	-	-	-	stream	-	search all: the name filter	layout
+1	c2s	0x03	-	-	-	-	stream	-	search: the name filter	layout
+1	s2c	0x80	-	-	-	-	stream	-	players: names and ids; the hash after the length zeroed	layout
+1	s2c	0x81	-	-	-	-	stream	-	players by id: names and ids; the hash after the length zeroed	captures
+1	s2c	0x82	-	-	-	-	stream	-	party and linkshell list: names and ids; the hash after the length zeroed	layout
+1	s2c	0x83	-	-	-	-	stream	-	search: names and ids; the hash after the length zeroed	layout
+1	s2c	0x85	-	-	-	-	stream	-	auction history: the hash after the length zeroed	layout
+1	s2c	0x86	-	-	-	-	stream	-	auction history of a stack: the hash after the length zeroed	layout
+1	s2c	0x88	-	-	-	-	stream	-	comment: the hash after the length zeroed	layout
+1	both	other	-	-	-	-	stream	-	a search type not read: zeroed from byte 12	layout
+0	both	any	-	-	-	-	stream	-	the sweep: a met name between non-letters, a met id (0x10000 up) at any byte; in s2c 0x062 at any bit	captures

@@ -119,56 +119,106 @@ auto bitsOf(std::span<const std::byte> d, size_t pos, size_t n, bool msbFirst) -
     return v;
 }
 
-// What should change in each game packet, stated apart from the library's field map: offset, then 4 for an id, 15 or 16
-// for a name, 24 for an item's extra data. A mode of 0 applies always; otherwise only when byte 4's low 6 bits equal it.
-struct Expected
+// pseudonym_fields.tsv: the field map as data, for tools that check anonymous captures. Stream rows are left out.
+struct Row
 {
-    uint16_t offset;
-    uint8_t  size;
-    uint8_t  mode = 0;
+    uint8_t         channel{};
+    PacketDirection direction{};
+    uint16_t        opcode{};
+    uint32_t        offset{};
+    uint32_t        size{}; // 0xFFFFFFFF: to the packet's end
+    uint32_t        count{};
+    uint32_t        stride{};
+    std::string     kind;
+    uint8_t         when{};
+    uint16_t        mask{};
+    uint16_t        is{};
 };
 
-const std::map<std::pair<PacketDirection, uint16_t>, std::vector<Expected>> EXPECTED{
-    { { PacketDirection::ServerToClient, 0x00A }, { { 4, 4 }, { 44, 4 }, { 132, 16 } } },
-    { { PacketDirection::ServerToClient, 0x00D }, { { 4, 4 }, { 44, 4 }, { 90, 16 } } },
-    { { PacketDirection::ServerToClient, 0x00E }, { { 4, 4 }, { 44, 4 } } },
-    { { PacketDirection::ServerToClient, 0x020 }, { { 17, 24 } } },
-    { { PacketDirection::ServerToClient, 0x029 }, { { 4, 4 }, { 8, 4 } } },
-    { { PacketDirection::ServerToClient, 0x02A }, { { 4, 4 } } },
-    { { PacketDirection::ServerToClient, 0x02D }, { { 4, 4 }, { 8, 4 } } },
-    { { PacketDirection::ServerToClient, 0x032 }, { { 4, 4 } } },
-    { { PacketDirection::ServerToClient, 0x034 }, { { 4, 4 } } },
-    { { PacketDirection::ServerToClient, 0x036 }, { { 4, 4 } } },
-    { { PacketDirection::ServerToClient, 0x037 }, { { 36, 4 } } },
-    { { PacketDirection::ServerToClient, 0x038 }, { { 4, 4 }, { 8, 4 } } },
-    { { PacketDirection::ServerToClient, 0x04C }, { { 24, 16 } } },
-    { { PacketDirection::ServerToClient, 0x058 }, { { 4, 4 } } },
-    { { PacketDirection::ServerToClient, 0x05B }, { { 16, 4 } } },
-    { { PacketDirection::ServerToClient, 0x065 }, { { 16, 4 } } },
-    { { PacketDirection::ServerToClient, 0x067 }, { { 8, 4 }, { 32, 4, 2 }, { 20, 4, 4 } } },
-    { { PacketDirection::ServerToClient, 0x068 }, { { 8, 4 }, { 32, 4, 2 }, { 20, 4, 4 } } },
-    { { PacketDirection::ServerToClient, 0x076 }, { { 4, 4 }, { 52, 4 }, { 100, 4 }, { 148, 4 }, { 196, 4 } } },
-    { { PacketDirection::ServerToClient, 0x0C8 }, { { 8, 4 }, { 20, 4 }, { 32, 4 }, { 44, 4 }, { 56, 4 }, { 68, 4 }, { 80, 4 }, { 92, 4 }, { 104, 4 }, { 116, 4 }, { 128, 4 }, { 140, 4 }, { 152, 4 }, { 164, 4 }, { 176, 4 }, { 188, 4 }, { 200, 4 }, { 212, 4 }, { 224, 4 }, { 236, 4 } } },
-    { { PacketDirection::ServerToClient, 0x0C9 }, { { 4, 4 } } },
-    { { PacketDirection::ServerToClient, 0x0CA }, { { 128, 16 } } },
-    { { PacketDirection::ServerToClient, 0x0D3 }, { { 4, 4 }, { 8, 4 }, { 22, 16 }, { 38, 16 } } },
-    { { PacketDirection::ServerToClient, 0x0DC }, { { 4, 4 }, { 12, 16 } } },
-    { { PacketDirection::ServerToClient, 0x0DD }, { { 4, 4 }, { 40, 16 } } },
-    { { PacketDirection::ServerToClient, 0x0DF }, { { 4, 4 } } },
-    { { PacketDirection::ServerToClient, 0x0E2 }, { { 4, 4 }, { 40, 16 } } },
-    { { PacketDirection::ClientToServer, 0x00A }, { { 12, 4 }, { 34, 15 } } },
-    { { PacketDirection::ClientToServer, 0x017 }, { { 8, 4 }, { 12, 4 } } },
-    { { PacketDirection::ClientToServer, 0x01A }, { { 4, 4 } } },
-    { { PacketDirection::ClientToServer, 0x037 }, { { 4, 4 } } },
-    { { PacketDirection::ClientToServer, 0x05B }, { { 4, 4 } } },
-    { { PacketDirection::ClientToServer, 0x05C }, { { 16, 4 } } },
-    { { PacketDirection::ClientToServer, 0x0DD }, { { 4, 4 } } },
-    { { PacketDirection::ClientToServer, 0x105 }, { { 4, 4 } } },
-};
+auto rows() -> const std::vector<Row>&
+{
+    static const std::vector<Row> out = []
+    {
+        std::vector<Row> rows;
+        std::ifstream    in(XICAP_PSEUDONYM_FIELDS);
+        REQUIRE(in);
+        std::string line;
+        while (std::getline(in, line))
+        {
+            if (!line.empty() && line.back() == '\r')
+            {
+                line.pop_back();
+            }
+            std::vector<std::string> f;
+            std::istringstream       cells(line);
+            for (std::string cell; std::getline(cells, cell, '\t');)
+            {
+                f.push_back(cell);
+            }
+            if (line.empty() || line[0] == '#' || f[0] == "channel" || f[7] == "stream")
+            {
+                continue;
+            }
+            REQUIRE(f.size() == 11);
+            Row r{
+                .channel   = static_cast<uint8_t>(std::stoul(f[0])),
+                .direction = f[1] == "c2s" ? PacketDirection::ClientToServer : PacketDirection::ServerToClient,
+                .opcode    = static_cast<uint16_t>(std::stoul(f[2], nullptr, 16)),
+                .offset    = static_cast<uint32_t>(std::stoul(f[3])),
+                .size      = f[4] == "end" ? 0xFFFFFFFF : static_cast<uint32_t>(std::stoul(f[4])),
+                .count     = static_cast<uint32_t>(std::stoul(f[5])),
+                .stride    = static_cast<uint32_t>(std::stoul(f[6])),
+                .kind      = f[7],
+            };
+            if (f[8] != "-") // u16@<at>&<mask>==<value>
+            {
+                const auto amp = f[8].find('&');
+                const auto eq  = f[8].find("==");
+                r.when         = static_cast<uint8_t>(std::stoul(f[8].substr(4, amp - 4)));
+                r.mask         = static_cast<uint16_t>(std::stoul(f[8].substr(amp + 1, eq - amp - 1), nullptr, 16));
+                r.is           = static_cast<uint16_t>(std::stoul(f[8].substr(eq + 2), nullptr, 16));
+            }
+            rows.push_back(std::move(r));
+        }
+        return rows;
+    }();
+    return out;
+}
 
 auto opcodeOf(std::span<const std::byte> d) -> uint16_t
 {
     return static_cast<uint16_t>((std::to_integer<uint16_t>(d[0]) | std::to_integer<uint16_t>(d[1]) << 8) & 0x1FF);
+}
+
+// The bytes the TSV's id, name and signature rows let pseudonymizing change in a packet.
+auto documented(uint8_t channel, PacketDirection direction, std::span<const std::byte> d) -> std::vector<bool>
+{
+    std::vector<bool> out(d.size());
+    const auto        opcode = channel == 0 ? opcodeOf(d) : std::to_integer<uint16_t>(d[0x0B]);
+    for (const auto& r : rows())
+    {
+        if (r.kind == "text" || r.channel != channel || r.direction != direction || r.opcode != opcode)
+        {
+            continue;
+        }
+        if (r.mask != 0 && (r.when + 2u > d.size() || ((std::to_integer<uint16_t>(d[r.when]) | std::to_integer<uint16_t>(d[r.when + 1]) << 8) & r.mask) != r.is))
+        {
+            continue;
+        }
+        for (uint32_t i = 0; i < r.count; ++i)
+        {
+            const size_t at   = r.offset + i * r.stride;
+            const size_t need = r.kind == "id" ? 4 : r.kind == "signature" ? 24
+                                                                           : 1;
+            if (at + need > d.size())
+            {
+                continue;
+            }
+            const size_t from = r.kind == "signature" ? at + 12 : at;
+            std::fill(out.begin() + static_cast<ptrdiff_t>(from), out.begin() + static_cast<ptrdiff_t>(std::min<size_t>(d.size(), at + r.size)), true);
+        }
+    }
+    return out;
 }
 
 auto pseudonymized(Pseudonymizer& p, const CorpusPacket& in) -> std::vector<std::byte>
@@ -225,7 +275,124 @@ TEST_CASE("Keys derived for different uses differ", "[pseudonym]")
     CHECK(deriveKey(seed(), PSEUDONYM_KEY_LABEL) != deriveKey(seed(8), PSEUDONYM_KEY_LABEL));
 }
 
-TEST_CASE("Every mapped field of a real game packet gets its pseudonym, and no other byte changes", "[pseudonym]")
+TEST_CASE("pseudonym_fields.tsv lists the library's field map and the anonymous policy's text ranges", "[pseudonym]")
+{
+    const auto  map    = pseudonymFieldMap();
+    const auto& policy = anonymousExclusionPolicy();
+    size_t      i      = 0;
+    size_t      t      = defaultExclusionPolicy().rules.size();
+    for (const auto& r : rows())
+    {
+        if (r.kind == "text")
+        {
+            REQUIRE(t < policy.rules.size());
+            const auto& rule = policy.rules[t++];
+            CHECK(rule.channel == r.channel);
+            CHECK(static_cast<uint8_t>(rule.direction) == static_cast<uint8_t>(r.direction));
+            CHECK(rule.opcode == r.opcode);
+            CHECK(rule.action == ExclusionAction::ZeroRange);
+            REQUIRE(rule.ranges.size() == 1);
+            CHECK(rule.ranges[0].offset == r.offset);
+            CHECK(rule.ranges[0].length == r.size);
+            continue;
+        }
+        REQUIRE(i < map.size());
+        const auto& m = map[i++];
+        INFO("row " << i << " opcode " << r.opcode << " offset " << r.offset);
+        CHECK(m.channel == r.channel);
+        CHECK(m.direction == r.direction);
+        CHECK(m.opcode == r.opcode);
+        CHECK(m.offset == r.offset);
+        CHECK(m.size == r.size);
+        CHECK(m.count == r.count);
+        CHECK(m.stride == r.stride);
+        CHECK(r.kind == (m.kind == PseudonymKind::Id ? "id" : m.kind == PseudonymKind::Name ? "name"
+                                                                                            : "signature"));
+        CHECK(m.when == r.when);
+        CHECK(m.mask == r.mask);
+        CHECK(m.is == r.is);
+    }
+    CHECK(i == map.size());
+    CHECK(t == policy.rules.size());
+    // Nothing is stubbed that the default does not stub: every packet keeps its layout.
+    CHECK(std::ranges::count(policy.rules, ExclusionAction::Stub, &ExclusionRule::action) == std::ranges::count(defaultExclusionPolicy().rules, ExclusionAction::Stub, &ExclusionRule::action));
+}
+
+namespace
+{
+
+// Pseudonymizes a packet with a fresh pseudonymizer and checks that only documented bytes changed, and that each
+// documented id and name holds its pseudonym. Returns how many real ids and names it found.
+auto checkLayout(uint8_t channel, PacketDirection direction, const std::vector<std::byte>& in) -> std::pair<size_t, size_t>
+{
+    Pseudonymizer p(KEY);
+    auto          out = in;
+    p.packet(channel, direction, out);
+    const auto allowed = documented(channel, direction, in);
+    const auto opcode  = channel == 0 ? opcodeOf(in) : std::to_integer<uint16_t>(in[0x0B]);
+    for (size_t i = 0; i < in.size(); ++i)
+    {
+        if (!allowed[i])
+        {
+            INFO("channel " << int(channel) << " opcode " << opcode << " byte " << i);
+            CHECK(out[i] == in[i]);
+        }
+    }
+    size_t ids   = 0;
+    size_t names = 0;
+    for (const auto& r : rows())
+    {
+        if (r.channel != channel || r.direction != direction || r.opcode != opcode || (r.kind != "id" && r.kind != "name"))
+        {
+            continue;
+        }
+        if (r.mask != 0 && ((std::to_integer<uint16_t>(in[r.when]) | std::to_integer<uint16_t>(in[r.when + 1]) << 8) & r.mask) != r.is)
+        {
+            continue;
+        }
+        for (uint32_t k = 0; k < r.count; ++k)
+        {
+            const size_t at = r.offset + k * r.stride;
+            if (r.kind == "id" && at + 4 <= in.size())
+            {
+                const auto real = u32(in, at);
+                CHECK(u32(out, at) == (isPlayer(real) ? p.playerId(real) : real));
+                ids += isPlayer(real) ? 1 : 0;
+            }
+            else if (r.kind == "name" && at < in.size())
+            {
+                const auto real = text(in, at, r.size);
+                if (isName(real))
+                {
+                    CHECK(text(out, at, r.size) == p.name(real));
+                    for (size_t j = at + real.size(); j < std::min<size_t>(in.size(), at + r.size); ++j)
+                    {
+                        CHECK(out[j] == std::byte{ 0 });
+                    }
+                    ++names;
+                }
+            }
+        }
+    }
+    return { ids, names };
+}
+
+auto put(std::vector<std::byte>& d, size_t at, std::string_view s) -> void
+{
+    std::ranges::copy(std::as_bytes(std::span(s)), d.begin() + static_cast<ptrdiff_t>(at));
+}
+
+auto put32(std::vector<std::byte>& d, size_t at, uint32_t v) -> void
+{
+    for (size_t k = 0; k < 4; ++k)
+    {
+        d[at + k] = std::byte(v >> (8 * k));
+    }
+}
+
+} // namespace
+
+TEST_CASE("Every real game packet keeps its layout: only the fields the field map names change", "[pseudonym]")
 {
     size_t names = 0;
     size_t ids   = 0;
@@ -235,57 +402,351 @@ TEST_CASE("Every mapped field of a real game packet gets its pseudonym, and no o
         {
             continue;
         }
-        Pseudonymizer p(KEY);
-        const auto    out = pseudonymized(p, in);
-        const auto    it  = EXPECTED.find({ in.direction, opcodeOf(in.data) });
-
-        std::vector<bool> allowed(in.data.size());
-        if (it != EXPECTED.end())
-        {
-            for (const auto& field : it->second)
-            {
-                if (field.mode != 0 && (std::to_integer<uint8_t>(in.data[4]) & 0x3F) != field.mode)
-                {
-                    continue;
-                }
-                if (field.offset + std::min<size_t>(field.size, 4) > in.data.size())
-                {
-                    continue;
-                }
-                const auto end = std::min<size_t>(in.data.size(), field.offset + field.size);
-                std::fill(allowed.begin() + field.offset, allowed.begin() + static_cast<ptrdiff_t>(end), true);
-                if (field.size == 4)
-                {
-                    const auto real = u32(in.data, field.offset);
-                    CHECK(u32(out, field.offset) == (isPlayer(real) ? p.playerId(real) : real));
-                    ids += isPlayer(real) ? 1 : 0;
-                }
-                else if (field.size != 24)
-                {
-                    const auto real = text(in.data, field.offset, field.size);
-                    if (isName(real))
-                    {
-                        CHECK(text(out, field.offset, field.size) == p.name(real));
-                        for (size_t i = field.offset + real.size(); i < end; ++i)
-                        {
-                            CHECK(out[i] == std::byte{ 0 });
-                        }
-                        ++names;
-                    }
-                }
-            }
-        }
-        for (size_t i = 0; i < in.data.size(); ++i)
-        {
-            if (!allowed[i])
-            {
-                INFO("opcode " << opcodeOf(in.data) << " byte " << i);
-                CHECK(out[i] == in.data[i]);
-            }
-        }
+        const auto [i, n] = checkLayout(in.channel, in.direction, in.data);
+        ids += i;
+        names += n;
     }
     CHECK(names > 20);
     CHECK(ids > 100);
+}
+
+TEST_CASE("Packets once stubbed keep their layout: chat, proposals, votes, ballista, and the concierge", "[pseudonym]")
+{
+    const auto s2c = PacketDirection::ServerToClient;
+    const auto c2s = PacketDirection::ClientToServer;
+    struct Case
+    {
+        PacketDirection        direction;
+        std::vector<std::byte> data;
+        size_t                 ids;
+        size_t                 names;
+    };
+    std::vector<Case> cases;
+    const auto        add = [&](PacketDirection d, uint16_t opcode, size_t size, auto fill, size_t ids, size_t names)
+    {
+        auto p = gamePacket(opcode, size, 0);
+        fill(p);
+        cases.push_back({ d, std::move(p), ids, names });
+    };
+    // Layouts after LandSandBoat's packet definitions.
+    add(s2c, 0x014, 48, [](auto& p)
+        {
+            put32(p, 4, 0x0AB61C);
+            put32(p, 8, 0x1234);
+            put(p, 12, "see you");
+        },
+        1,
+        0);
+    add(s2c, 0x017, 48, [](auto& p)
+        {
+            p[4] = std::byte{ 1 };
+            put(p, 8, "Audithor");
+            put(p, 23, "hello");
+        },
+        0,
+        1);
+    add(s2c, 0x078, 64, [](auto& p)
+        {
+            put32(p, 4, 0x0A0B0C);
+            put32(p, 8, 6);
+            put(p, 14, "Audithor");
+            p[29] = std::byte{ 1 };
+            put(p, 30, "Sky?");
+        },
+        1,
+        1);
+    add(s2c, 0x079, 64, [](auto& p)
+        {
+            put32(p, 4, 6);
+            p[26] = std::byte{ 1 };
+            put(p, 29, "Audithor");
+            put(p, 44, "Sky?");
+        },
+        0,
+        1);
+    add(s2c, 0x0CC, 176, [](auto& p)
+        {
+            put(p, 8, "Welcome");
+            put32(p, 136, 0x6A000000);
+            put(p, 140, "Audithor");
+        },
+        0,
+        1);
+    add(s2c, 0x0E6, 40, [](auto& p)
+        {
+            put32(p, 4, 3 << 6);
+            put32(p, 8, 0x0AB61C);
+        },
+        1,
+        0); // ballista scout
+    add(s2c, 0x0E6, 40, [](auto& p)
+        {
+            put32(p, 4, 2 << 6);
+            put32(p, 8, 0x0AB61C);
+        },
+        0,
+        0); // ballista scores: Petra, not an id
+    add(s2c, 0x048, 128, [](auto& p)
+        {
+            put32(p, 4, 0xFEFEFEFE);
+            put(p, 28, "22d");
+        },
+        0,
+        0); // concierge: no player in it
+    add(c2s, 0x0A0, 32, [](auto& p)
+        {
+            p[4] = std::byte{ 1 };
+            put(p, 5, "Sky?");
+        },
+        0,
+        0);
+    add(c2s, 0x0A1, 24, [](auto& p)
+        {
+            p[4] = std::byte{ 1 };
+            put(p, 5, "Audithor");
+        },
+        0,
+        1);
+    add(c2s, 0x0B6, 40, [](auto& p)
+        {
+            put(p, 6, "Audithor");
+            put(p, 21, "hi");
+        },
+        0,
+        1);
+    add(c2s, 0x0B7, 40, [](auto& p)
+        {
+            put(p, 6, "Audithor");
+            put(p, 21, "hi");
+        },
+        0,
+        1);
+    add(c2s, 0x0E2, 48, [](auto& p)
+        {
+            put32(p, 12, 0x0AB61C);
+            put(p, 16, "Welcome");
+        },
+        1,
+        0);
+    for (const auto& c : cases)
+    {
+        INFO("opcode " << opcodeOf(c.data));
+        const auto [ids, names] = checkLayout(0, c.direction, c.data);
+        CHECK(ids == c.ids);
+        CHECK(names == c.names);
+    }
+
+    // The writer then zeroes only the text the anonymous policy names.
+    TempCapture tmp;
+    {
+        auto cfg   = config();
+        cfg.policy = anonymousExclusionPolicy();
+        Writer   w(tmp.path, cfg);
+        uint64_t t = T0;
+        for (const auto& c : cases)
+        {
+            w.write(t++, c.direction, c.data);
+        }
+        w.close();
+    }
+    Reader r(tmp.path);
+    size_t at = 0;
+    for (ReadPacket packet; r.next(packet); ++at)
+    {
+        const auto& in   = cases[at].data;
+        const auto* rule = ruleFor(anonymousExclusionPolicy(), 0, packet.direction, packet.opcode);
+        if (rule != nullptr && rule->action == ExclusionAction::Stub)
+        {
+            continue; // the default's, until its version 2
+        }
+        REQUIRE(packet.data.size() == in.size());
+        for (size_t i = 0; i < in.size(); ++i)
+        {
+            bool zeroed = false;
+            if (rule != nullptr)
+            {
+                for (const auto& range : rule->ranges)
+                {
+                    zeroed = zeroed || (i >= range.offset && (range.length == 0xFFFFFFFF || i < range.offset + range.length));
+                }
+            }
+            INFO("opcode " << packet.opcode << " byte " << i);
+            CHECK(packet.data[i] == (zeroed ? std::byte{ 0 } : in[i]));
+        }
+    }
+    CHECK(at == cases.size());
+}
+
+TEST_CASE("A call for a GM keeps its blocks: lobby ids and names get pseudonyms, typed text is zeroed", "[pseudonym]")
+{
+    auto p                         = gamePacket(0x0D3, 160, 0);
+    p[4]                           = std::byte{ 2 }; // a GM call
+    p[7]                           = std::byte{ 3 }; // blocks
+    const std::string_view typed   = "GMCALL.INPUT:Audithor is stuck";
+    const std::string_view setting = "GENERIC.CLILANG:2";
+    size_t                 at      = 8;
+    p[at]                          = std::byte{ 3 };
+    p[at + 1]                      = std::byte(4 + typed.size());
+    put(p, at + 4, typed);
+    const size_t typedAt = at + 4;
+    at += 4 + typed.size();
+    p[at]     = std::byte{ 3 };
+    p[at + 1] = std::byte(4 + setting.size());
+    put(p, at + 4, setting);
+    at += 4 + setting.size();
+    p[at]     = std::byte{ 4 };
+    p[at + 1] = std::byte{ 4 + 28 };
+    put32(p, at + 4 + 8, 0x0AB61C);
+    put(p, at + 4 + 12, "Audithor");
+    const size_t lobby = at + 4;
+
+    Pseudonymizer ps(KEY);
+    auto          out = p;
+    ps.packet(0, PacketDirection::ClientToServer, out);
+    const auto colon = typedAt + typed.find(':') + 1;
+    for (size_t i = 0; i < p.size(); ++i)
+    {
+        INFO("byte " << i);
+        if (i >= colon && i < typedAt + typed.size())
+        {
+            CHECK(out[i] == std::byte{ 0 });
+        }
+        else if (i < lobby + 8 || i >= lobby + 28)
+        {
+            CHECK(out[i] == p[i]);
+        }
+    }
+    CHECK(u32(out, lobby + 8) == ps.playerId(0x0AB61C));
+    CHECK(text(out, lobby + 12, 16) == ps.name("Audithor"));
+}
+
+TEST_CASE("Search packets keep their layout: name filters, party and comment ids, auction names, and hashes", "[pseudonym]")
+{
+    const auto c2s          = PacketDirection::ClientToServer;
+    const auto s2c          = PacketDirection::ServerToClient;
+    const auto searchPacket = [](uint8_t type, size_t size)
+    {
+        std::vector<std::byte> d(size);
+        put32(d, 0, static_cast<uint32_t>(size));
+        put(d, 4, "IXFF");
+        d[0x0B] = std::byte{ type };
+        return d;
+    };
+    const auto zeroFrom = [](const std::vector<std::byte>& d, size_t from)
+    {
+        return std::all_of(d.begin() + static_cast<ptrdiff_t>(from), d.end(), [](std::byte b)
+                           {
+                               return b == std::byte{ 0 };
+                           });
+    };
+
+    // A search for a name and a zone: tags of 5 bits, a sort and a presence bit, then a 5-bit length and 7-bit
+    // characters, most significant bit first.
+    {
+        auto              d = searchPacket(0x03, 0x30);
+        std::vector<bool> bits;
+        const auto        push = [&](uint32_t v, size_t n)
+        {
+            for (size_t i = 0; i < n; ++i)
+            {
+                bits.push_back(((v >> (n - 1 - i)) & 1) != 0);
+            }
+        };
+        push(0x00, 5);
+        push(0, 1);
+        push(1, 1);
+        push(6, 5);
+        for (const char c : std::string_view("Nouurs"))
+        {
+            push(static_cast<uint8_t>(c), 7);
+        }
+        push(0x01, 5);
+        push(0, 1);
+        push(1, 1);
+        push(236, 10);
+        d[0x10] = std::byte((bits.size() + 7) / 8);
+        for (size_t i = 0; i < bits.size(); ++i)
+        {
+            d[0x11 + i / 8] |= std::byte(static_cast<uint8_t>(bits[i]) << (7 - i % 8));
+        }
+        Pseudonymizer p(KEY);
+        auto          out = d;
+        p.packet(1, c2s, out);
+        const size_t name = 0x11 * 8 + 12;
+        std::string  fake;
+        for (size_t i = 0; i < 6; ++i)
+        {
+            fake += static_cast<char>(bitsOf(out, name + i * 7, 7, true));
+        }
+        CHECK(fake == p.name("Nouurs"));
+        for (size_t pos = 0; pos < d.size() * 8; ++pos)
+        {
+            if (pos < name || pos >= name + 42)
+            {
+                INFO("bit " << pos);
+                CHECK(bitsOf(out, pos, 1, true) == bitsOf(d, pos, 1, true));
+            }
+        }
+    }
+
+    // A party list request names the party and alliance by their leaders' ids; linkshell ids stay.
+    {
+        auto d = searchPacket(0x02, 0x20);
+        put32(d, 0x10, 0x0AB61C);
+        put32(d, 0x14, 0x0A0B0C);
+        put32(d, 0x18, 0x00123456);
+        CHECK(checkLayout(1, c2s, d).first == 2);
+    }
+
+    // Auction history: seller and buyer names, then the client's hash, zeroed.
+    {
+        auto d = searchPacket(0x85, 0x20 + 80 + 20);
+        d[8]   = std::byte{ 0x20 + 80 };
+        put32(d, 0x20, 1000);
+        put(d, 0x28, "Audithor");
+        put(d, 0x38, "Nouurs");
+        put32(d, 0x20 + 40, 2000);
+        put(d, 0x28 + 40, "Mule");
+        std::fill(d.begin() + 0x20 + 80, d.end(), std::byte{ 0x5A });
+        Pseudonymizer p(KEY);
+        auto          out = d;
+        p.packet(1, s2c, out);
+        CHECK(text(out, 0x28, 16) == p.name("Audithor"));
+        CHECK(text(out, 0x38, 16) == p.name("Nouurs"));
+        CHECK(text(out, 0x28 + 40, 16) == p.name("Mule"));
+        CHECK(u32(out, 0x20) == 1000);
+        CHECK(u32(out, 0x20 + 40) == 2000);
+        CHECK(zeroFrom(out, 0x20 + 80));
+        auto hashless = d;
+        std::fill(hashless.begin() + 0x20 + 80, hashless.end(), std::byte{ 0 });
+        checkLayout(1, s2c, hashless);
+    }
+
+    // A comment: the player's id; its text goes to the policy, and the hash after the length is zeroed.
+    {
+        auto d = searchPacket(0x88, 204);
+        d[8]   = std::byte{ 154 };
+        put32(d, 0x18, 0x0AB61C);
+        put(d, 0x1E, "LFG Nouurs");
+        d[0xA0] = std::byte{ 0x5A };
+        Pseudonymizer p(KEY);
+        auto          out = d;
+        p.packet(1, s2c, out);
+        CHECK(u32(out, 0x18) == p.playerId(0x0AB61C));
+        CHECK(zeroFrom(out, 154));
+        CHECK(std::equal(out.begin(), out.begin() + 0x18, d.begin()));
+    }
+
+    // A type this library does not read: zeroed past its type.
+    {
+        auto d = searchPacket(0x07, 40);
+        put(d, 0x10, "Nouurs");
+        Pseudonymizer p(KEY);
+        auto          out = d;
+        p.packet(1, c2s, out);
+        CHECK(std::equal(out.begin(), out.begin() + 0x0C, d.begin()));
+        CHECK(zeroFrom(out, 0x0C));
+    }
 }
 
 TEST_CASE("A crafter's signature in an item's extra data gets a pseudonym of the same length", "[pseudonym]")
@@ -406,22 +867,6 @@ TEST_CASE("Search requests and replies for player ids get the same pseudonyms as
     CHECK(entries > 0);
 }
 
-TEST_CASE("Search packets the pseudonymizer cannot read are zeroed past their type", "[pseudonym]")
-{
-    Pseudonymizer          p(KEY);
-    std::vector<std::byte> request(40, std::byte{ 0x41 });
-    request[0x0B] = std::byte{ 0x03 }; // a search, which may name a player
-    p.packet(1, PacketDirection::ClientToServer, request);
-    CHECK(std::all_of(request.begin() + 0x0C, request.end(), [](std::byte b)
-                      {
-                          return b == std::byte{ 0 };
-                      }));
-    std::vector<std::byte> auction(40, std::byte{ 0x41 });
-    auction[0x0B] = std::byte{ 0x15 }; // an auction house item list, which names no one
-    p.packet(1, PacketDirection::ClientToServer, auction);
-    CHECK(auction[0x20] == std::byte{ 0x41 });
-}
-
 TEST_CASE("No real name or id from the corpus is anywhere in an anonymous capture", "[pseudonym]")
 {
     const auto& c = corpus();
@@ -465,6 +910,11 @@ TEST_CASE("No real name or id from the corpus is anywhere in an anonymous captur
     {
         packets.emplace_back(packet.data.begin(), packet.data.end());
         channels.push_back(packet.channel);
+        if ((packet.flags & PacketFlag::Excluded) != 0) // only what the default stubs, never more
+        {
+            const auto* rule = ruleFor(defaultExclusionPolicy(), packet.channel, packet.direction, packet.opcode);
+            CHECK((rule != nullptr && rule->action == ExclusionAction::Stub));
+        }
     }
     REQUIRE(packets.size() == c.packets.size());
     // The corpus holds zone-ins of four recorders; the header's pseudonym is the one its recorder's zone-in now carries.

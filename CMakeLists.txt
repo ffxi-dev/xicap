@@ -142,7 +142,7 @@ if(XICAP_BUILD_TESTS)
     target_link_libraries(xicap_tests PRIVATE xicap Catch2::Catch2WithMain)
     # Tests reach into src/internal to rebuild CRCs and chains when crafting bad files.
     target_include_directories(xicap_tests PRIVATE src tools third_party/monocypher)
-    target_compile_definitions(xicap_tests PRIVATE XICAP_VECTORS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors" XICAP_PSEUDONYM_CORPUS="${CMAKE_CURRENT_SOURCE_DIR}/tests/pseudonym_corpus.txt")
+    target_compile_definitions(xicap_tests PRIVATE XICAP_VECTORS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors" XICAP_PSEUDONYM_CORPUS="${CMAKE_CURRENT_SOURCE_DIR}/tests/pseudonym_corpus.txt" XICAP_PSEUDONYM_FIELDS="${CMAKE_CURRENT_SOURCE_DIR}/pseudonym_fields.tsv")
 
     list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
     include(Catch)

@@ -23,17 +23,46 @@ inline constexpr std::string_view ANONYMOUS_SIGNING_LABEL = "xicap anonymous sig
 // A 32-byte key for one use, named by label: BLAKE2b keyed with the seed.
 [[nodiscard]] auto deriveKey(const SecretSeed& seed, std::string_view label) -> std::array<uint8_t, 32>;
 
-// The default policy, plus what anonymous captures cannot keep: game packets with player text or names the pseudonymizer
-// cannot place are stubbed, and search packets it cannot read are zeroed past their type. Its version is the field map's.
+// The default policy, plus zeroed ranges over the text players write that the default keeps. Nothing is stubbed: every
+// packet keeps its layout. Its version is the field map's.
 [[nodiscard]] auto anonymousExclusionPolicy() -> const ExclusionPolicy&;
+
+// One row of the field map: `count` fields `stride` bytes apart, from `offset` in packets of this channel, direction
+// and opcode (the search channel's opcode is its byte 0x0B). With `mask` set, only when the u16 at `when`, masked,
+// equals `is`. A field past the packet's end is skipped. pseudonym_fields.tsv lists the same rows for other tools.
+enum class PseudonymKind : uint8_t
+{
+    Id,        // u32, little-endian: a player id gets its pseudonym, anything else stays
+    Name,      // `size` bytes of NUL-padded text: letters only get their pseudonym and the rest of the field zeroed
+    Signature, // an item's 24-byte extra data: a crafter's name in 6-bit codes at bytes 12 to 23
+};
+
+struct PseudonymPlace
+{
+    uint8_t         channel;
+    PacketDirection direction;
+    uint16_t        opcode;
+    uint16_t        offset;
+    PseudonymKind   kind;
+    uint8_t         size; // bytes: 4 for an id, 24 for extra data
+    uint8_t         count;
+    uint8_t         stride;
+    uint8_t         when;
+    uint16_t        mask;
+    uint16_t        is;
+};
+
+[[nodiscard]] auto pseudonymFieldMap() -> std::span<const PseudonymPlace>;
 
 // Replaces player names and ids in packets, in place, with pseudonyms keyed by the key: the same name or id always gets
 // the same pseudonym, and without the key no one can tell which real name gave it. A name keeps its length and stays
-// letters, capitalized; a player id stays a player id. NPC and mob ids (0x01000000 and up) pass unchanged.
+// letters, capitalized; a player id stays a player id. NPC and mob ids (0x01000000 and up) pass unchanged. Every byte
+// it does not name stays as it was, so each packet keeps its layout.
 //
-// Two passes. The field map (see pseudonym.cpp) rewrites the fields known to hold a player's name or id. Then every real
-// name and id rewritten so far is replaced wherever else it appears in the packet: retail leaves stale bytes in fields it
-// does not fill. A name or id never seen in a mapped field before can stay in such stale bytes.
+// Three passes. The field map rewrites the fixed fields; walkers rewrite the fields of bit streams and block lists
+// (FORMAT.md, Anonymous captures). Then every real name and id met so far is replaced wherever else it appears in the
+// packet: retail leaves stale bytes in fields it does not fill. A name or id never seen in a mapped field before can
+// stay in such stale bytes.
 class Pseudonymizer
 {
 public:

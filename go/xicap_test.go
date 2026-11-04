@@ -586,7 +586,7 @@ func TestPseudonymizer(t *testing.T) {
 	wi := info()
 	wi.Character = fake
 	pol := AnonymousPolicy()
-	if pol.Name != "xicap-anonymous" || pol.Action(ChannelGame, DirServerToClient, 0x017) != ActionStub || pol.Action(ChannelSearch, DirServerToClient, 0x80) != ActionZeroRange {
+	if pol.Name != "xicap-anonymous" || pol.Action(ChannelGame, DirServerToClient, 0x017) != ActionStub || pol.Action(ChannelSearch, DirServerToClient, 0x88) != ActionZeroRange || pol.Action(ChannelGame, DirServerToClient, 0x078) != ActionZeroRange {
 		t.Fatalf("policy %+v", pol)
 	}
 	wi.Policy = &pol
