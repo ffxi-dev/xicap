@@ -98,7 +98,7 @@ auto fixCrcs(std::vector<uint8_t>& b) -> void
     if (b.size() >= at + sizeof(FooterTrailer) && std::memcmp(b.data() + b.size() - 4, "XCPF", 4) == 0)
     {
         const size_t trailer = b.size() - sizeof(FooterTrailer);
-        const auto   flags   = v3 ? 0u : get<uint32_t>(b, trailer + 16);
+        const auto   flags   = get<uint32_t>(b, trailer + 16);
         const size_t seal    = (flags & 1) ? sizeof(SealBlock) : 0;
         const auto   entries = uint64_t{ get<uint32_t>(b, trailer + 20) } * sizeof(FooterIndexEntry);
         if (trailer >= seal + entries)
