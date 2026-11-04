@@ -63,6 +63,7 @@ extern "C"
         uint8_t    signing_key[32];
         int        signed_to_end;
         uint64_t   verified_packets;
+        uint64_t   first_failure; // file offset of the first signature that fails; 0 when none does
         // Format 4: the seal of a program that rewrote the file.
         int      sealed;
         int      seal_ok;

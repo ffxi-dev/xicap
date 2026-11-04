@@ -301,13 +301,14 @@ func TestConformanceSet(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var signed bool
+			var signed, failed bool
 			var verified uint64
 			json.Unmarshal(want.Verify[0], &signed)
 			json.Unmarshal(want.Verify[1], &verified)
+			json.Unmarshal(want.Verify[3], &failed)
 			if s.Packets != uint64(len(want.Packets)) || s.Closed != want.Complete || s.FooterDamaged != want.FooterDamaged ||
 				s.UnreadBytes != want.UnreadBytes || s.CharacterMismatch != want.CharacterMismatch ||
-				s.SignedToEnd != signed || s.VerifiedPackets != verified {
+				s.SignedToEnd != signed || s.VerifiedPackets != verified || (s.FirstFailure != 0) != failed {
 				t.Fatalf("summary %+v, recorded %s", s, b)
 			}
 		})
