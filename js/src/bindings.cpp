@@ -3,6 +3,7 @@
 #include <emscripten/bind.h>
 #include <emscripten/val.h>
 
+#include <exception>
 #include <memory>
 #include <span>
 #include <string>
@@ -13,7 +14,6 @@ namespace em = emscripten;
 namespace
 {
 
-// Runs f, turning an xicap::Error into a JS Error with its message.
 template <typename F>
 auto guard(F&& f) -> decltype(f())
 {
@@ -21,7 +21,7 @@ auto guard(F&& f) -> decltype(f())
     {
         return f();
     }
-    catch (const xicap::Error& e)
+    catch (const std::exception& e)
     {
         em::val::global("Error").new_(std::string(e.what())).throw_();
     }

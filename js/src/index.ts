@@ -2,8 +2,6 @@
 // @ts-expect-error: emcc writes this file.
 import createXicap from "../dist/xicap.js";
 
-export const Origin = { Unknown: 0, Live: 1, Converted: 2 } as const;
-export const Network = { Unknown: 0, Retail: 1, Private: 2 } as const;
 export const MarkerKind = { Note: 0, Login: 1, Logout: 2 } as const;
 export const PacketFlag = {
     ClientToServer: 0x0001,
@@ -37,14 +35,15 @@ export interface Packet {
     markers: { kind: number; text: string }[]; // the markers just before this packet
 }
 
+let options: object = {};
 let module: Promise<any> | undefined;
 
 /** Sets the options Emscripten's loader gets, such as locateFile for a bundler's wasm URL. Call before the first open. */
-export function configureXicap(options: object): void {
-    module = createXicap(options);
+export function configureXicap(loaderOptions: object): void {
+    options = loaderOptions;
 }
 
-const load = () => (module ??= createXicap());
+const load = () => (module ??= createXicap(options));
 
 let files = 0;
 

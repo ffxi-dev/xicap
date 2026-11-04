@@ -1,14 +1,14 @@
 {
     "name": "@xicap/wasm",
-    "version": "7.0.0",
+    "private": true,
     "description": "Reads xicap captures of Final Fantasy XI packets, in browsers and Node.",
     "type": "module",
-    "main": "./dist/index.js",
-    "types": "./dist/index.d.ts",
-    "files": ["dist/index.js", "dist/index.d.ts", "dist/xicap.js", "dist/xicap.wasm"],
     "scripts": {
-        "build": "emcmake cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build build && npx -y -p typescript@5.9.3 tsc",
+        "build": "emcmake cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build build && tsc",
         "test": "node --test"
+    },
+    "devDependencies": {
+        "typescript": "5.9.3"
     },
     "license": "MIT"
 }
