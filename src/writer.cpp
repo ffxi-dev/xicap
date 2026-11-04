@@ -184,6 +184,16 @@ auto validatePolicy(const ExclusionPolicy& policy) -> void
         throw Error(ErrorCode::InvalidPolicy, "xicap: too many policy rules");
     }
     std::ranges::for_each(policy.rules, validateRule);
+    // The block must fit the 16 MiB a reader takes.
+    uint64_t size = sizeof(ExclusionPolicyHeader);
+    for (const auto& rule : policy.rules)
+    {
+        size += sizeof(ExclusionRuleHeader) + rule.ranges.size() * sizeof(ByteRange);
+    }
+    if (size > FrameLimits::MAX_EXTENSION_SIZE)
+    {
+        throw Error(ErrorCode::InvalidPolicy, "xicap: the exclusion policy is over 16 MiB");
+    }
 }
 
 auto encodePolicy(const ExclusionPolicy& policy) -> std::vector<uint8_t>
