@@ -515,8 +515,8 @@ auto Reader::seekToTime(uint64_t timestamp) -> SeekResult
     {
         return SeekResult::EmptyIndex;
     }
-    // The last frame starting at or before the time.
-    auto it = std::ranges::upper_bound(indexEntries_, timestamp, {}, &FooterIndexEntry::timestamp);
+    // The last frame starting before the time: frames that start at it may follow packets at it in the frame before.
+    auto it = std::ranges::lower_bound(indexEntries_, timestamp, {}, &FooterIndexEntry::timestamp);
     if (it != indexEntries_.begin())
     {
         --it;

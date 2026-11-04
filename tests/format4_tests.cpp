@@ -834,6 +834,34 @@ TEST_CASE("the reader reads both formats")
     }
 }
 
+TEST_CASE("a seek to a time lands on the first packet at it, across frames")
+{
+    TempCapture tmp;
+    {
+        Writer w(tmp.path, config());
+        // Packets at T0 + 10 end one frame and start the next two.
+        w.write(T0, PacketDirection::ServerToClient, gamePacket(0x0DF, 16, 1));
+        w.write(T0 + 10, PacketDirection::ServerToClient, gamePacket(0x0DF, 16, 2));
+        w.flush();
+        w.write(T0 + 10, PacketDirection::ServerToClient, gamePacket(0x0DF, 16, 3));
+        w.flush();
+        w.write(T0 + 10, PacketDirection::ServerToClient, gamePacket(0x0DF, 16, 4));
+        w.write(T0 + 20, PacketDirection::ServerToClient, gamePacket(0x0DF, 16, 5));
+        w.close();
+    }
+    Reader r(tmp.path);
+    REQUIRE(r.totalFrames() == 3);
+    REQUIRE(r.seekToTime(T0 + 10) == SeekResult::Ok);
+    const auto rest = readAll(r);
+    REQUIRE(rest.size() == 4);
+    CHECK(rest[0].timestamp == T0 + 10);
+    CHECK(rest[0].data[4] == 2);
+    REQUIRE(r.seekToTime(T0 + 15) == SeekResult::Ok);
+    CHECK(readAll(r).size() == 1);
+    REQUIRE(r.seekToTime(T0) == SeekResult::Ok);
+    CHECK(readAll(r).size() == 5);
+}
+
 TEST_CASE("transcode")
 {
     TempCapture src;
