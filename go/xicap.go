@@ -163,7 +163,14 @@ type Seal struct {
 	OK       bool   // its signature verifies
 }
 
-func cerr(msg *[256]C.char) error { return errors.New(C.GoString(&msg[0])) }
+// call runs f with a buffer for the C side's error message, and returns that message when f returns non-zero.
+func call(f func(msg *C.char, n C.size_t) C.int) error {
+	var msg [256]C.char
+	if f(&msg[0], C.size_t(len(msg))) != 0 {
+		return errors.New(C.GoString(&msg[0]))
+	}
+	return nil
+}
 
 // HeaderPrefix is how many bytes HeaderLength needs.
 const HeaderPrefix = 12
@@ -186,11 +193,9 @@ func CheckHeader(b []byte) error {
 	if len(b) < HeaderSize {
 		return errors.New("xicap: short header")
 	}
-	var msg [256]C.char
-	if C.xicap_check_header((*C.uint8_t)(unsafe.Pointer(&b[0])), C.size_t(len(b)), &msg[0], C.size_t(len(msg))) != 0 {
-		return cerr(&msg)
-	}
-	return nil
+	return call(func(msg *C.char, n C.size_t) C.int {
+		return C.xicap_check_header((*C.uint8_t)(unsafe.Pointer(&b[0])), C.size_t(len(b)), msg, n)
+	})
 }
 
 // Read reads the capture at path, decoding every frame and checking its
@@ -200,9 +205,8 @@ func Read(path string) (Summary, error) {
 	p := C.CString(path)
 	defer C.free(unsafe.Pointer(p))
 	var s C.xicap_summary
-	var msg [256]C.char
-	if C.xicap_read(p, &s, &msg[0], C.size_t(len(msg))) != 0 {
-		return Summary{}, cerr(&msg)
+	if err := call(func(msg *C.char, n C.size_t) C.int { return C.xicap_read(p, &s, msg, n) }); err != nil {
+		return Summary{}, err
 	}
 	out := Summary{
 		VersionMajor:      uint8(s.version_major),
@@ -281,9 +285,8 @@ func Markers(path string) ([]Marker, error) {
 	defer C.free(unsafe.Pointer(p))
 	var list *C.xicap_marker
 	var n C.size_t
-	var msg [256]C.char
-	if C.xicap_markers(p, &list, &n, &msg[0], C.size_t(len(msg))) != 0 {
-		return nil, cerr(&msg)
+	if err := call(func(msg *C.char, size C.size_t) C.int { return C.xicap_markers(p, &list, &n, msg, size) }); err != nil {
+		return nil, err
 	}
 	if n == 0 {
 		return nil, nil
@@ -411,11 +414,15 @@ func Create(path string, info WriterInfo) (*Writer, error) {
 			ci.ranges, ci.range_count = &cr[0], C.size_t(len(ranges))
 		}
 	}
-	p := cstr(path)
-	var msg [256]C.char
-	w := C.xicap_writer_open(p, &ci, &msg[0], C.size_t(len(msg)))
-	if w == nil {
-		return nil, cerr(&msg)
+	var w *C.xicap_writer
+	err := call(func(msg *C.char, n C.size_t) C.int {
+		if w = C.xicap_writer_open(cstr(path), &ci, msg, n); w == nil {
+			return -1
+		}
+		return 0
+	})
+	if err != nil {
+		return nil, err
 	}
 	return &Writer{w}, nil
 }
@@ -439,12 +446,10 @@ func (w *Writer) WritePacket(p Packet) error {
 	if p.ClientToServer {
 		dir = 1
 	}
-	var msg [256]C.char
-	if C.xicap_writer_write(w.w, C.uint64_t(p.Timestamp), dir, C.uint8_t(p.Channel), C.uint16_t(p.Opcode), C.uint16_t(p.Provenance),
-		(*C.uint8_t)(unsafe.Pointer(&p.Data[0])), C.size_t(len(p.Data)), &msg[0], C.size_t(len(msg))) != 0 {
-		return cerr(&msg)
-	}
-	return nil
+	return call(func(msg *C.char, n C.size_t) C.int {
+		return C.xicap_writer_write(w.w, C.uint64_t(p.Timestamp), dir, C.uint8_t(p.Channel), C.uint16_t(p.Opcode), C.uint16_t(p.Provenance),
+			(*C.uint8_t)(unsafe.Pointer(&p.Data[0])), C.size_t(len(p.Data)), msg, n)
+	})
 }
 
 // Write adds one game packet; timestamp is Unix ms.
@@ -454,15 +459,13 @@ func (w *Writer) Write(timestamp uint64, clientToServer bool, data []byte) error
 
 // AddExtension adds a metadata block (type 0x8000 and up) before the first packet.
 func (w *Writer) AddExtension(typ uint32, data []byte) error {
-	var msg [256]C.char
 	var ptr *C.uint8_t
 	if len(data) > 0 {
 		ptr = (*C.uint8_t)(unsafe.Pointer(&data[0]))
 	}
-	if C.xicap_writer_add_extension(w.w, C.uint32_t(typ), ptr, C.size_t(len(data)), &msg[0], C.size_t(len(msg))) != 0 {
-		return cerr(&msg)
-	}
-	return nil
+	return call(func(msg *C.char, n C.size_t) C.int {
+		return C.xicap_writer_add_extension(w.w, C.uint32_t(typ), ptr, C.size_t(len(data)), msg, n)
+	})
 }
 
 // Mark places a marker just before the next packet. A login or logout also
@@ -470,20 +473,14 @@ func (w *Writer) AddExtension(typ uint32, data []byte) error {
 func (w *Writer) Mark(kind MarkerKind, text string) error {
 	t := C.CString(text)
 	defer C.free(unsafe.Pointer(t))
-	var msg [256]C.char
-	if C.xicap_writer_mark(w.w, C.uint8_t(kind), t, C.size_t(len(text)), &msg[0], C.size_t(len(msg))) != 0 {
-		return cerr(&msg)
-	}
-	return nil
+	return call(func(msg *C.char, n C.size_t) C.int {
+		return C.xicap_writer_mark(w.w, C.uint8_t(kind), t, C.size_t(len(text)), msg, n)
+	})
 }
 
 // Flush ends the frame being built, or signs an idle capture's last frames.
 func (w *Writer) Flush() error {
-	var msg [256]C.char
-	if C.xicap_writer_flush(w.w, &msg[0], C.size_t(len(msg))) != 0 {
-		return cerr(&msg)
-	}
-	return nil
+	return call(func(msg *C.char, n C.size_t) C.int { return C.xicap_writer_flush(w.w, msg, n) })
 }
 
 // IDs returns the capture's id and the recorder's public key.
@@ -494,13 +491,9 @@ func (w *Writer) IDs() (captureID [16]byte, publicKey [32]byte) {
 
 // Close writes the footer. The Writer cannot be used afterwards.
 func (w *Writer) Close() error {
-	var msg [256]C.char
-	rc := C.xicap_writer_close(w.w, &msg[0], C.size_t(len(msg)))
+	err := call(func(msg *C.char, n C.size_t) C.int { return C.xicap_writer_close(w.w, msg, n) })
 	w.w = nil
-	if rc != 0 {
-		return cerr(&msg)
-	}
-	return nil
+	return err
 }
 
 // TranscodeOptions says how Transcode seals and compresses: it keeps the signer's signatures and adds a seal made
@@ -522,9 +515,5 @@ func Transcode(src, dst string, opt TranscodeOptions) error {
 	defer C.free(unsafe.Pointer(a))
 	ci := C.xicap_transcode_info{level: C.int(opt.Level), agent: a}
 	*(*[32]byte)(unsafe.Pointer(&ci.seed[0])) = opt.Seed
-	var msg [256]C.char
-	if C.xicap_transcode(s, d, &ci, &msg[0], C.size_t(len(msg))) != 0 {
-		return cerr(&msg)
-	}
-	return nil
+	return call(func(msg *C.char, n C.size_t) C.int { return C.xicap_transcode(s, d, &ci, msg, n) })
 }

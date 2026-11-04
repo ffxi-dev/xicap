@@ -7,7 +7,6 @@
 #include <cstring>
 #include <memory>
 #include <string>
-#include <utility>
 #include <vector>
 
 namespace em = emscripten;
@@ -15,11 +14,8 @@ namespace em = emscripten;
 namespace
 {
 
-// Embind catches every C++ throw and surfaces it to JS as a generic
-// CppException. To preserve the typed ErrorCode + message we stash both into a
-// process-global side channel before letting the exception propagate; the TS
-// wrapper drains the side channel after catching and synthesises a typed
-// XicapError instance.
+// Embind turns every C++ exception into a generic CppException, so an xicap::Error's code and message wait here
+// for the TypeScript wrapper, which throws them as an XicapError.
 struct LastError
 {
     int         code = -1;
@@ -100,19 +96,16 @@ auto characterObject(const xicap::CharacterIdentity& c) -> em::val
     return o;
 }
 
-// Wraps xicap::Reader for Embind. Lifecycle: Reader.open writes the input bytes
-// to a MEMFS path and constructs the C++ Reader against that path. delete()
-// releases the C++ object; the JS wrapper removes the MEMFS file.
+// Wraps xicap::Reader for Embind. The TypeScript wrapper writes the capture to a MEMFS file, opens it here, and
+// removes the file once delete() frees this.
 class JsReader
 {
 public:
-    JsReader(std::string memPath, bool recovery)
-    : path_(std::move(memPath))
+    JsReader(const std::string& path, bool recovery)
     {
-        withJsErrors([&]() -> int
+        withJsErrors([&]
                      {
-                         reader_ = std::make_unique<xicap::Reader>(path_, xicap::ReaderOptions{ .recovery = recovery });
-                         return 0;
+                         reader_ = std::make_unique<xicap::Reader>(path, xicap::ReaderOptions{ .recovery = recovery });
                      });
     }
 
@@ -299,7 +292,7 @@ public:
         return arr;
     }
 
-    // A Uint8Array copy of the extension's data, or null if not present.
+    // A copy of the extension's data, or null.
     [[nodiscard]] auto getExtension(uint32_t type) const -> em::val
     {
         const auto* ext = reader_->getExtension(type);
@@ -326,11 +319,12 @@ public:
     {
         return withJsErrors([&]() -> em::val
                             {
-                                if (!reader_->next(pkt_))
+                                xicap::ReadPacket p{};
+                                if (!reader_->next(p))
                                 {
                                     return em::val::null();
                                 }
-                                return packetObject(pkt_);
+                                return packetObject(p);
                             });
     }
 
@@ -361,9 +355,7 @@ public:
     }
 
 private:
-    std::string                    path_;
     std::unique_ptr<xicap::Reader> reader_;
-    xicap::ReadPacket              pkt_{};
 };
 
 // Wraps xicap::StreamReader: a capture's bytes in, as they arrive; packets out.
@@ -486,7 +478,9 @@ EMSCRIPTEN_BINDINGS(xicap_module)
                  {
                      auto& le = lastError();
                      if (!le.present)
+                     {
                          return em::val::null();
+                     }
                      em::val o = em::val::object();
                      o.set("code", le.code);
                      o.set("message", le.message);

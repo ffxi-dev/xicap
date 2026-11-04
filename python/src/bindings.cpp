@@ -9,6 +9,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace py = pybind11;
@@ -40,9 +41,8 @@ auto utf8(const std::string& text) -> py::str
     return py::reinterpret_steal<py::str>(s);
 }
 
-// One packet, owning its bytes: ReadPacket's spans point into Reader buffers
-// that the next call invalidates.
-struct PyPacket
+// A packet that owns its bytes: a ReadPacket's spans go stale on the reader's next call.
+struct Packet
 {
     uint64_t               timestampMs;
     uint8_t                channel;
@@ -53,162 +53,176 @@ struct PyPacket
     py::list               markers; // (MarkerKind, text) tuples
 };
 
-class PyReader
+auto next(xicap::Reader& reader) -> std::optional<Packet>
 {
-public:
-    PyReader(const std::filesystem::path& path, bool recovery)
-    : reader_(std::make_unique<xicap::Reader>(path, xicap::ReaderOptions{ .recovery = recovery }))
+    xicap::ReadPacket p{};
+    if (!reader.next(p))
     {
+        return std::nullopt;
     }
-
-    [[nodiscard]] auto next() -> std::optional<PyPacket>
+    py::list markers;
+    for (const auto& m : p.markers)
     {
-        if (!reader_->next(pkt_))
+        markers.append(py::make_tuple(m.kind, utf8(m.text)));
+    }
+    return Packet{
+        .timestampMs = p.timestamp,
+        .channel     = p.channel,
+        .opcode      = p.opcode,
+        .flags       = p.flags,
+        .direction   = p.direction,
+        .data        = toBytes(p.data),
+        .markers     = std::move(markers),
+    };
+}
+
+auto character(const xicap::Reader& reader) -> py::dict
+{
+    const auto& c = reader.character();
+    py::dict    out;
+    out["contentId"]     = c.contentId;
+    out["characterId"]   = c.characterId;
+    out["worldId"]       = c.worldId;
+    out["characterName"] = text(c.characterName);
+    out["worldName"]     = text(c.worldName);
+    return out;
+}
+
+auto policy(const xicap::Reader& reader) -> py::dict
+{
+    const auto& p = reader.policy();
+    py::list    rules;
+    for (const auto& r : p.rules)
+    {
+        py::list ranges;
+        for (const auto& range : r.ranges)
         {
-            return std::nullopt;
+            ranges.append(py::make_tuple(range.offset, range.length));
         }
-        py::list markers;
-        for (const auto& m : pkt_.markers)
-        {
-            markers.append(py::make_tuple(m.kind, utf8(m.text)));
-        }
-        return PyPacket{
-            .timestampMs = pkt_.timestamp,
-            .channel     = pkt_.channel,
-            .opcode      = pkt_.opcode,
-            .flags       = pkt_.flags,
-            .direction   = pkt_.direction,
-            .data        = toBytes(pkt_.data),
-            .markers     = std::move(markers),
-        };
+        py::dict rule;
+        rule["channel"]   = r.channel;
+        rule["direction"] = static_cast<int>(r.direction);
+        rule["action"]    = static_cast<int>(r.action);
+        rule["opcode"]    = r.opcode;
+        rule["ranges"]    = ranges;
+        rules.append(rule);
     }
+    py::dict out;
+    out["name"]    = p.name;
+    out["version"] = p.version;
+    out["rules"]   = rules;
+    return out;
+}
 
-    [[nodiscard]] auto reader() const -> xicap::Reader&
+auto source(const xicap::Reader& reader) -> py::object
+{
+    const auto& s = reader.source();
+    if (!s)
     {
-        return *reader_;
+        return py::none();
     }
+    py::dict out;
+    out["format"]           = s->format;
+    out["formatVersion"]    = s->formatVersion;
+    out["skippedRecords"]   = s->skippedRecords;
+    out["utcOffsetSeconds"] = s->utcOffsetSeconds;
+    out["sourceHash"]       = toBytes(s->sourceHash);
+    out["metadata"]         = toBytes(s->metadata);
+    return out;
+}
 
-    [[nodiscard]] auto character() const -> py::dict
+auto verify(xicap::Reader& reader) -> py::dict
+{
+    const auto v = reader.verify();
+    py::dict   out;
+    out["key"]                = toBytes(v.key);
+    out["signedToEnd"]        = v.signedToEnd;
+    out["verifiedPackets"]    = v.verifiedPackets;
+    out["goodCheckpoints"]    = v.goodCheckpoints;
+    out["firstFailureOffset"] = v.firstFailureOffset ? py::cast(*v.firstFailureOffset) : py::none();
+    out["seal"]               = py::none();
+    if (v.seal)
     {
-        const auto& c = reader_->character();
-        py::dict    out;
-        out["contentId"]     = c.contentId;
-        out["characterId"]   = c.characterId;
-        out["worldId"]       = c.worldId;
-        out["characterName"] = text(c.characterName);
-        out["worldName"]     = text(c.worldName);
-        return out;
+        py::dict seal;
+        seal["key"]        = toBytes(v.seal->key);
+        seal["agent"]      = v.seal->agent;
+        seal["sealedAtMs"] = v.seal->sealedAt;
+        seal["good"]       = v.seal->good;
+        out["seal"]        = seal;
     }
+    return out;
+}
 
-    [[nodiscard]] auto policy() const -> py::dict
+auto skippedRegions(const xicap::Reader& reader) -> py::list
+{
+    py::list out;
+    for (const auto& r : reader.skippedRegions())
     {
-        const auto& p = reader_->policy();
-        py::list    rules;
-        for (const auto& r : p.rules)
-        {
-            py::list ranges;
-            for (const auto& range : r.ranges)
-            {
-                ranges.append(py::make_tuple(range.offset, range.length));
-            }
-            py::dict rule;
-            rule["channel"]   = r.channel;
-            rule["direction"] = static_cast<int>(r.direction);
-            rule["action"]    = static_cast<int>(r.action);
-            rule["opcode"]    = r.opcode;
-            rule["ranges"]    = ranges;
-            rules.append(rule);
-        }
-        py::dict out;
-        out["name"]    = p.name;
-        out["version"] = p.version;
-        out["rules"]   = rules;
-        return out;
+        out.append(py::make_tuple(r.offset, r.length));
     }
+    return out;
+}
 
-    [[nodiscard]] auto source() const -> py::object
+auto extensionTypes(const xicap::Reader& reader) -> std::vector<uint32_t>
+{
+    std::vector<uint32_t> types;
+    for (const auto& e : reader.extensions())
     {
-        const auto& s = reader_->source();
-        if (!s)
-        {
-            return py::none();
-        }
-        py::dict out;
-        out["format"]           = s->format;
-        out["formatVersion"]    = s->formatVersion;
-        out["skippedRecords"]   = s->skippedRecords;
-        out["utcOffsetSeconds"] = s->utcOffsetSeconds;
-        out["sourceHash"]       = toBytes(s->sourceHash);
-        out["metadata"]         = toBytes(s->metadata);
-        return out;
+        types.push_back(e.type);
     }
+    return types;
+}
 
-    [[nodiscard]] auto verify() -> py::dict
+auto getExtension(const xicap::Reader& reader, uint32_t type) -> std::optional<py::bytes>
+{
+    const auto* ext = reader.getExtension(type);
+    if (ext == nullptr)
     {
-        const auto v = reader_->verify();
-        py::dict   out;
-        out["key"]                = toBytes(v.key);
-        out["signedToEnd"]        = v.signedToEnd;
-        out["verifiedPackets"]    = v.verifiedPackets;
-        out["goodCheckpoints"]    = v.goodCheckpoints;
-        out["firstFailureOffset"] = v.firstFailureOffset ? py::cast(*v.firstFailureOffset) : py::none();
-        out["seal"]               = py::none();
-        if (v.seal)
-        {
-            py::dict seal;
-            seal["key"]        = toBytes(v.seal->key);
-            seal["agent"]      = v.seal->agent;
-            seal["sealedAtMs"] = v.seal->sealedAt;
-            seal["good"]       = v.seal->good;
-            out["seal"]        = seal;
-        }
-        return out;
+        return std::nullopt;
     }
+    return toBytes(ext->data);
+}
 
-    [[nodiscard]] auto skippedRegions() const -> py::list
+auto listZones(const xicap::Reader& reader) -> py::list
+{
+    py::list out;
+    for (const auto& z : reader.listZones())
     {
-        py::list out;
-        for (const auto& r : reader_->skippedRegions())
-        {
-            out.append(py::make_tuple(r.offset, r.length));
-        }
-        return out;
+        py::dict d;
+        d["zoneId"]      = z.zoneId;
+        d["timestampMs"] = z.timestamp;
+        d["fileOffset"]  = z.fileOffset;
+        out.append(d);
     }
+    return out;
+}
 
-    [[nodiscard]] auto extensionTypes() const -> std::vector<uint32_t>
+auto transcode(const std::filesystem::path& src, const std::filesystem::path& dst, const py::bytes& seed, const std::string& agent, int level) -> py::dict
+{
+    xicap::TranscodeOptions options{};
+    options.agent    = agent;
+    const auto bytes = static_cast<std::string_view>(seed);
+    if (bytes.size() != options.seed.size())
     {
-        std::vector<uint32_t> types;
-        for (const auto& e : reader_->extensions())
-        {
-            types.push_back(e.type);
-        }
-        return types;
+        throw py::value_error("seed must be 32 bytes");
     }
-
-    [[nodiscard]] auto getExtension(uint32_t type) const -> std::optional<py::bytes>
+    std::memcpy(options.seed.data(), bytes.data(), options.seed.size());
+    if (level != 0)
     {
-        const auto* ext = reader_->getExtension(type);
-        return ext ? std::optional{ toBytes(ext->data) } : std::nullopt;
+        options.policy.compressionLevel = level;
     }
-
-    [[nodiscard]] auto listZones() const -> py::list
+    xicap::TranscodeResult r;
     {
-        py::list out;
-        for (const auto& z : reader_->listZones())
-        {
-            py::dict d;
-            d["zoneId"]      = z.zoneId;
-            d["timestampMs"] = z.timestamp;
-            d["fileOffset"]  = z.fileOffset;
-            out.append(d);
-        }
-        return out;
+        py::gil_scoped_release release;
+        r = xicap::transcode(src, dst, options);
     }
-
-private:
-    std::unique_ptr<xicap::Reader> reader_;
-    xicap::ReadPacket              pkt_{};
-};
+    py::dict out;
+    out["packets"]  = r.packets;
+    out["markers"]  = r.markers;
+    out["bytesIn"]  = r.bytesIn;
+    out["bytesOut"] = r.bytesOut;
+    return out;
+}
 
 } // namespace
 
@@ -280,21 +294,21 @@ PYBIND11_MODULE(_xicap, m)
         .value("TranscodeRefused", xicap::ErrorCode::TranscodeRefused)
         .value("TranscodeMismatch", xicap::ErrorCode::TranscodeMismatch);
 
-    // Map xicap::Error onto a Python exception with a .code attribute.
+    // xicap::Error becomes a Python exception with a .code attribute.
     static py::exception<xicap::Error> errExc(m, "Error");
     py::register_exception_translator([](std::exception_ptr p)
                                       {
                                           try
                                           {
                                               if (p)
+                                              {
                                                   std::rethrow_exception(p);
+                                              }
                                           }
                                           catch (const xicap::Error& e)
                                           {
-                                              // py::exception::operator() returns void; construct the
-                                              // instance by calling the exception type directly.
-                                              py::object inst = py::reinterpret_steal<py::object>(
-                                                  PyObject_CallFunction(errExc.ptr(), "s", e.what()));
+                                              // py::exception's call operator sets no attributes: build the instance.
+                                              py::object inst = py::reinterpret_steal<py::object>(PyObject_CallFunction(errExc.ptr(), "s", e.what()));
                                               if (inst)
                                               {
                                                   inst.attr("code") = py::cast(e.code());
@@ -303,173 +317,75 @@ PYBIND11_MODULE(_xicap, m)
                                           }
                                       });
 
-    py::class_<PyPacket>(m, "Packet")
-        .def_readonly("timestampMs", &PyPacket::timestampMs)
-        .def_readonly("channel", &PyPacket::channel)
-        .def_readonly("opcode", &PyPacket::opcode)
-        .def_readonly("flags", &PyPacket::flags)
-        .def_readonly("direction", &PyPacket::direction)
-        .def_readonly("data", &PyPacket::data)
-        .def_readonly("markers", &PyPacket::markers);
+    py::class_<Packet>(m, "Packet")
+        .def_readonly("timestampMs", &Packet::timestampMs)
+        .def_readonly("channel", &Packet::channel)
+        .def_readonly("opcode", &Packet::opcode)
+        .def_readonly("flags", &Packet::flags)
+        .def_readonly("direction", &Packet::direction)
+        .def_readonly("data", &Packet::data)
+        .def_readonly("markers", &Packet::markers);
 
-    const auto r = [](auto f)
-    {
-        return [f](const PyReader& self)
-        {
-            return f(self.reader());
-        };
-    };
+    using xicap::Reader;
+    py::class_<Reader>(m, "Reader")
+        .def(py::init([](const std::filesystem::path& path, bool recovery)
+                      {
+                          return std::make_unique<Reader>(path, xicap::ReaderOptions{ .recovery = recovery });
+                      }),
+             py::arg("path"),
+             py::arg("recovery") = false)
+        .def("next", &next)
+        .def("skip_current_frame", &Reader::skipCurrentFrame)
+        .def("reset", &Reader::reset)
+        .def("seek_to_frame", &Reader::seekToFrame)
+        .def("seek_to_time", &Reader::seekToTime)
+        .def("seek_to_zone", &Reader::seekToZone)
+        .def("verify", &verify)
+        .def_property_readonly("version_major", &Reader::versionMajor)
+        .def_property_readonly("version_minor", &Reader::versionMinor)
+        .def_property_readonly("client_version", &Reader::clientVersion)
+        .def_property_readonly("capture_agent", &Reader::captureAgent)
+        .def_property_readonly("capture_id", [](const Reader& r)
+                               {
+                                   return toBytes(r.captureId());
+                               })
+        .def_property_readonly("previous_capture_id", [](const Reader& r)
+                               {
+                                   return toBytes(r.previousCaptureId());
+                               })
+        .def_property_readonly("signing_key", [](const Reader& r)
+                               {
+                                   return toBytes(r.signingKey());
+                               })
+        .def_property_readonly("clock_source", &Reader::clockSource)
+        .def_property_readonly("origin", &Reader::origin)
+        .def_property_readonly("network", &Reader::network)
+        .def_property_readonly("start_context", &Reader::startContext)
+        .def_property_readonly("start_timestamp_ms", &Reader::startTimestamp)
+        .def_property_readonly("end_timestamp_ms", &Reader::endTimestamp)
+        .def_property_readonly("duration_ms", &Reader::durationMs)
+        .def_property_readonly("total_frames", &Reader::totalFrames)
+        .def_property_readonly("total_packet_count", &Reader::totalPacketCount)
+        .def_property_readonly("complete", &Reader::complete)
+        .def_property_readonly("footer_damaged", &Reader::footerDamaged)
+        .def_property_readonly("character_mismatch", &Reader::characterMismatch)
+        .def_property_readonly("unread_bytes", &Reader::unreadBytes)
+        .def_property_readonly("character", &character)
+        .def_property_readonly("policy", &policy)
+        .def_property_readonly("source", &source)
+        .def("skipped_regions", &skippedRegions)
+        .def("extension_types", &extensionTypes)
+        .def("get_extension", &getExtension, py::arg("type"))
+        .def("list_zones", &listZones);
 
-    py::class_<PyReader>(m, "Reader")
-        .def(py::init<const std::filesystem::path&, bool>(), py::arg("path"), py::arg("recovery") = false)
-        .def("next", &PyReader::next)
-        .def("skip_current_frame", [](PyReader& self)
-             {
-                 self.reader().skipCurrentFrame();
-             })
-        .def("reset", [](PyReader& self)
-             {
-                 self.reader().reset();
-             })
-        .def("seek_to_frame", [](PyReader& self, uint64_t i)
-             {
-                 return self.reader().seekToFrame(i);
-             })
-        .def("seek_to_time", [](PyReader& self, uint64_t t)
-             {
-                 return self.reader().seekToTime(t);
-             })
-        .def("seek_to_zone", [](PyReader& self, uint16_t z)
-             {
-                 return self.reader().seekToZone(z);
-             })
-        .def("verify", &PyReader::verify)
-        .def_property_readonly("version_major", r([](xicap::Reader& x)
-                                                  {
-                                                      return static_cast<int>(x.versionMajor());
-                                                  }))
-        .def_property_readonly("version_minor", r([](xicap::Reader& x)
-                                                  {
-                                                      return static_cast<int>(x.versionMinor());
-                                                  }))
-        .def_property_readonly("client_version", r([](xicap::Reader& x)
-                                                   {
-                                                       return x.clientVersion();
-                                                   }))
-        .def_property_readonly("capture_agent", r([](xicap::Reader& x)
-                                                  {
-                                                      return x.captureAgent();
-                                                  }))
-        .def_property_readonly("capture_id", r([](xicap::Reader& x)
-                                               {
-                                                   return toBytes(x.captureId());
-                                               }))
-        .def_property_readonly("previous_capture_id", r([](xicap::Reader& x)
-                                                        {
-                                                            return toBytes(x.previousCaptureId());
-                                                        }))
-        .def_property_readonly("signing_key", r([](xicap::Reader& x)
-                                                {
-                                                    return toBytes(x.signingKey());
-                                                }))
-        .def_property_readonly("clock_source", r([](xicap::Reader& x)
-                                                 {
-                                                     return x.clockSource();
-                                                 }))
-        .def_property_readonly("origin", r([](xicap::Reader& x)
-                                           {
-                                               return x.origin();
-                                           }))
-        .def_property_readonly("network", r([](xicap::Reader& x)
-                                            {
-                                                return x.network();
-                                            }))
-        .def_property_readonly("start_context", r([](xicap::Reader& x)
-                                                  {
-                                                      return x.startContext();
-                                                  }))
-        .def_property_readonly("start_timestamp_ms", r([](xicap::Reader& x)
-                                                       {
-                                                           return x.startTimestamp();
-                                                       }))
-        .def_property_readonly("end_timestamp_ms", r([](xicap::Reader& x)
-                                                     {
-                                                         return x.endTimestamp();
-                                                     }))
-        .def_property_readonly("duration_ms", r([](xicap::Reader& x)
-                                                {
-                                                    return x.durationMs();
-                                                }))
-        .def_property_readonly("total_frames", r([](xicap::Reader& x)
-                                                 {
-                                                     return x.totalFrames();
-                                                 }))
-        .def_property_readonly("total_packet_count", r([](xicap::Reader& x)
-                                                       {
-                                                           return x.totalPacketCount();
-                                                       }))
-        .def_property_readonly("complete", r([](xicap::Reader& x)
-                                             {
-                                                 return x.complete();
-                                             }))
-        .def_property_readonly("footer_damaged", r([](xicap::Reader& x)
-                                                   {
-                                                       return x.footerDamaged();
-                                                   }))
-        .def_property_readonly("character_mismatch", r([](xicap::Reader& x)
-                                                       {
-                                                           return x.characterMismatch();
-                                                       }))
-        .def_property_readonly("unread_bytes", r([](xicap::Reader& x)
-                                                 {
-                                                     return x.unreadBytes();
-                                                 }))
-        .def_property_readonly("character", &PyReader::character)
-        .def_property_readonly("policy", &PyReader::policy)
-        .def_property_readonly("source", &PyReader::source)
-        .def("skipped_regions", &PyReader::skippedRegions)
-        .def("extension_types", &PyReader::extensionTypes)
-        .def("get_extension", &PyReader::getExtension, py::arg("type"))
-        .def("list_zones", &PyReader::listZones);
-
-    m.def(
-        "transcode",
-        [](const std::filesystem::path& src, const std::filesystem::path& dst, const py::bytes& seed, const std::string& agent, int level)
-        {
-            const auto take = [](const py::bytes& b, auto& out, const char* what)
-            {
-                const auto view = static_cast<std::string_view>(b);
-                if (view.size() != out.size())
-                {
-                    throw py::value_error(std::string(what) + " must be " + std::to_string(out.size()) + " bytes");
-                }
-                std::memcpy(out.data(), view.data(), out.size());
-            };
-            xicap::TranscodeOptions options{};
-            options.agent = agent;
-            take(seed, options.seed, "seed");
-            if (level != 0)
-            {
-                options.policy.compressionLevel = level;
-            }
-            xicap::TranscodeResult r;
-            {
-                py::gil_scoped_release release;
-                r = xicap::transcode(src, dst, options);
-            }
-            py::dict out;
-            out["packets"]  = r.packets;
-            out["markers"]  = r.markers;
-            out["bytesIn"]  = r.bytesIn;
-            out["bytesOut"] = r.bytesOut;
-            return out;
-        },
-        py::arg("src"),
-        py::arg("dst"),
-        py::kw_only(),
-        py::arg("seed"),
-        py::arg("agent"),
-        py::arg("level") = 0,
-        "Rewrites src at dst with the archive preset and checks it against src: it keeps the signer's signatures and "
-        "adds a seal made with seed.");
+    m.def("transcode",
+          &transcode,
+          py::arg("src"),
+          py::arg("dst"),
+          py::kw_only(),
+          py::arg("seed"),
+          py::arg("agent"),
+          py::arg("level") = 0,
+          "Rewrites src at dst with the archive preset and checks it against src: it keeps the signer's signatures and "
+          "adds a seal made with seed.");
 }
