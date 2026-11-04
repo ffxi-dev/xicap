@@ -4,8 +4,7 @@ project(xicap VERSION 6.0.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# 32-bit build option (for non-MSVC compilers)
-# Note: For MSVC, use the x86 Native Tools Command Prompt or pass -A Win32 to cmake
+# MSVC builds 32-bit from the x86 tools or with -A Win32.
 option(XICAP_BUILD_32BIT "Build for 32-bit architecture (non-MSVC only)" OFF)
 if(XICAP_BUILD_32BIT AND NOT MSVC)
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -m32")
@@ -102,21 +101,20 @@ install(EXPORT xicapTargets
     DESTINATION lib/cmake/xicap
 )
 
-# Tools
 option(XICAP_BUILD_TOOLS "Build xicap tools" ON)
 if(XICAP_BUILD_TOOLS)
     add_executable(xicap_dump tools/xicap_dump.cpp)
     target_link_libraries(xicap_dump PRIVATE xicap)
 endif()
 
-# Fixture generator (no Ashita SDK needed; used by the JS test suite).
+# The fixture the Python and JavaScript tests read.
 option(XICAP_BUILD_FIXTURE_TOOL "Build the xicap_make_fixture helper" OFF)
 if(XICAP_BUILD_FIXTURE_TOOL)
     add_executable(xicap_make_fixture tools/xicap_make_fixture.cpp)
     target_link_libraries(xicap_make_fixture PRIVATE xicap)
 endif()
 
-# Conformance set generator (writes tests/vectors).
+# Writes tests/vectors.
 option(XICAP_BUILD_VECTOR_TOOL "Build the xicap_make_vectors generator" OFF)
 if(XICAP_BUILD_VECTOR_TOOL)
     add_executable(xicap_make_vectors tools/xicap_make_vectors.cpp)
@@ -124,7 +122,6 @@ if(XICAP_BUILD_VECTOR_TOOL)
     target_include_directories(xicap_make_vectors PRIVATE src tools third_party/monocypher)
 endif()
 
-# Tests
 option(XICAP_BUILD_TESTS "Build xicap tests" OFF)
 if(XICAP_BUILD_TESTS)
     enable_testing()
@@ -138,7 +135,7 @@ if(XICAP_BUILD_TESTS)
 
     add_executable(xicap_tests tests/xicap_tests.cpp tests/format4_tests.cpp)
     target_link_libraries(xicap_tests PRIVATE xicap Catch2::Catch2WithMain)
-    # Tests reach into src/internal to rebuild CRCs and chains when crafting bad files.
+    # Tests reach into src/internal to craft damaged files.
     target_include_directories(xicap_tests PRIVATE src tools third_party/monocypher)
     target_compile_definitions(xicap_tests PRIVATE XICAP_VECTORS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors")
 

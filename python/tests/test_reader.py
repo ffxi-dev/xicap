@@ -155,7 +155,7 @@ def test_transcode_refuses_and_leaves_nothing(tmp_path):
 
 
 def capture_with_marker(text: bytes) -> bytes:
-    """A cut-off format-4 capture of one 16-byte 0x0DF packet with a note marker; its frame is a raw zstd block of a
+    """A cut-off capture of one 16-byte 0x0DF packet with a note marker; its frame is a raw zstd block of a
     stream with a checksum that the file stops before ending."""
     crc = lambda b: zlib.crc32(b) & 0xFFFFFFFF
     header = bytearray(384)

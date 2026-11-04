@@ -1,8 +1,7 @@
 # @xicap/wasm
 
-WebAssembly reader for [xicap](../README.md) packet captures. The full xicap C++
-library is compiled to wasm via Emscripten + Embind, so reader behaviour is
-byte-for-byte identical to the native build.
+WebAssembly reader for [xicap](../README.md) packet captures: the xicap C++
+library, compiled with Emscripten and Embind.
 
 ## Install
 
@@ -23,11 +22,11 @@ try {
 
     for (const pkt of reader) {
         if (pkt.direction === PacketDirection.ServerToClient) {
-            // pkt.opcode, pkt.timestampMs, pkt.data: Uint8Array, pkt.markers: string[]
+            // pkt.opcode, pkt.timestampMs, pkt.data: Uint8Array, pkt.markers: { kind, text }[]
         }
     }
 
-    const v = reader.verify();  // v.signedToEnd, v.seal (a repacker's, or null)
+    const v = reader.verify();  // v.signedToEnd, v.seal (a sealer's, or null)
     reader.close();  // wasm objects don't GC; call close() when done
 } catch (e) {
     if (e instanceof XicapError && e.code === ErrorCode.UnknownFrameKind) {
@@ -51,20 +50,18 @@ stream.close();
 * Bundle size: about 300 KB of wasm (xicap and zstd) plus about 10 KB of JS shim.
 * `Reader` holds the whole input file in wasm memory (via MEMFS). `StreamReader`
   holds the frame being received and one zstd stream's history, at most 8 MiB.
-* `Reader` is read-only. Writing captures from JS is not supported in this
-  package.
-* `pkt.data` is a fresh `Uint8Array` per call — safe to retain. Other accessors
-  that return wasm-owned bytes (`getExtension`) document their lifetime
-  individually.
+* The package reads captures; it does not write them.
+* Every `Uint8Array` it returns, such as `pkt.data`, is a copy the caller may
+  keep.
 
 ## Build from source
 
-Requires emsdk and ninja on PATH (or set `EMSDK` and `NINJA` env vars). On
-Windows where MSVC bundles its own ninja, point `NINJA` at it:
+It needs emsdk and ninja, from `EMSDK` and `NINJA` or the defaults (`~/emsdk`,
+and `ninja` on PATH). On Windows, `NINJA` can point at the ninja MSVC bundles:
 
 ```
 export EMSDK=~/emsdk
-export NINJA=ninja            # or full path; CI uses just `ninja` on PATH
+export NINJA=ninja            # or a full path
 npm run build                 # produces dist/xicap.wasm + dist/xicap.js + dist/index.js
 npm test
 ```

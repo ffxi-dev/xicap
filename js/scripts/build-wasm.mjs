@@ -1,8 +1,4 @@
-// Driver for the Emscripten build of @xicap/wasm.
-//
-// Looks up the Emscripten install via $EMSDK (or a default of ~/emsdk on
-// posix, C:/Users/$USER/emsdk on Windows). Uses ninja from $PATH; set $NINJA
-// to override.
+// Builds @xicap/wasm with Emscripten: emsdk from $EMSDK, or ~/emsdk; ninja from $PATH, or $NINJA.
 
 import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
@@ -15,12 +11,7 @@ const jsDir = path.resolve(here, "..");
 const buildDir = path.join(jsDir, "build");
 const isWin = process.platform === "win32";
 
-function defaultEmsdkRoot() {
-    if (process.env.EMSDK) return process.env.EMSDK;
-    const home = os.homedir();
-    return path.join(home, "emsdk");
-}
-const emsdkRoot = defaultEmsdkRoot().replace(/\\/g, "/");
+const emsdkRoot = (process.env.EMSDK || path.join(os.homedir(), "emsdk")).replace(/\\/g, "/");
 if (!existsSync(emsdkRoot)) {
     console.error(`emsdk not found at ${emsdkRoot}. Set EMSDK or install emsdk.`);
     process.exit(1);
@@ -38,15 +29,12 @@ function buildEnv() {
     const env = { ...process.env };
     env.EMSDK = isWin ? emsdkRoot.replace(/\//g, "\\") : emsdkRoot;
     if (isWin) {
-        // emsdk's bundled python/node aren't on PATH unless emsdk_env was sourced;
-        // add them here explicitly so emcmake.bat finds its interpreters.
+        // Without emsdk_env, emcmake.bat finds neither emsdk's python nor its node. Their folders carry versions.
         const winRoot = emsdkRoot.replace(/\//g, "\\");
         const extras = [
             winRoot,
             `${winRoot}\\upstream\\emscripten`,
         ];
-        // The bundled tool dirs use versioned subdirectories; add anything that
-        // looks plausible. emsdk install layout is stable enough.
         const possiblePythonDirs = ["python/3.13.3_64bit", "python/3.13.3-1_64bit", "python/3.12_64bit"];
         const possibleNodeDirs   = ["node/22.16.0_64bit/bin", "node/20_64bit/bin"];
         for (const sub of [...possiblePythonDirs, ...possibleNodeDirs]) {

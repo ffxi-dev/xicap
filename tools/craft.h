@@ -101,7 +101,7 @@ auto frameBytes(const Header& header, std::span<const uint8_t> payload) -> std::
     return out;
 }
 
-// A format-4 packet frame's plaintext. The frame must be a whole stream: restart bit set, stream ended.
+// A packet frame's plaintext. The frame must be a whole stream: restart bit set, stream ended.
 inline auto plainOf(std::span<const uint8_t> bytes, const FrameRef& frame) -> std::vector<uint8_t>
 {
     std::vector<uint8_t> plain(frame.info.plainSize);
@@ -109,7 +109,7 @@ inline auto plainOf(std::span<const uint8_t> bytes, const FrameRef& frame) -> st
     return plain;
 }
 
-// A format-4 packet frame that holds plain as a whole stream, with header's other fields.
+// A packet frame that holds plain as a whole stream, with header's other fields.
 inline auto packetFrame(xicap::FrameHeader header, std::span<const uint8_t> plain) -> std::vector<uint8_t>
 {
     std::vector<uint8_t> compressed(ZSTD_compressBound(plain.size()));

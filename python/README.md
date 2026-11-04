@@ -1,8 +1,7 @@
 # xicap (Python)
 
-Python bindings for the [xicap](../README.md) reader. The C++ library is
-linked into a native extension via pybind11; reader behaviour matches the
-native build byte-for-byte.
+Python bindings for the [xicap](../README.md) reader: the C++ library, linked
+into a native module with pybind11.
 
 ## Install (from source)
 
@@ -10,8 +9,8 @@ native build byte-for-byte.
 pip install ./python
 ```
 
-Requires a C++23 toolchain (MSVC, GCC, or Clang) and CMake. The wheel build
-fetches Catch2 / pybind11 / zstd via FetchContent.
+It needs a C++23 compiler (MSVC, GCC, or Clang) and CMake. The build fetches
+pybind11 and zstd.
 
 For development:
 
@@ -38,7 +37,7 @@ for pkt in r:
 r.seek_to_zone(245)
 r.seek_to_time(1_700_000_500_000)
 
-# Signatures, and a repacker's seal
+# Signatures, and a sealer's seal
 v = r.verify()   # v["signedToEnd"], v["seal"]
 
 # Rewrite at archive size; checked packet by packet before dst appears
@@ -47,13 +46,14 @@ xicap.transcode("upload.xicap", "archived.xicap", seed=seed32, agent="mogsafe 20
 
 ## API
 
-* `xicap.Reader(path)` — opens a `.xicap` file.
-* `xicap.Packet` — `timestamp_ms`, `opcode`, `direction`, `data: bytes`,
-  `markers: list[str]`.
-* `xicap.PacketDirection` — `ServerToClient` / `ClientToServer`.
-* `xicap.SeekResult` — `Ok` / `EmptyIndex` / `OutOfRange` / `NotFound`.
-* `xicap.Error` — raised on format errors; carries a `.code` of type
+* `xicap.Reader(path, recovery=False)` opens a `.xicap` file.
+* `xicap.Packet` has `timestampMs`, `channel`, `opcode`, `flags`, `direction`,
+  `data: bytes`, and `markers: list[tuple[MarkerKind, str]]`.
+* `xicap.PacketDirection` is `ServerToClient` or `ClientToServer`.
+* `xicap.SeekResult` is `Ok`, `EmptyIndex`, `OutOfRange`, or `NotFound`.
+* `xicap.Error` is raised for a file the reader refuses; its `.code` is an
   `xicap.ErrorCode`.
+* `xicap.transcode(src, dst, *, seed, agent, level=0)` rewrites and seals a
+  capture.
 
-The reader is read-only. A writer would be a small additional binding; ask if
-you need it.
+The module reads and transcodes captures; it does not write new ones.

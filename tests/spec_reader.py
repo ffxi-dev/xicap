@@ -79,7 +79,7 @@ def unzigzag(z: int) -> int:
 
 
 def columns(plain: bytes, packet_count: int, marker_count: int, base: int) -> list:
-    """A format-4 packet frame's plaintext, decoded as FORMAT.md, Packet frames, says."""
+    """A packet frame's plaintext, decoded as FORMAT.md, Packet frames, says."""
     pos = 0
 
     def column(bits: int, n: int) -> list:
@@ -160,7 +160,7 @@ def columns(plain: bytes, packet_count: int, marker_count: int, base: int) -> li
 
 
 class Stream:
-    """The zstd stream that runs across a format-4 file's packet frames."""
+    """The zstd stream that runs across a file's packet frames."""
 
     def __init__(self) -> None:
         self.obj = None
@@ -218,7 +218,6 @@ class Capture:
         else:
             self.scan_cut_off()
 
-    # Header -----------------------------------------------------------------
     def read_header(self) -> None:
         d = self.data
         if len(d) < HEADER_SIZE:
@@ -248,7 +247,6 @@ class Capture:
         content_id, character_id, world_id = struct.unpack_from("<IIH", d, 176)
         self.character = [content_id, character_id, world_id, text(d[188:204]), text(d[204:220])]
 
-    # Extension blocks -------------------------------------------------------
     def read_extensions(self) -> None:
         d, offset = self.data, len(self.header_bytes)
         self.blocks: list[bytes] = []
@@ -311,7 +309,6 @@ class Capture:
         skipped, offset = struct.unpack_from("<Ii", p, 32)
         return [text(p[0:16]), text(p[16:32]), skipped, offset, p[40:104].hex(), p[108:].hex()]
 
-    # Footer -----------------------------------------------------------------
     def read_footer(self) -> None:
         d = self.data
         self.complete = self.footer_damaged = False
@@ -368,7 +365,6 @@ class Capture:
             return "trailer"
         return None
 
-    # Frames -----------------------------------------------------------------
     def raw_frame(self, offset: int, limit: int):
         """The frame at offset if it is whole, has the magic, and passes its CRC."""
         d = self.data
@@ -477,10 +473,9 @@ class Capture:
                 yield p[:4] + [p[4].hex(), p[5]]
             offset += len(frame)
 
-    # Signatures -------------------------------------------------------------
-    def check(self, prefix: bytes, chain: bytes, signature: bytes) -> bool:
+    def check(self, prefix: bytes, digest: bytes, signature: bytes) -> bool:
         try:
-            Ed25519PublicKey.from_public_bytes(self.signing_key).verify(signature, prefix + chain)
+            Ed25519PublicKey.from_public_bytes(self.signing_key).verify(signature, prefix + digest)
             return True
         except InvalidSignature:
             return False
