@@ -526,6 +526,8 @@ class Capture:
                 if self.complete and not self.recovery:
                     raise Refused("frame", str(e)) from e
                 if self.recovery:
+                    # The stream ends at a bad frame, even one whose zstd decoded: the next frames may copy from it.
+                    self.stream.reset()
                     self.skip(offset, len(frame))
                     offset += len(frame)
                     continue
