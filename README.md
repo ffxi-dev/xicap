@@ -55,36 +55,12 @@ xicap::transcode("upload.xicap", "archived.xicap",
                    .signing = xicap::Signing::Seal,
                    .seed = archiveSeed, .agent = "mogsafe 2026.11.4" });
 
-// Cut packets 1174 to 1883 into a capture of their own, signed anew.
-xicap::cut("recording.xicap", "session.xicap",
-           { .first = 1174, .last = 1883, .seed = mogsafeSeed, .agent = "mogsafe",
-             .sourceHash = sha512OfRecording, .metadata = {} });
-
 // Read a capture as it downloads.
 xicap::StreamReader s;
 s.push(chunk);
 xicap::ReadPacket p{};
 while (s.next(p)) { /* every packet whose frame has arrived */ }
 ```
-
-### Cuts
-
-A cut starts mid-zone, so `cut` writes ahead of the range the packets from
-before it that a reader needs to know the zone and what is in view, each with
-the carried flag and the range's first timestamp (FORMAT.md, Carried packets).
-They are the last zone-in (`0x00A`) before the range and, since it, the last
-packet of each kind below:
-
-| Packets | One kept per |
-|---------|--------------|
-| `0x00D`, `0x00E`: player and NPC updates | entity and part sent (position, claim, general, name, model); an entity that despawns keeps none |
-| `0x037` status, `0x051` gear look, `0x057` weather, `0x061` job and stats, `0x076` party icons, `0x0C8` party list | opcode |
-| `0x05F` music, `0x063` status icons and more | slot or type (u16 at byte 4) |
-| `0x0DD`, `0x0DF`, `0x0E2`: party members | member (u32 at byte 4) |
-| `0x015` from the client: the recorder's position | opcode |
-
-These are what Theater and Scholar read to draw the recorder and the entities
-around it. Events (`0x028` actions, `0x029` messages, chat) are not carried.
 
 ## Build
 

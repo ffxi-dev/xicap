@@ -47,21 +47,4 @@ struct TranscodeResult
 // difference.
 auto transcode(const std::filesystem::path& src, const std::filesystem::path& dst, const TranscodeOptions& options) -> TranscodeResult;
 
-struct CutOptions
-{
-    uint64_t                first{}; // the first and last packet to keep, counting from 0
-    uint64_t                last{};
-    SecretSeed              seed{};       // the cutter's Ed25519 seed
-    std::string             agent;        // the cutter's name, as the cut's captureAgent
-    std::array<uint8_t, 64> sourceHash{}; // the SHA-512 of src as stored
-    std::vector<uint8_t>    metadata;     // the source block's metadata
-};
-
-// Writes packets first to last of src, with the markers before each, as a new capture at dst signed with the seed.
-// Ahead of them it writes the scene: packets from before first that tell a reader the zone and what is in view,
-// flagged PacketFlag::Carried. See README.md, Cuts. The cut keeps src's client version, character, clock, network
-// and exclusion policy; it is converted, and its source block names src. The same range of the same src always cuts
-// to the same bytes. Throws on a range src does not hold; dst is then incomplete.
-auto cut(const std::filesystem::path& src, const std::filesystem::path& dst, const CutOptions& options) -> void;
-
 } // namespace xicap

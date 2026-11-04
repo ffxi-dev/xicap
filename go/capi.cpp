@@ -356,21 +356,6 @@ extern "C" int xicap_writer_close(xicap_writer* w, char* err, size_t errlen)
     return rc;
 }
 
-extern "C" int xicap_cut(const char* src, const char* dst, uint64_t first, uint64_t last, const char* capture_agent, const uint8_t signing_seed[32], const uint8_t source_hash[64], const uint8_t* metadata, size_t metadata_size, char* err, size_t errlen)
-{
-    return guarded(err, errlen, [&]
-                   {
-                       xicap::CutOptions options{ .first = first, .last = last, .seed = {}, .agent = capture_agent ? capture_agent : "", .sourceHash = {}, .metadata = {} };
-                       std::copy_n(signing_seed, options.seed.size(), options.seed.begin());
-                       std::copy_n(source_hash, options.sourceHash.size(), options.sourceHash.begin());
-                       if (metadata_size > 0)
-                       {
-                           options.metadata.assign(metadata, metadata + metadata_size);
-                       }
-                       xicap::cut(src, dst, options);
-                   });
-}
-
 extern "C" int xicap_transcode(const char* src, const char* dst, const xicap_transcode_info* info, char* err, size_t errlen)
 {
     return guarded(err, errlen, [&]

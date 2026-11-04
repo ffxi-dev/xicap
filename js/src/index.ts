@@ -33,7 +33,6 @@ export const enum PacketFlag {
     Blocked = 0x0004,
     Modified = 0x0008,
     FirstInChunk = 0x0010,
-    Carried = 0x0020,
     Excluded = 0x0100,
     Redacted = 0x0200,
 }

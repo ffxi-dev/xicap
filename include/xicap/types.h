@@ -86,7 +86,6 @@ inline constexpr uint16_t Injected       = 0x0002;
 inline constexpr uint16_t Blocked        = 0x0004;
 inline constexpr uint16_t Modified       = 0x0008;
 inline constexpr uint16_t FirstInChunk   = 0x0010;
-inline constexpr uint16_t Carried        = 0x0020; // from before a cut's start; see FORMAT.md, Carried packets
 inline constexpr uint16_t Provenance     = 0x00FE; // bits 1 to 7
 inline constexpr uint16_t Excluded       = 0x0100;
 inline constexpr uint16_t Redacted       = 0x0200;

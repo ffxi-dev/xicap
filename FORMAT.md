@@ -331,8 +331,7 @@ frame is bad if:
 | 2 | blocked by an addon | may ignore |
 | 3 | modified by an addon | may ignore |
 | 4 | first packet of its datagram | may ignore |
-| 5 | carried: from before the capture's start, see [Carried packets](#carried-packets) | may ignore |
-| 6 to 7 | reserved | may ignore |
+| 5 to 7 | reserved | may ignore |
 | 8 | excluded: a stub, see [Exclusion](#exclusion) | must understand |
 | 9 | redacted: byte ranges zeroed | must understand |
 | 10 to 15 | reserved | must understand |
@@ -550,18 +549,6 @@ other frames and other compression:
   the header's `signingKey`, which changes every digest. A file rewritten this
   way from another major version names its source in a SOURCE block, as
   [Source](#source) says.
-
-### Carried packets
-
-A capture cut from a range of another starts mid-zone. So that a reader knows
-the zone and what is in view, the cut may begin with **carried packets**:
-packets from before the range, copied in with the carried flag set. They come
-before every other packet, in the order the source holds them, and each has the
-timestamp of the range's first packet. No marker sits before one.
-
-A reader that draws the capture applies carried packets as it would any other.
-A reader that counts or times events skips them: they happened before the
-capture starts.
 
 ## Exclusion
 

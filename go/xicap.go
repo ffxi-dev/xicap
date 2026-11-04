@@ -63,7 +63,6 @@ const (
 	FlagBlocked      uint16 = 0x0004
 	FlagModified     uint16 = 0x0008
 	FlagFirstInChunk uint16 = 0x0010
-	FlagCarried      uint16 = 0x0020
 )
 
 // Exclusion rule directions and actions. See FORMAT.md, Exclusion.
@@ -492,31 +491,6 @@ func (w *Writer) Close() error {
 	rc := C.xicap_writer_close(w.w, &msg[0], C.size_t(len(msg)))
 	w.w = nil
 	if rc != 0 {
-		return cerr(&msg)
-	}
-	return nil
-}
-
-// Cut writes packets first to last of the capture at src, counting from 0, with the markers before each, as a new
-// capture at dst signed with seed. Ahead of them it writes the packets from before first that tell a reader the zone
-// and what is in view, flagged FlagCarried and stamped with first's time (README.md, Cuts). The cut keeps src's client version, character, clock, network and exclusion policy;
-// it is converted (OriginConverted), and its source block names format "xicap" with hash and metadata. On error dst is
-// removed.
-func Cut(src, dst string, first, last uint64, agent string, seed [32]byte, hash [64]byte, metadata []byte) error {
-	s, d, a := C.CString(src), C.CString(dst), C.CString(agent)
-	defer C.free(unsafe.Pointer(s))
-	defer C.free(unsafe.Pointer(d))
-	defer C.free(unsafe.Pointer(a))
-	var m *C.uint8_t
-	if len(metadata) > 0 {
-		cm := C.CBytes(metadata)
-		defer C.free(cm)
-		m = (*C.uint8_t)(cm)
-	}
-	var msg [256]C.char
-	if C.xicap_cut(s, d, C.uint64_t(first), C.uint64_t(last), a, (*C.uint8_t)(unsafe.Pointer(&seed[0])),
-		(*C.uint8_t)(unsafe.Pointer(&hash[0])), m, C.size_t(len(metadata)), &msg[0], C.size_t(len(msg))) != 0 {
-		os.Remove(dst)
 		return cerr(&msg)
 	}
 	return nil
