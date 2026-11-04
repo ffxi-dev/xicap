@@ -17,7 +17,8 @@ Bindings, each with its own CI workflow:
 ```bash
 pip install ./python[test] && pytest python/tests      # Python; needs the fixture from xicap_make_fixture
 cd js && node ./scripts/build-wasm.mjs                 # JavaScript and Wasm; needs Emscripten
-go test ./go/                                          # Go via cgo; needs g++ and libzstd-dev, so Linux (MSVC can't build cgo)
+GOCACHE=$(mktemp -d) go test ./go/                     # Go via cgo; needs g++ and libzstd-dev, so Linux (MSVC can't build cgo).
+                                                       # Go's cache misses changes to the sources go/ includes: use an empty one
 ```
 
 ## Rules
