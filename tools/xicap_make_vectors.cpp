@@ -8,6 +8,7 @@
 #include "search.h"
 #include "vectors.h"
 
+#include "internal/chain.h"
 #include "internal/columns.h"
 #include "internal/transcode.h"
 
@@ -252,6 +253,24 @@ template <typename T>
 auto put(std::vector<uint8_t>& bytes, size_t offset, const T& v) -> void
 {
     std::memcpy(bytes.data() + offset, &v, sizeof(v));
+}
+
+// A complete capture signed with `signingKey` and a footer signature of R = the neutral point, S = 0, which holds for
+// any message when the key has small order.
+auto neutralSignature(const fs::path& tmp, const fs::path& p, const PublicKey& signingKey) -> void
+{
+    session(tmp, 1, alone());
+    auto bytes        = bytesOf(tmp);
+    auto header       = podAt<Header>(bytes, 0);
+    header.signingKey = signingKey;
+    header.headerCrc  = internal::crc32({ reinterpret_cast<const uint8_t*>(&header), offsetof(Header, headerCrc) });
+    put(bytes, 0, header);
+    auto trailer         = podAt<FooterTrailer>(bytes, bytes.size() - sizeof(FooterTrailer));
+    trailer.signature    = {};
+    trailer.signature[0] = 1;
+    trailer.trailerCrc   = internal::crc32({ reinterpret_cast<const uint8_t*>(&trailer), offsetof(FooterTrailer, trailerCrc) });
+    put(bytes, bytes.size() - sizeof(trailer), trailer);
+    save(p, bytes);
 }
 
 } // namespace
@@ -534,6 +553,18 @@ int main(int argc, char* argv[])
               save(p, bytes);
               const auto v = Reader(p).verify();
               expect(v.signedToEnd && v.goodCheckpoints == 0 && v.seal && v.seal->good, "a sealed file's zero checkpoint is covered by its seal");
+          } },
+        { "small-order-key", [&](const fs::path& p)
+          {
+              neutralSignature(tmp, p, internal::SMALL_ORDER[2]); // the neutral point
+              const auto v = Reader(p).verify();
+              expect(!v.signedToEnd && v.firstFailureOffset, "a small-order key fails every signature");
+          } },
+        { "non-canonical-key", [&](const fs::path& p)
+          {
+              neutralSignature(tmp, p, internal::pointOf("eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f")); // y = p + 1
+              const auto v = Reader(p).verify();
+              expect(!v.signedToEnd && v.firstFailureOffset, "a key encoded with y of p or more fails every signature");
           } },
         { "recovery-order-restarts", [&](const fs::path& p)
           {

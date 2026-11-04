@@ -4,7 +4,7 @@ It is a test, not a binding: it proves the specifications are enough to read a
 capture without this repository's library. It reads every file in the
 conformance set and compares its reading with the recorded one.
 
-    pip install zstandard cryptography
+    pip install zstandard
     python tests/spec_reader.py tests/vectors
 """
 
@@ -18,8 +18,6 @@ import zlib
 from pathlib import Path
 
 import zstandard
-from cryptography.exceptions import InvalidSignature
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 MAGIC = bytes([0x89, 0x58, 0x43, 0x50, 0x0D, 0x0A, 0x1A, 0x0A])
 FRAME_MAGIC = b"XCFR"
@@ -53,7 +51,75 @@ def crc(b: bytes) -> int:
 
 
 def text(b: bytes) -> str:
-    return b.split(b"\0", 1)[0].decode("utf-8")
+    """A text field up to its first zero byte. Bytes that are not UTF-8 are kept, as surrogates."""
+    return b.split(b"\0", 1)[0].decode("utf-8", "surrogateescape")
+
+
+# Ed25519 verification as FORMAT.md, References, gives it, with RFC 8032's arithmetic.
+P = 2**255 - 19
+L = 2**252 + 27742317777372353535851937790883648493
+D = -121665 * pow(121666, P - 2, P) % P
+SQRT_M1 = pow(2, (P - 1) // 4, P)
+NEUTRAL = (0, 1, 1, 0)
+SMALL_ORDER = {
+    bytes.fromhex(h)
+    for h in (
+        "0000000000000000000000000000000000000000000000000000000000000000",
+        "0000000000000000000000000000000000000000000000000000000000000080",
+        "0100000000000000000000000000000000000000000000000000000000000000",
+        "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05",
+        "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85",
+        "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a",
+        "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa",
+        "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+    )
+}
+
+
+def point_add(p: tuple, q: tuple) -> tuple:
+    a, b = (p[1] - p[0]) * (q[1] - q[0]) % P, (p[1] + p[0]) * (q[1] + q[0]) % P
+    c, d = 2 * p[3] * q[3] * D % P, 2 * p[2] * q[2] % P
+    e, f, g, h = b - a, d - c, d + c, b + a
+    return (e * f % P, g * h % P, f * g % P, e * h % P)
+
+
+def point_mul(s: int, p: tuple) -> tuple:
+    q = NEUTRAL
+    while s:
+        if s & 1:
+            q = point_add(q, p)
+        p, s = point_add(p, p), s >> 1
+    return q
+
+
+def point_decode(b: bytes):
+    """The point a canonical encoding names, or None."""
+    y, sign = int.from_bytes(b, "little") & ((1 << 255) - 1), b[31] >> 7
+    if y >= P:
+        return None
+    x2 = (y * y - 1) * pow(D * y * y + 1, P - 2, P) % P
+    x = pow(x2, (P + 3) // 8, P)
+    if (x * x - x2) % P:
+        x = x * SQRT_M1 % P
+    if (x * x - x2) % P or (x == 0 and sign):
+        return None
+    if x & 1 != sign:
+        x = P - x
+    return (x, y, 1, x * y % P)
+
+
+BASE = point_decode(bytes.fromhex("5866666666666666666666666666666666666666666666666666666666666666"))
+
+
+def ed25519_verify(key: bytes, signature: bytes, message: bytes) -> bool:
+    a, r, s = point_decode(key), point_decode(signature[:32]), int.from_bytes(signature[32:], "little")
+    if a is None or r is None or s >= L or key in SMALL_ORDER:
+        return False
+    k = int.from_bytes(hashlib.sha512(signature[:32] + key + message).digest(), "little") % L
+    ra = point_add(r, point_mul(k, a))
+    # [8]([S]B - (R + [k]A)) is the neutral point.
+    x, y, z, _ = point_mul(8, point_add(point_mul(s, BASE), (P - ra[0], ra[1], ra[2], P - ra[3])))
+    return x == 0 and y == z
 
 
 def varint(b: bytes, pos: int, bits: int) -> tuple[int, int]:
@@ -111,7 +177,7 @@ def columns(plain: bytes, packet_count: int, marker_count: int, base: int) -> li
             raise BadFrame("marker text past the end")
         if index >= packet_count or (markers and index < markers[-1][0]):
             raise BadFrame("marker out of place")
-        markers.append((index, kind, plain[pos : pos + size].decode("utf-8")))
+        markers.append((index, kind, plain[pos : pos + size]))
         pos += size
     groups: dict = {}
     group = [groups.setdefault((c, f & 1, o), len(groups)) for c, f, o in zip(channel, flags, opcode)]
@@ -155,7 +221,7 @@ def columns(plain: bytes, packet_count: int, marker_count: int, base: int) -> li
     if cursor != end:
         raise BadFrame("group bytes left over")
     for index, kind, txt in markers:
-        packets[index][5].append([kind, txt])
+        packets[index][5].append([kind, txt.decode("utf-8", "surrogateescape")])
     return packets
 
 
@@ -479,11 +545,7 @@ class Capture:
 
     # Signatures -------------------------------------------------------------
     def check(self, prefix: bytes, chain: bytes, signature: bytes) -> bool:
-        try:
-            Ed25519PublicKey.from_public_bytes(self.signing_key).verify(signature, prefix + chain)
-            return True
-        except InvalidSignature:
-            return False
+        return ed25519_verify(self.signing_key, signature, prefix + chain)
 
     def verify(self) -> list:
         s = hashlib.sha512(self.header_bytes + b"".join(self.blocks))
@@ -523,7 +585,7 @@ class Capture:
                     break
                 for ts, channel, opcode, flags, data, markers in decoded:
                     for kind, txt in markers:
-                        t = txt.encode("utf-8")
+                        t = txt.encode("utf-8", "surrogateescape")
                         s.update(b"M" + struct.pack("<BH", kind, len(t)) + t)
                     s.update(b"P" + struct.pack("<QHBHI", ts, flags, channel, opcode, len(data)) + data)
                     packets += 1
@@ -542,10 +604,7 @@ class Capture:
                 key, signature = self.seal[16:48], self.seal[80:144]
                 ok = len(checkpoints) == 0 or (len(checkpoints) == 1 and len(checkpoints[0]) == CHECKPOINT)
                 kept = checkpoints[0] if checkpoints and ok else bytes(CHECKPOINT)
-                try:
-                    Ed25519PublicKey.from_public_bytes(key).verify(signature, b"xicap/4 seal" + end + self.trailer[40:104] + kept + self.seal[:80])
-                except InvalidSignature:
-                    ok = False
+                ok = ok and ed25519_verify(key, signature, b"xicap/4 seal" + end + self.trailer[40:104] + kept + self.seal[:80])
                 self.seal_reading = [key.hex(), text(self.seal[48:80]), struct.unpack_from("<Q", self.seal, 8)[0], ok]
         return [signed_to_end, verified, good, failure is not None]
 

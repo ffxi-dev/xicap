@@ -128,9 +128,53 @@ private:
     PublicKey               public_{};
 };
 
+using Point = std::array<uint8_t, 32>;
+
+consteval auto pointOf(std::string_view hex) -> Point
+{
+    const auto nibble = [](char c)
+    {
+        return static_cast<uint8_t>(c <= '9' ? c - '0' : c - 'a' + 10);
+    };
+    Point out{};
+    for (size_t i = 0; i < out.size(); ++i)
+    {
+        out[i] = static_cast<uint8_t>((nibble(hex[2 * i]) << 4) | nibble(hex[2 * i + 1]));
+    }
+    return out;
+}
+
+// RFC 8032's canonical encoding: y below p = 2^255 - 19, and no sign bit when x is 0, as it is for y = 1 and y = p - 1.
+[[nodiscard]] inline auto canonical(std::span<const uint8_t, 32> point) noexcept -> bool
+{
+    static constexpr Point P         = pointOf("edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f");
+    static constexpr Point P_MINUS_1 = pointOf("ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f");
+    static constexpr Point ONE       = pointOf("0100000000000000000000000000000000000000000000000000000000000000");
+    Point                  y{};
+    std::ranges::copy(point, y.begin());
+    y[31] &= 0x7F;
+    const bool below = std::lexicographical_compare(y.rbegin(), y.rend(), P.rbegin(), P.rend()); // little-endian
+    return below && ((point[31] & 0x80) == 0 || (y != ONE && y != P_MINUS_1));
+}
+
+// The eight points of small order, canonically encoded (FORMAT.md, Verifying a signature).
+inline constexpr std::array<Point, 8> SMALL_ORDER{
+    pointOf("0000000000000000000000000000000000000000000000000000000000000000"),
+    pointOf("0000000000000000000000000000000000000000000000000000000000000080"),
+    pointOf("0100000000000000000000000000000000000000000000000000000000000000"),
+    pointOf("26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05"),
+    pointOf("26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85"),
+    pointOf("c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a"),
+    pointOf("c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa"),
+    pointOf("ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f"),
+};
+
+// Monocypher checks S < L and the group equation with the cofactor, but accepts non-canonical A and R and a
+// small-order A; FORMAT.md, Verifying a signature, fails them.
 [[nodiscard]] inline auto checkSignature(const PublicKey& key, const Signature& signature, std::span<const uint8_t> message) noexcept -> bool
 {
-    return crypto_ed25519_check(signature.data(), key.data(), message.data(), message.size()) == 0;
+    return canonical(key) && canonical(std::span{ signature }.first<32>()) && std::ranges::find(SMALL_ORDER, key) == SMALL_ORDER.end() &&
+           crypto_ed25519_check(signature.data(), key.data(), message.data(), message.size()) == 0;
 }
 
 } // namespace xicap::internal

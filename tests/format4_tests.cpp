@@ -437,6 +437,53 @@ TEST_CASE("the footer signs D(end), computed by hand")
     CHECK(Reader(tmp.path).verify().signedToEnd);
 }
 
+TEST_CASE("a signature fails with a small-order key or a non-canonical point, which Monocypher alone accepts")
+{
+    const std::vector<uint8_t> message{ 'm' };
+    const auto                 monocypher = [&](const PublicKey& k, const Signature& s)
+    {
+        return crypto_ed25519_check(s.data(), k.data(), message.data(), message.size()) == 0;
+    };
+    // R the neutral point and S = 0 hold for any message when the key has small order.
+    Signature neutral{};
+    neutral[0] = 1;
+    for (const auto& k : internal::SMALL_ORDER)
+    {
+        CHECK(monocypher(k, neutral));
+        CHECK_FALSE(internal::checkSignature(k, neutral, message));
+    }
+    constexpr PublicKey pPlusOne = internal::pointOf("eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f"); // the neutral point again
+    CHECK(monocypher(pPlusOne, neutral));
+    CHECK_FALSE(internal::checkSignature(pPlusOne, neutral, message));
+
+    // The key's owner signs with R the neutral point, S = k * a: written with the sign bit set, R is not canonical.
+    const auto              signer = seed();
+    std::array<uint8_t, 64> expanded{};
+    crypto_sha512(expanded.data(), signer.data(), signer.size());
+    std::array<uint8_t, 32> a{};
+    crypto_eddsa_trim_scalar(a.data(), expanded.data());
+    const auto A    = key(signer);
+    const auto sign = [&](uint8_t lastByteOfR)
+    {
+        Signature sig{};
+        sig[0]  = 1;
+        sig[31] = lastByteOfR;
+        std::vector<uint8_t> hashed(sig.begin(), sig.begin() + 32);
+        hashed.insert(hashed.end(), A.begin(), A.end());
+        hashed.insert(hashed.end(), message.begin(), message.end());
+        std::array<uint8_t, 64> h{};
+        crypto_sha512(h.data(), hashed.data(), hashed.size());
+        std::array<uint8_t, 32> k{};
+        crypto_eddsa_reduce(k.data(), h.data());
+        const std::array<uint8_t, 32> zero{};
+        crypto_eddsa_mul_add(sig.data() + 32, k.data(), a.data(), zero.data());
+        return sig;
+    };
+    CHECK(monocypher(A, sign(0x80)));
+    CHECK_FALSE(internal::checkSignature(A, sign(0x80), message));
+    CHECK(internal::checkSignature(A, sign(0x00), message));
+}
+
 TEST_CASE("checkpoints sit where their packet count says")
 {
     TempCapture tmp;
