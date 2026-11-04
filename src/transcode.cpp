@@ -161,7 +161,7 @@ auto transcode(const std::filesystem::path& src, const std::filesystem::path& ds
         Reader     out(tmp.path());
         const auto w    = out.verify();
         const bool good = out.complete() && !w.firstFailureOffset &&
-                          (cutOff ? w.verifiedPackets == (kept ? kept->packets : 0) : w.signedToEnd) && w.seal && w.seal->good;
+                          ((cutOff && w.verifiedPackets == v.verifiedPackets) || (!cutOff && w.signedToEnd)) && w.seal && w.seal->good;
         if (!good)
         {
             mismatch("its signatures do not verify as expected");
