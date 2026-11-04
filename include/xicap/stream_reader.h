@@ -19,7 +19,7 @@ struct DecodedFrame;
 struct Start;
 } // namespace internal
 
-// Reads a capture of format 3 or 4 as its bytes arrive, as a download does. It holds the frame being received and
+// Reads a capture as its bytes arrive, as a download does. It holds the frame being received and
 // one zstd stream's history, nothing more. It stops at the first bytes that are not a whole, valid frame: in a
 // complete file, the footer.
 class StreamReader
