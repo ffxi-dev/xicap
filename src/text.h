@@ -11,7 +11,7 @@ namespace xicap::internal
 {
 
 template <size_t N>
-auto toField(std::string_view text) -> std::array<char, N>
+auto toField(std::string_view text) noexcept -> std::array<char, N>
 {
     // Cut between characters, never inside one.
     auto n = std::min(text.size(), N - 1);
@@ -19,6 +19,7 @@ auto toField(std::string_view text) -> std::array<char, N>
     {
         --n;
     }
+
     std::array<char, N> field{};
     std::ranges::copy(text.substr(0, n), field.begin());
     return field;

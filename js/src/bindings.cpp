@@ -3,9 +3,11 @@
 #include <emscripten/bind.h>
 #include <emscripten/val.h>
 
+#include <exception>
 #include <memory>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace em = emscripten;
@@ -13,7 +15,6 @@ namespace em = emscripten;
 namespace
 {
 
-// Runs f, turning an xicap::Error into a JS Error with its message.
 template <typename F>
 auto guard(F&& f) -> decltype(f())
 {
@@ -21,7 +22,7 @@ auto guard(F&& f) -> decltype(f())
     {
         return f();
     }
-    catch (const xicap::Error& e)
+    catch (const std::exception& e)
     {
         em::val::global("Error").new_(std::string(e.what())).throw_();
     }
@@ -34,34 +35,42 @@ auto bytes(const Bytes& b) -> em::val
     return em::val(em::typed_memory_view(b.size(), reinterpret_cast<const uint8_t*>(b.data()))).call<em::val>("slice");
 }
 
+// A JS string cannot hold bytes that are not UTF-8, so TextDecoder replaces them with U+FFFD, as FORMAT.md allows.
+auto text(std::string_view s) -> em::val
+{
+    static const auto decoder = em::val::global("TextDecoder").new_();
+    return decoder.call<em::val>("decode", em::val(em::typed_memory_view(s.size(), reinterpret_cast<const uint8_t*>(s.data()))));
+}
+
 auto metadata(const xicap::Metadata& m) -> em::val
 {
     auto character = em::val::object();
     character.set("contentId", m.character.contentId);
     character.set("characterId", m.character.characterId);
-    character.set("name", m.character.name);
-    character.set("world", m.character.world);
+    character.set("name", text(m.character.name));
+    character.set("world", text(m.character.world));
     auto policy = em::val::object();
-    policy.set("name", m.policy.name);
+    policy.set("name", text(m.policy.name));
     policy.set("version", m.policy.version);
     policy.set("rules", m.policy.rules.size());
     auto source = em::val::null();
     if (m.source)
     {
         source = em::val::object();
-        source.set("format", m.source->format);
-        source.set("formatVersion", m.source->formatVersion);
+        source.set("format", text(m.source->format));
+        source.set("formatVersion", text(m.source->formatVersion));
         source.set("skippedRecords", m.source->skippedRecords);
         source.set("metadata", bytes(m.source->metadata));
     }
+
     auto o = em::val::object();
     o.set("captureId", bytes(m.captureId));
     o.set("previousCaptureId", bytes(m.previousCaptureId));
     o.set("startTimestamp", static_cast<double>(m.startTimestamp));
     o.set("origin", static_cast<int>(m.origin));
     o.set("network", static_cast<int>(m.network));
-    o.set("captureAgent", m.captureAgent);
-    o.set("clientVersion", m.clientVersion);
+    o.set("captureAgent", text(m.captureAgent));
+    o.set("clientVersion", text(m.clientVersion));
     o.set("character", character);
     o.set("policy", policy);
     o.set("source", source);
@@ -75,9 +84,10 @@ auto packet(const xicap::Packet& p) -> em::val
     {
         auto marker = em::val::object();
         marker.set("kind", static_cast<int>(m.kind));
-        marker.set("text", m.text);
+        marker.set("text", text(m.text));
         markers.call<void>("push", marker);
     }
+
     auto o = em::val::object();
     o.set("timestamp", static_cast<double>(p.timestamp));
     o.set("flags", p.flags);
@@ -103,18 +113,22 @@ public:
     {
         return ::metadata(reader_->metadata());
     }
+
     auto complete() const -> bool
     {
         return reader_->complete();
     }
+
     auto endTimestamp() const -> double
     {
         return static_cast<double>(reader_->endTimestamp());
     }
+
     auto packetCount() const -> double
     {
         return static_cast<double>(reader_->packetCount());
     }
+
     // The next packet, or undefined at the end.
     auto next() -> em::val
     {
@@ -125,6 +139,7 @@ public:
                          {
                              return em::val::undefined();
                          }
+
                          return packet(p);
                      });
     }
@@ -150,21 +165,26 @@ public:
                          {
                              out.call<void>("push", packet(p));
                          }
+
                          return out;
                      });
     }
+
     auto metadata() const -> em::val
     {
         return ::metadata(reader_.metadata());
     }
+
     auto ready() const -> bool
     {
         return reader_.ready();
     }
+
     auto complete() const -> bool
     {
         return reader_.complete();
     }
+
     auto stopped() const -> bool
     {
         return reader_.stopped();

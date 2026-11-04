@@ -28,14 +28,14 @@ public:
     // The next packet whose frame has arrived whole; false until another has.
     auto next(Packet& packet) -> bool;
 
-    // The header and blocks are read: metadata() holds them.
+    // True once the header and blocks are read, so that metadata() holds them.
     [[nodiscard]] auto ready() const noexcept -> bool;
-    // The trailer is read: every packet has been.
+    // True once the trailer is read, which comes after every packet.
     [[nodiscard]] auto complete() const noexcept -> bool;
-    // The reader met bytes that are neither a whole, valid frame nor the trailer, and reads nothing more.
+    // True once the reader has met bytes that are neither a whole, valid frame nor a trailer; it reads nothing more.
     [[nodiscard]] auto stopped() const noexcept -> bool;
     [[nodiscard]] auto metadata() const noexcept -> const Metadata&;
-    // Input bytes read: through the last frame decoded, or the trailer.
+    // The bytes read so far, up to the end of the last frame decoded or of the trailer.
     [[nodiscard]] auto bytesRead() const noexcept -> uint64_t;
 
 private:

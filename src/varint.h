@@ -16,6 +16,7 @@ inline auto putVarint(std::vector<uint8_t>& out, uint64_t value) -> void
         out.push_back(static_cast<uint8_t>(value | 0x80));
         value >>= 7;
     }
+
     out.push_back(static_cast<uint8_t>(value));
 }
 
@@ -26,7 +27,7 @@ inline auto putVarint(std::vector<uint8_t>& out, uint64_t value) -> void
     uint64_t value = 0;
     for (unsigned shift = 0; shift < bits && pos < in.size(); shift += 7)
     {
-        const uint8_t b = in[pos++];
+        const auto b = in[pos++];
         value |= uint64_t{ b & 0x7FU } << shift;
         if ((b & 0x80U) == 0)
         {
@@ -34,6 +35,7 @@ inline auto putVarint(std::vector<uint8_t>& out, uint64_t value) -> void
             return value >> bits == 0;
         }
     }
+
     return false;
 }
 

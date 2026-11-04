@@ -131,7 +131,7 @@ func TestVectors(t *testing.T) {
 func TestWriteThenRead(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "c.xicap")
 	w, err := Create(path, WriterInfo{
-		CaptureAgent: "mogsafe", ClientVersion: "1.0", Character: Character{CharacterID: 7, Name: "Nouurs"},
+		CaptureAgent: "mogsafe", ClientVersion: "1.0", Character: Character{CharacterID: 7, Name: "Rhavyn"},
 		Origin: OriginConverted, Network: NetworkPrivate, KeepChat: true, Archive: true,
 		Source: &Source{Format: "captain", FormatVersion: "1.4", Skipped: 2, Metadata: []byte("manifest")},
 	})
@@ -148,6 +148,12 @@ func TestWriteThenRead(t *testing.T) {
 	if err := w.Write(Packet{Timestamp: 1003, Data: []byte{1, 2}, Channel: ChannelSearch, Opcode: 0x0B, Provenance: FlagInjected}); err != nil {
 		t.Fatal(err)
 	}
+	if err := w.Write(Packet{Timestamp: 1003, Channel: ChannelSearch, Opcode: 0x0B}); err != nil {
+		t.Errorf("an empty search packet: %v", err)
+	}
+	if w.Write(Packet{Timestamp: 1003}) == nil {
+		t.Error("an empty game packet is written")
+	}
 	if err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +162,7 @@ func TestWriteThenRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !s.Complete || s.Packets != 4 || s.Policy.Rules != 0 || s.Source.Format != "captain" || string(s.Source.Metadata) != "manifest" ||
+	if !s.Complete || s.Packets != 5 || s.Policy.Rules != 0 || s.Source.Format != "captain" || string(s.Source.Metadata) != "manifest" ||
 		!reflect.DeepEqual(s.Channels, []uint8{0, 1}) || s.StartTimestamp != 1000 || s.EndTimestamp != 1003 {
 		t.Errorf("%+v", s)
 	}

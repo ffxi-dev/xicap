@@ -4,25 +4,27 @@ Format 5. This document is normative: a reader built from it alone, with the
 references below, must read every capture the library writes.
 
 **Status: draft.** Until the format is declared stable, a change may break
-compatibility. Format 5 drops the signatures, index, and stream restarts of
-format 4, and readers of format 5 read no earlier format.
+compatibility.
 
 ## Conventions
 
 - Every integer is little-endian. Structures are byte-packed, with no padding.
-- Offsets and sizes are in bytes. `u8`, `u16`, `u32`, `u64` are unsigned.
+- Offsets and sizes are in bytes; a KiB is 2^10 bytes and a MiB 2^20. `u8`,
+  `u16`, `u32`, `u64` are unsigned.
 - A text field of N bytes holds UTF-8, padded with zero bytes. It holds at
   most N - 1 bytes of text, cut only between characters, so it always ends
   with a zero byte. A reader takes the text up to the first zero byte, or the
   whole field if it finds none.
-- Text, in fields and markers, is UTF-8. A reader that finds other bytes
-  yields them as stored and does not refuse the file.
+- Text, in fields and markers, is UTF-8, and writers write nothing else. A
+  reader that finds bytes that are not UTF-8 does not refuse the file; it may
+  yield them as stored or replace them with U+FFFD.
 - Timestamps are milliseconds since the Unix epoch, in UTC.
 - A byte range `a..b` includes byte `a` and stops before byte `b`.
 - A **varint** is unsigned LEB128: 7 bits per byte, low bits first, the high
   bit set on every byte but the last. Each varint fills a field 8, 16, or 32
   bits wide. A reader refuses one longer than 2, 3, or 5 bytes, or whose value
-  does not fit its field.
+  does not fit its field. Within those limits it accepts a varint with more
+  bytes than its value needs.
 - **Zigzag** maps a signed 16-bit change `n` to the unsigned 16-bit
   `(n << 1) ^ (n >> 15)`, so small changes either way take one byte. Its
   inverse is `(z >> 1) ^ -(z & 1)`.
@@ -50,9 +52,10 @@ format 4, and readers of format 5 read no earlier format.
 ```
 
 A writer only appends, and never changes what it has written, so every copy of
-a file being recorded is a prefix of the finished file. A file that ends with
-a valid trailer is **complete**. A file without one is **cut off**: the
-recorder crashed, or is still recording.
+a file being recorded is a prefix of the finished file. A file whose last 24
+bytes are a valid trailer is **complete**. A file without one is **cut off**:
+the recorder crashed, or is still recording. A trailer whose CRC fails is not a
+valid trailer, so a file that ends with one is cut off.
 
 ## Header
 
@@ -83,10 +86,6 @@ The magic follows PNG's:
 89 58 43 50 0D 0A 1A 0A
     X  C  P \r \n ^Z \n
 ```
-
-The high first byte fails 7-bit transfers, `\r\n` fails transfers that turn
-`\r\n` into `\n`, the last `\n` fails those that turn `\n` into `\r\n`, and
-`^Z` stops DOS `type`.
 
 A capture holds one character's session. A recorder that starts a capture after
 a login, or after a crash, sets `previousCaptureId` to the capture it
@@ -177,7 +176,7 @@ Each **marker** is:
 | Field | Notes |
 |-------|-------|
 | `packetIndex` | 32-bit varint: the packet of this frame the marker sits just before, from 0 |
-| `kind` | `u8`: `0` note, `1` login, `2` logout; readers treat other kinds as notes |
+| `kind` | `u8`: `0` note, `1` login, `2` logout; readers yield other kinds unchanged |
 | `textLength` | 16-bit varint |
 | text | `textLength` bytes, no terminator |
 
@@ -245,6 +244,8 @@ The first 4 bytes of a game packet are its FFXI header:
 byte 0     byte 1             byte 2     byte 3
 [id_lo:8]  [size:7 | id_hi:1] [sync_lo:8] [sync_hi:8]
 ```
+
+Byte 1 holds bit 8 of `id` in its lowest bit and `size` in its high 7 bits:
 
 - `id` = `u16(bytes 0..2) & 0x01FF`
 - `size` = `u16(bytes 0..2) >> 9`, in 4-byte words
@@ -320,14 +321,16 @@ the end time from them alone.
 
 A reader refuses the file, wherever it meets the cause, when:
 
+- the file ends before its header and blocks do, an empty file included;
 - the magic differs, `version` is not 5, or the header's CRC fails;
-- a block's `length` is over 16 MiB or its CRC fails;
+- a block's `length` is over 16 MiB, the block runs past the end of the file,
+  or its CRC fails;
 - there is no policy block, a second policy block, or a second source block;
 - a policy block's rules and ranges do not end exactly at the end of its
   payload, or a source block's payload is under 36 bytes;
 - the file is complete and holds a bad frame;
-- its trailer's `packetCount` or `endTimestamp` differs from the packets read,
-  or bytes follow its trailer.
+- its frames end at a valid trailer that is not the file's last 24 bytes, or
+  the trailer's `packetCount` or `endTimestamp` differs from the packets read.
 
 A reader that has already passed on packets reports the refusal, and its
 caller drops them.
@@ -352,9 +355,10 @@ out of range, makes the zstd decoder fail, does not decode to exactly
 Since a frame decodes only after the frames before it, the frames after a bad
 one cannot be read. A cut-off file ends at its first bad frame.
 
-A reader of a file that arrives as it downloads reads frames up to the bytes
-that start with `XCPF`, the trailer, or up to the first bytes that are not a
-whole, valid frame, and stops there.
+A reader of a file that arrives as it downloads reads frames until it meets a
+valid trailer, or bytes that are neither a whole, valid frame nor a valid
+trailer, and stops there. It refuses the file if more bytes arrive after a
+valid trailer.
 
 ## Writer rules
 
@@ -391,6 +395,14 @@ reading. The C++ library and every binding read all of them in CI, and
 `tests/spec_reader.py`, a reader written from this document alone, reads them
 too.
 
+A refused file's JSON is `{"refused": true}`. Any other holds `refused`,
+`complete`, `endTimestamp` and `packetCount` from the trailer (both `0` in a
+cut-off file), `metadata`, and `packets`. Header text fields are JSON strings;
+capture ids, source metadata, packet bytes, and marker text are lowercase hex.
+A policy rule's ranges are `[offset, length]` pairs. Each packet lists
+`timestamp`, `flags`, `channel`, `opcode`, `data`, and `markers`, each marker
+with its `kind` and `text`.
+
 ## Worked example
 
 The conformance file `tests/vectors/5-example.xicap`, whole: a live capture of
@@ -405,9 +417,9 @@ one frame, and the trailer. Offsets are in hex.
 00000040  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
 00000050  00 00 00 00 33 30 32 35 31 31 30 31 5f 32 00 00  clientVersion (from 54)
 00000060  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
-00000070  00 00 00 00 04 03 02 01 0d 0c 0b 0a 4e 6f 75 75  contentId (from 74); characterId; characterName
-00000080  72 73 00 00 00 00 00 00 00 00 00 00 41 73 75 72  worldName (from 8c)
-00000090  61 00 00 00 00 00 00 00 00 00 00 00 46 4a fa ab  header crc (from 9c)
+00000070  00 00 00 00 04 03 02 01 0d 0c 0b 0a 52 68 61 76  contentId (from 74); characterId; characterName
+00000080  79 6e 00 00 00 00 00 00 00 00 00 00 41 73 75 72  worldName (from 8c)
+00000090  61 00 00 00 00 00 00 00 00 00 00 00 bc a9 a7 b4  header crc (from 9c)
 000000a0  01 00 00 00 80 00 00 00 78 69 63 61 70 2d 64 65  block: type 1 (exclusion policy), length 128; name
 000000b0  66 61 75 6c 74 00 00 00 00 00 00 00 00 00 00 00
 000000c0  00 00 00 00 00 00 00 00 02 00 00 00 06 00 00 00  version 2 (from c8), ruleCount 6, first rule (from ce)

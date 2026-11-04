@@ -1,13 +1,12 @@
 #pragma once
 
+#include "bytes.h"
 #include "xicap/types.h"
 
 #include <array>
-#include <bit>
 #include <cstddef>
 #include <cstdint>
-
-static_assert(std::endian::native == std::endian::little, "the on-disk structs below are little-endian");
+#include <span>
 
 // The on-disk layout. See FORMAT.md.
 namespace xicap::format
@@ -29,6 +28,19 @@ inline constexpr int      MAX_WINDOW_LOG   = 23;
 
 // The game channel's 4-byte packet header: a 9-bit id, a 7-bit size in 4-byte words, and a 16-bit sync counter.
 inline constexpr size_t GAME_HEADER_SIZE = 4;
+
+template <typename Byte>
+[[nodiscard]] auto gameId(std::span<Byte> packet) noexcept -> uint16_t
+{
+    return internal::load<uint16_t>(packet) & 0x1FFU;
+}
+
+// The packet length the header's size gives.
+template <typename Byte>
+[[nodiscard]] auto gameLength(std::span<Byte> packet) noexcept -> size_t
+{
+    return static_cast<size_t>(internal::load<uint16_t>(packet) >> 9U) * 4;
+}
 
 template <size_t N>
 using Text = std::array<char, N>;

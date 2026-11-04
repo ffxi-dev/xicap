@@ -16,6 +16,7 @@ auto writeSample(const std::filesystem::path& path) -> void
     {
         w.write(test::out(i * 10, test::gamePacket(0x00D, 24, i, static_cast<uint8_t>(i))));
     }
+
     w.close();
 }
 
@@ -35,13 +36,14 @@ TEST_CASE("a cut-off file reads up to its last whole frame, wherever it was cut"
     for (auto size = blocksEnd; size < bytes.size(); ++size)
     {
         test::save(cut, { bytes.begin(), bytes.begin() + static_cast<std::ptrdiff_t>(size) });
-        const auto  packets = test::readAll(cut);
-        const auto& first   = std::vector(all.begin(), all.begin() + static_cast<std::ptrdiff_t>(packets.size()));
+        const auto packets = test::readAll(cut);
+        const auto first   = std::vector(all.begin(), all.begin() + static_cast<std::ptrdiff_t>(packets.size()));
         CHECK(packets == first);
         CHECK(packets.size() >= previous);
         CHECK_FALSE(Reader(cut).complete());
         previous = packets.size();
     }
+
     CHECK(previous == all.size());
 }
 

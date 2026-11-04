@@ -106,7 +106,7 @@ func CheckHeader(b []byte) error {
 		return errors.New("xicap: short header")
 	}
 	var e errBuf
-	if C.xicap_check_header((*C.uint8_t)(unsafe.Pointer(&b[0])), C.size_t(len(b)), &e[0], C.size_t(len(e))) != 0 {
+	if C.xicap_check_header((*C.uint8_t)(unsafe.SliceData(b)), C.size_t(len(b)), &e[0], C.size_t(len(e))) != 0 {
 		return e.err()
 	}
 	return nil
@@ -236,12 +236,9 @@ func cbool(b bool) C.int {
 
 // Write adds one packet, after the exclusion policy.
 func (w *Writer) Write(p Packet) error {
-	if len(p.Data) == 0 {
-		return errors.New("xicap: empty packet")
-	}
 	var e errBuf
 	if C.xicap_writer_write(w.w, C.uint64_t(p.Timestamp), cbool(p.ClientToServer), C.uint8_t(p.Channel), C.uint16_t(p.Opcode), C.uint16_t(p.Provenance),
-		(*C.uint8_t)(unsafe.Pointer(&p.Data[0])), C.size_t(len(p.Data)), &e[0], C.size_t(len(e))) != 0 {
+		(*C.uint8_t)(unsafe.SliceData(p.Data)), C.size_t(len(p.Data)), &e[0], C.size_t(len(e))) != 0 {
 		return e.err()
 	}
 	return nil

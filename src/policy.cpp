@@ -3,7 +3,6 @@
 #include "policy_check.h"
 
 #include <algorithm>
-#include <cstring>
 #include <format>
 
 namespace xicap
@@ -11,7 +10,7 @@ namespace xicap
 namespace
 {
 
-auto ruleFor(const ExclusionPolicy& policy, uint8_t channel, PacketDirection direction, uint16_t opcode) -> const ExclusionRule*
+auto ruleFor(const ExclusionPolicy& policy, uint8_t channel, PacketDirection direction, uint16_t opcode) noexcept -> const ExclusionRule*
 {
     const auto rule = std::ranges::find_if(policy.rules, [&](const ExclusionRule& r)
                                            {
@@ -32,14 +31,17 @@ auto checkRule(const ExclusionRule& rule) -> void
     {
         throw Error("xicap: a stub rule is for the game channel and has no byte ranges");
     }
+
     if (rule.action != ExclusionAction::Stub && rule.action != ExclusionAction::ZeroRange)
     {
         throw Error("xicap: unknown exclusion action");
     }
+
     if (rule.ranges.size() > UINT16_MAX)
     {
         throw Error("xicap: too many byte ranges in a rule");
     }
+
     // The header holds the opcode and size a reader checks.
     if (internal::isGame(rule.channel) && std::ranges::any_of(rule.ranges, [](const ByteRange& r)
                                                               {
@@ -61,12 +63,14 @@ auto checkPolicy(const ExclusionPolicy& policy) -> void
     {
         throw Error("xicap: too many exclusion rules");
     }
+
     uint64_t size = sizeof(format::PolicyHeader);
     for (const auto& rule : policy.rules)
     {
         checkRule(rule);
         size += sizeof(format::RuleHeader) + rule.ranges.size() * sizeof(ByteRange);
     }
+
     if (size > format::MAX_BLOCK_SIZE)
     {
         throw Error("xicap: exclusion policy over 16 MiB");
@@ -111,9 +115,8 @@ auto applyPolicy(const ExclusionPolicy& policy, const OutPacket& packet) -> Stor
         {
             throw Error("xicap: a game packet is at least 4 bytes");
         }
-        uint16_t head = 0;
-        std::memcpy(&head, packet.data.data(), sizeof(head));
-        stored.opcode = head & 0x1FFU;
+
+        stored.opcode = format::gameId(packet.data);
     }
 
     const auto* rule = ruleFor(policy, packet.channel, packet.direction, stored.opcode);
@@ -121,13 +124,14 @@ auto applyPolicy(const ExclusionPolicy& policy, const OutPacket& packet) -> Stor
     {
         return stored;
     }
-    checkRule(*rule);
+
     if (rule->action == ExclusionAction::Stub)
     {
         stored.data.resize(format::GAME_HEADER_SIZE);
         stored.flags |= PacketFlag::Excluded;
         return stored;
     }
+
     for (const auto& range : rule->ranges)
     {
         if (range.offset < stored.data.size())
@@ -136,6 +140,7 @@ auto applyPolicy(const ExclusionPolicy& policy, const OutPacket& packet) -> Stor
             std::fill_n(stored.data.begin() + range.offset, length, std::byte{ 0 });
         }
     }
+
     stored.flags |= PacketFlag::Redacted;
     return stored;
 }

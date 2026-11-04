@@ -4,10 +4,10 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "xicap"
-version = "7.0.0"
+dynamic = ["version"]
 description = "Reads xicap captures of Final Fantasy XI packets."
 license = { text = "MIT" }
-requires-python = ">=3.11"
+requires-python = ">=3.13"
 
 [project.optional-dependencies]
 test = ["pytest>=8"]
@@ -16,3 +16,8 @@ test = ["pytest>=8"]
 minimum-version = "0.10"
 build-dir = "build/{wheel_tag}"
 wheel.packages = []
+
+[tool.scikit-build.metadata.version]
+provider = "scikit_build_core.metadata.regex"
+input = "../CMakeLists.txt"
+regex = 'project\(xicap VERSION (?P<value>[0-9.]+)'

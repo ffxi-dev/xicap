@@ -9,7 +9,7 @@
 
 #include <zstd.h>
 
-#include <cstring>
+#include <bit>
 #include <fstream>
 #include <functional>
 #include <iostream>
@@ -23,18 +23,11 @@ using Bytes = std::vector<uint8_t>;
 
 constexpr uint64_t T0 = 1'767'225'600'000; // 2026-01-01T00:00:00Z
 
-template <typename T>
-auto get(const Bytes& b, size_t at) -> T
-{
-    T v{};
-    std::memcpy(&v, b.data() + at, sizeof(T));
-    return v;
-}
-
+// Overwrites the bytes at `at` with v.
 template <typename T>
 auto put(Bytes& b, size_t at, const T& v) -> void
 {
-    std::memcpy(b.data() + at, &v, sizeof(T));
+    std::ranges::copy(std::bit_cast<std::array<uint8_t, sizeof(T)>>(v), b.begin() + static_cast<std::ptrdiff_t>(at));
 }
 
 auto fixCrc(Bytes& b, size_t from, size_t to) -> void
@@ -55,17 +48,19 @@ auto layout(const Bytes& b) -> Layout
     size_t at = sizeof(format::Header);
     for (int i = 0; i < b[11]; ++i)
     {
-        const size_t size = 12 + get<uint32_t>(b, at + 4);
+        const auto size = size_t{ 12 } + internal::load<uint32_t>(std::span{ b }, at + 4);
         l.blocks.emplace_back(at, size);
         at += size;
     }
+
     l.blocksEnd = at;
-    while (at + 4 <= b.size() && get<uint32_t>(b, at) == format::FRAME_MAGIC)
+    while (at + 4 <= b.size() && internal::load<uint32_t>(std::span{ b }, at) == format::FRAME_MAGIC)
     {
-        const size_t size = sizeof(format::FrameHeader) + get<uint32_t>(b, at + 4) + 4;
+        const auto size = sizeof(format::FrameHeader) + internal::load<uint32_t>(std::span{ b }, at + 4) + 4;
         l.frames.emplace_back(at, size);
         at += size;
     }
+
     return l;
 }
 
@@ -73,7 +68,7 @@ auto writeVector(const std::filesystem::path& dir, const std::string& name, cons
 {
     const auto path = dir / (name + ".xicap");
     test::save(path, bytes);
-    std::ofstream(dir / (name + ".json")) << test::describe(path).dump(2) << '\n';
+    std::ofstream(dir / (name + ".json"), std::ios::binary) << test::describe(path).dump(2) << '\n';
 }
 
 auto capture(const std::filesystem::path& dir, const Metadata& m, FramePolicy policy, const std::function<void(Writer&)>& body) -> Bytes
@@ -84,6 +79,7 @@ auto capture(const std::filesystem::path& dir, const Metadata& m, FramePolicy po
         body(w);
         w.close();
     }
+
     auto bytes = test::bytesOf(path);
     std::filesystem::remove(path);
     return bytes;
@@ -137,21 +133,16 @@ auto mixedPolicy() -> ExclusionPolicy
 // One frame whose plaintext is given, then a trailer.
 auto withPlaintext(const Bytes& plain, uint32_t packets) -> Bytes
 {
-    auto m      = test::metadata();
-    auto bytes  = internal::encodeMetadata(m);
     auto packed = Bytes(ZSTD_compressBound(plain.size()));
     packed.resize(ZSTD_compress(packed.data(), packed.size(), plain.data(), plain.size(), 3));
+    auto       bytes = internal::encodeMetadata(test::metadata());
     const auto start = bytes.size();
-    const auto h     = format::FrameHeader{ .magic = format::FRAME_MAGIC, .payloadSize = static_cast<uint32_t>(packed.size()), .plainSize = static_cast<uint32_t>(plain.size()), .packetCount = packets, .markerCount = 0, .baseTimestamp = T0 };
-    bytes.resize(start + sizeof(h));
-    put(bytes, start, h);
+    internal::append(bytes, format::FrameHeader{ .magic = format::FRAME_MAGIC, .payloadSize = static_cast<uint32_t>(packed.size()), .plainSize = static_cast<uint32_t>(plain.size()), .packetCount = packets, .markerCount = 0, .baseTimestamp = T0 });
     bytes.insert(bytes.end(), packed.begin(), packed.end());
-    bytes.resize(bytes.size() + 4);
-    fixCrc(bytes, start, bytes.size());
-    auto t = format::Trailer{ .magic = format::TRAILER_MAGIC, .endTimestamp = T0, .packetCount = packets, .crc = 0 };
-    t.crc  = internal::crc32({ reinterpret_cast<const uint8_t*>(&t), 20 });
-    bytes.resize(bytes.size() + sizeof(t));
-    put(bytes, bytes.size() - sizeof(t), t);
+    internal::appendCrc(bytes, start);
+    const auto trailer = bytes.size();
+    internal::append(bytes, format::Trailer{ .magic = format::TRAILER_MAGIC, .endTimestamp = T0, .packetCount = packets, .crc = 0 });
+    fixCrc(bytes, trailer, bytes.size());
     return bytes;
 }
 
@@ -164,7 +155,8 @@ auto main(int argc, char** argv) -> int
         std::cerr << "usage: make_vectors <dir>\n";
         return 2;
     }
-    const std::filesystem::path dir = argv[1];
+
+    const auto dir = std::filesystem::path(argv[1]);
 
     auto small               = FramePolicy::live();
     small.maxPacketsPerFrame = 3;
@@ -196,27 +188,45 @@ auto main(int argc, char** argv) -> int
     writeVector(dir, "5-bad-frame-cut-off", Bytes(damaged.begin(), damaged.begin() + static_cast<std::ptrdiff_t>(trailer)));
 
     {
-        auto       b     = packets;
-        const auto at    = layout(b).blocksEnd;
-        auto       block = Bytes(12 + 3);
-        put(block, 0, format::BlockHeader{ .type = 0x100, .length = 3 });
-        std::ranges::copy(Bytes{ 'a', 'b', 'c' }, block.begin() + 8);
-        fixCrc(block, 0, block.size());
+        auto       b  = packets;
+        const auto at = layout(b).blocksEnd;
+        Bytes      block;
+        internal::append(block, format::BlockHeader{ .type = 0x100, .length = 3 });
+        block.insert(block.end(), { 'a', 'b', 'c' });
+        internal::appendCrc(block);
         b.insert(b.begin() + static_cast<std::ptrdiff_t>(at), block.begin(), block.end());
         b[11]++;
         fixCrc(b, 0, sizeof(format::Header));
         writeVector(dir, "5-unknown-block", b);
     }
+
+    {
+        auto b = packets;
+        b.push_back(0);
+        writeVector(dir, "5-bytes-after-trailer", b);
+    }
+
+    {
+        // A second trailer, whose packet count is wrong, after the right one.
+        auto b = packets;
+        b.insert(b.end(), packets.end() - sizeof(format::Trailer), packets.end());
+        put(b, b.size() - 12, internal::load<uint64_t>(std::span{ b }, b.size() - 12) + 1);
+        fixCrc(b, b.size() - sizeof(format::Trailer), b.size());
+        writeVector(dir, "5-trailer-twice", b);
+    }
+
     {
         auto b = packets;
         b[60] ^= 1;
         writeVector(dir, "5-bad-header-crc", b);
     }
+
     {
         auto b = packets;
         b[sizeof(format::Header) + 9] ^= 1;
         writeVector(dir, "5-bad-block-crc", b);
     }
+
     {
         auto       b      = packets;
         const auto policy = layout(b).blocks[0];
@@ -225,18 +235,21 @@ auto main(int argc, char** argv) -> int
         fixCrc(b, 0, sizeof(format::Header));
         writeVector(dir, "5-no-policy", b);
     }
+
     {
         auto b = packets;
         b[8]   = 4;
         fixCrc(b, 0, sizeof(format::Header));
         writeVector(dir, "5-version-4", b);
     }
+
     {
         auto b = packets;
-        put(b, trailer + 12, get<uint64_t>(b, trailer + 12) + 1);
+        put(b, trailer + 12, internal::load<uint64_t>(std::span{ b }, trailer + 12) + 1);
         fixCrc(b, trailer, b.size());
         writeVector(dir, "5-trailer-disagrees", b);
     }
+
     {
         auto       b  = packets;
         const auto at = frames[1].first + offsetof(format::FrameHeader, baseTimestamp);
@@ -244,6 +257,7 @@ auto main(int argc, char** argv) -> int
         fixCrc(b, frames[1].first, frames[1].first + frames[1].second);
         writeVector(dir, "5-time-backwards", b);
     }
+
     {
         // FORMAT.md's example plaintext, but its first deltaMs is 1.
         auto plain = Bytes{ 0x01, 0x0a, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xdf, 0x01, 0xdf, 0x01, 0xdf, 0x01, 0x00, 0x00, 0x00, 0x02, 0x02, 0x02, 0x30 };
@@ -255,7 +269,9 @@ auto main(int argc, char** argv) -> int
                                        return static_cast<uint8_t>(b);
                                    });
         }
+
         writeVector(dir, "5-bad-plaintext", withPlaintext(plain, 3));
     }
+
     return 0;
 }

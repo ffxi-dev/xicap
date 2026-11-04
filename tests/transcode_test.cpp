@@ -16,8 +16,10 @@ auto writeSample(const std::filesystem::path& path, bool close) -> void
         {
             w.mark(MarkerKind::Note, "every hundred");
         }
+
         w.write(test::out(i, test::gamePacket(0x017, 40, i, static_cast<uint8_t>(i))));
     }
+
     w.flush();
     if (close)
     {
@@ -63,6 +65,7 @@ TEST_CASE("continueFrom writes the frames past a byte offset as a capture that c
         {
             in.next(p);
         }
+
         return in.bytesRead();
     }();
     const auto written = continueFrom(src, held, rest);

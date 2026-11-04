@@ -34,7 +34,7 @@ enum class Channel : uint8_t
     Search = 1,
 };
 
-// Readers treat kinds this enum does not name as notes.
+// Readers pass on kinds this enum does not name unchanged.
 enum class MarkerKind : uint8_t
 {
     Note   = 0,
@@ -103,6 +103,25 @@ struct Packet
     {
         return static_cast<PacketDirection>(flags & PacketFlag::ClientToServer);
     }
+};
+
+// A packet as a writer is given it.
+struct OutPacket
+{
+    uint64_t                   timestamp{};
+    PacketDirection            direction{};
+    std::span<const std::byte> data;
+    uint8_t                    channel = static_cast<uint8_t>(Channel::Game);
+    uint16_t                   opcode{};     // ignored on the game channel, where the packet's header holds it
+    uint16_t                   provenance{}; // PacketFlag::Provenance bits
+};
+
+// A packet as a writer stores it, after its exclusion policy.
+struct StoredPacket
+{
+    uint16_t               opcode{};
+    uint16_t               flags{};
+    std::vector<std::byte> data;
 };
 
 class Error : public std::runtime_error

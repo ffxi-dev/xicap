@@ -63,6 +63,7 @@ TEST_CASE("timestamps never go backwards")
         w.write(test::out(500, p));
         w.write(test::out(400, p));
     }
+
     const auto packets = test::readAll(file);
     CHECK(packets[1].timestamp == 500);
 }
@@ -78,6 +79,7 @@ TEST_CASE("frames end at the policy's limits, and each is readable once flushed"
     {
         w.write(test::out(t, p));
     }
+
     w.flush();
     CHECK(test::readAll(file).size() == 5);
     CHECK_FALSE(Reader(file).complete());
@@ -91,6 +93,7 @@ TEST_CASE("a marker with no packet after it is dropped")
         w.write(test::out(1, test::gamePacket(0x00D, 8, 0)));
         w.mark(MarkerKind::Logout);
     }
+
     CHECK(test::readAll(file)[0].markers.empty());
 }
 

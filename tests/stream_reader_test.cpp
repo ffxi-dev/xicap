@@ -17,6 +17,7 @@ TEST_CASE("a stream reader fed a byte at a time reads what the reader reads")
             w.write(test::out(i, test::gamePacket(0x00D, 12, i, 1)));
         }
     }
+
     const auto bytes = test::bytesOf(file);
 
     StreamReader             s;
@@ -31,6 +32,7 @@ TEST_CASE("a stream reader fed a byte at a time reads what the reader reads")
             packets.emplace_back(p);
         }
     }
+
     CHECK(s.complete());
     CHECK_FALSE(s.stopped());
     CHECK(s.bytesRead() == bytes.size());

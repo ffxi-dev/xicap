@@ -4,7 +4,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -20,8 +19,10 @@ inline auto gamePacket(uint16_t id, size_t length, uint16_t sync, uint8_t fill =
 {
     std::vector<std::byte> p(length, std::byte{ fill });
     const auto             word = static_cast<uint16_t>((id & 0x1FF) | ((length / 4) << 9));
-    std::memcpy(p.data(), &word, 2);
-    std::memcpy(p.data() + 2, &sync, 2);
+    p[0]                        = static_cast<std::byte>(word);
+    p[1]                        = static_cast<std::byte>(word >> 8);
+    p[2]                        = static_cast<std::byte>(sync);
+    p[3]                        = static_cast<std::byte>(sync >> 8);
     return p;
 }
 
@@ -37,7 +38,7 @@ inline auto metadata() -> xicap::Metadata
         .network       = xicap::Network::Retail,
         .captureAgent  = "xicap tests",
         .clientVersion = "30251101_2",
-        .character     = { .contentId = 0x01020304, .characterId = 0x0A0B0C0D, .name = "Nouurs", .world = "Asura" },
+        .character     = { .contentId = 0x01020304, .characterId = 0x0A0B0C0D, .name = "Rhavyn", .world = "Asura" },
     };
 }
 
@@ -72,6 +73,7 @@ inline auto readAll(const std::filesystem::path& path) -> std::vector<Owned>
     {
         packets.emplace_back(p);
     }
+
     return packets;
 }
 
@@ -107,12 +109,12 @@ public:
     auto operator=(const TempFile&) -> TempFile& = delete;
     auto operator=(TempFile&&) -> TempFile&      = delete;
 
-    [[nodiscard]] auto path() const -> const std::filesystem::path&
+    [[nodiscard]] auto path() const noexcept -> const std::filesystem::path&
     {
         return path_;
     }
 
-    operator const std::filesystem::path&() const
+    operator const std::filesystem::path&() const noexcept
     {
         return path_;
     }

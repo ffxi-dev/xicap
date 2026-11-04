@@ -23,7 +23,7 @@ xicap::Metadata m;                  // xicap's default policy zeroes chat text
 m.captureAgent  = "MyRecorder 1.0";
 m.clientVersion = "30251101_2";
 m.network       = xicap::Network::Retail;
-m.character     = { .contentId = contentId, .characterId = id, .name = "Nouurs", .world = "Asura" };
+m.character     = { .contentId = contentId, .characterId = id, .name = "Rhavyn", .world = "Asura" };
 
 xicap::Writer w("session.xicap", m);
 w.mark(xicap::MarkerKind::Login);
@@ -81,13 +81,17 @@ import xicap
 r = xicap.Reader("session.xicap")
 print(r.character.name, r.client_version, r.start_timestamp)
 for p in r:
-    ...  # p.timestamp, p.channel, p.opcode, p.flags, p.direction, p.data (bytes), p.markers
+    ...  # p.timestamp, p.channel, p.opcode, p.flags, p.direction, p.data (bytes)
 ```
+
+The Python binding is narrow: the character's name and id, the client
+version, the network, the start and end times, the packet count, and each
+packet without its markers.
 
 ## JavaScript
 
-The library compiled to WebAssembly, for browsers and Node. Build it in `js/`
-with Emscripten on the path: `npm run build`.
+The library compiled to WebAssembly, for browsers and Node 17 or later. Build
+it in `js/` with Emscripten and Ninja on the path: `npm ci && npm run build`.
 
 ```js
 import { Reader, StreamReader } from "./js/dist/index.js";
@@ -110,8 +114,11 @@ s.close();
 - `tests/vectors/` holds captures with the reading each must give. The C++
   tests and each binding read all of them.
 - The bindings wrap the C++ library; none reimplements the format.
-- A release sets its version in `CMakeLists.txt`, `js/package.json`, and
-  `python/pyproject.toml`, then tags `v<version>`.
+- The fuzzers in `tests/fuzz/` need Clang (`-DXICAP_BUILD_FUZZERS=ON`). CI
+  does not build them; run them by hand after changing a decoder.
+- A release sets its version in `CMakeLists.txt`, which the Python package
+  reads too, then tags `v<version>`. A major release also changes the `/vN`
+  suffix of the module path in `go.mod` and in the Go import above.
 
 ## License
 

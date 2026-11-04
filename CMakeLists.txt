@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(xicap VERSION 7.0.0 LANGUAGES CXX)
+project(xicap VERSION 7.1.0 LANGUAGES CXX)
 
 option(XICAP_FETCH_ZSTD "Build zstd from source even when the system has it" OFF)
 option(XICAP_BUILD_TESTS "Build the tests" OFF)
@@ -37,6 +37,7 @@ add_library(xicap STATIC
     src/decode_metadata.cpp
     src/encode_columns.cpp
     src/encode_metadata.cpp
+    src/frame.cpp
     src/frame_decoder.cpp
     src/policy.cpp
     src/reader.cpp

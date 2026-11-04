@@ -186,6 +186,8 @@ def read(b):
 
     packets, decoder, last = [], zstandard.ZstdDecompressor().decompressobj(), 0
     while pos < end:
+        if b[pos : pos + 4] == b"XCPF" and pos + 24 <= len(b) and crc_ok(b[pos : pos + 24]):
+            raise Refused("bytes follow a trailer")
         try:
             if end - pos < 28 or b[pos : pos + 4] != b"XCFR":
                 raise Bad("not a frame")

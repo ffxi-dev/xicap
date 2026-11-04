@@ -9,7 +9,7 @@
 #include <span>
 #include <string>
 
-// What a reader makes of a capture, as the JSON beside each vector holds it. See tests/vectors/README.md.
+// What a reader makes of a capture, as the JSON beside each vector holds it. See FORMAT.md, Conformance.
 namespace test
 {
 
@@ -21,6 +21,7 @@ auto hex(const Bytes& bytes) -> std::string
     {
         out += std::format("{:02x}", static_cast<uint8_t>(b));
     }
+
     return out;
 }
 
@@ -34,13 +35,16 @@ inline auto describe(const xicap::Metadata& m) -> nlohmann::ordered_json
         {
             ranges.push_back({ range.offset, range.length });
         }
+
         rules.push_back({ { "channel", r.channel }, { "direction", r.direction }, { "action", r.action }, { "opcode", r.opcode }, { "ranges", ranges } });
     }
+
     nlohmann::ordered_json source = nullptr;
     if (m.source)
     {
         source = { { "format", m.source->format }, { "formatVersion", m.source->formatVersion }, { "skippedRecords", m.source->skippedRecords }, { "metadata", hex(m.source->metadata) } };
     }
+
     return {
         { "captureId", hex(m.captureId) },
         { "previousCaptureId", hex(m.previousCaptureId) },
@@ -68,8 +72,10 @@ inline auto describe(const std::filesystem::path& path) -> nlohmann::ordered_jso
             {
                 markers.push_back({ { "kind", m.kind }, { "text", hex(m.text) } });
             }
+
             packets.push_back({ { "timestamp", p.timestamp }, { "flags", p.flags }, { "channel", p.channel }, { "opcode", p.opcode }, { "data", hex(p.data) }, { "markers", markers } });
         }
+
         return {
             { "refused", false },
             { "complete", r.complete() },
