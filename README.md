@@ -8,9 +8,9 @@ frames, and a footer index once the capture is closed. Packet frames hold their 
 compressed as one zstd stream that runs across frames and restarts every 4 MiB.
 The file only ever grows, and each frame is decodable the moment it is written,
 so a capture can be uploaded while it records, and a cut-off capture reads up to
-its last intact frame. Every block carries a CRC, the exclusion policy stubs
-chat before it reaches disk unless the header's recording mode says the
-recorder kept everything, and the recorder's Ed25519 key signs the packets
+its last intact frame. Every block carries a CRC, the exclusion policy zeroes
+the text of chat before it reaches disk, keeping each packet's layout, unless
+the header's recording mode says the recorder kept everything, and the recorder's Ed25519 key signs the packets
 themselves, so a capture can be recompressed and keep its signature.
 
 See [FORMAT.md](FORMAT.md) for the on-disk specification, format 4, the only

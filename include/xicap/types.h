@@ -55,7 +55,7 @@ enum class StartContext : uint8_t
 // What the recorder kept of what players write. Readers refuse a mode they do not know. See FORMAT.md, Header.
 enum class RecordingMode : uint8_t
 {
-    Default    = 0, // the exclusion policy stubs chat
+    Default    = 0, // the exclusion policy removes the text of chat
     Everything = 1, // the exclusion policy has no rules: chat is kept
     Anonymous  = 2, // as Default, and names and player ids are pseudonyms
 };

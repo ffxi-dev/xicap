@@ -175,6 +175,7 @@ extern "C" int xicap_read(const char* path, xicap_summary* out, char* err, size_
                        copyString(out->policy_name, reader.policy().name);
                        out->policy_version = reader.policy().version;
                        out->rule_count     = static_cast<uint32_t>(reader.policy().rules.size());
+                       out->covers_default = xicap::coversDefault(reader.policy()) ? 1 : 0;
                        for (size_t i = 0; i < std::min<size_t>(out->rule_count, XICAP_SUMMARY_RULES); ++i)
                        {
                            const auto& rule = reader.policy().rules[i];

@@ -55,7 +55,8 @@ extern "C"
         uint64_t   unread_bytes;
         char       policy_name[32];
         uint32_t   policy_version;
-        uint32_t   rule_count; // may exceed XICAP_SUMMARY_RULES; only that many are filled
+        uint32_t   rule_count;     // may exceed XICAP_SUMMARY_RULES; only that many are filled
+        int        covers_default; // the policy removes at least what xicap's default policy does
         xicap_rule rules[XICAP_SUMMARY_RULES];
         int        has_source;
         char       source_format[16];

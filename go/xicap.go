@@ -50,7 +50,7 @@ const (
 	StartMidSession StartContext = 2
 
 	// What the recorder kept of what players write.
-	ModeDefault    RecordingMode = 0 // the exclusion policy stubs chat
+	ModeDefault    RecordingMode = 0 // the exclusion policy removes the text of chat
 	ModeEverything RecordingMode = 1 // the exclusion policy has no rules: chat is kept
 	ModeAnonymous  RecordingMode = 2 // as ModeDefault, and names and player ids are pseudonyms
 
@@ -160,6 +160,7 @@ type Summary struct {
 	CharacterMismatch bool   // a zone-in names a character other than the header's
 	Policy            Policy // its first 256 rules; RuleCount says how many there are
 	RuleCount         uint32
+	CoversDefault     bool           // the policy removes at least what xicap's default policy does
 	Source            *SourceSummary // set on converted captures
 	SigningKey        [32]byte
 	SignedToEnd       bool    // the footer's signature verifies
@@ -249,6 +250,7 @@ func Read(path string) (Summary, error) {
 		CharacterMismatch: s.character_mismatch != 0,
 		Policy:            Policy{Name: C.GoString(&s.policy_name[0]), Version: uint32(s.policy_version)},
 		RuleCount:         uint32(s.rule_count),
+		CoversDefault:     s.covers_default != 0,
 		SigningKey:        *(*[32]byte)(unsafe.Pointer(&s.signing_key[0])),
 		SignedToEnd:       s.signed_to_end != 0,
 		VerifiedPackets:   uint64(s.verified_packets),
@@ -341,7 +343,7 @@ type WriterInfo struct {
 	PreviousCaptureID [16]byte
 	SigningSeed       [32]byte // the recorder's Ed25519 seed
 	Source            *Source  // required with OriginConverted
-	Policy            *Policy  // nil: the default, which stubs chat
+	Policy            *Policy  // nil: the default, which zeroes the text of chat
 	Preset            Preset
 	Level             int // zstd level; 0 for the preset's. Level 3 holds a live writer's compressor to about 3.7 MB
 }

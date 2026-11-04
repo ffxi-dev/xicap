@@ -344,23 +344,52 @@ auto applyPolicy(const ExclusionPolicy& policy, const OutPacket& packet) -> Stor
 
 auto defaultExclusionPolicy() -> const ExclusionPolicy&
 {
-    // Packets carrying text players write to each other, from LandSandBoat's
-    // definitions after atom0s's XiPackets: chat in every channel (0x017 in,
-    // 0x0B5 out), tells (0x0B6 out), the Assist Channel (0x0B7 out), and the
-    // linkshell message board (0x0CC in, 0x0E2 out).
+    // The text players write to each other, from LandSandBoat's definitions after atom0s's XiPackets: chat in every
+    // channel (0x017 in, 0x0B5 out), tells (0x0B6 out), the Assist Channel (0x0B7 out), and the linkshell message
+    // board (0x0CC in, 0x0E2 out). Only the text is zeroed, so every packet keeps its layout: kind, sender, target
+    // and the rest stay. Offsets count the 4-byte header; a range to the end covers text of any length.
+    constexpr uint32_t toEnd = 0xFFFFFFFF;
+    const auto         zero  = [](ExclusionDirection direction, uint16_t opcode, uint32_t offset, uint32_t length)
+    {
+        return ExclusionRule{ .channel = 0, .direction = direction, .action = ExclusionAction::ZeroRange, .opcode = opcode, .ranges = { { offset, length } } };
+    };
     static const ExclusionPolicy policy{
         .name    = "xicap-default",
         .version = 2,
         .rules   = {
-            { .channel = 0, .direction = ExclusionDirection::ServerToClient, .action = ExclusionAction::Stub, .opcode = 0x017, .ranges = {} },
-            { .channel = 0, .direction = ExclusionDirection::ClientToServer, .action = ExclusionAction::Stub, .opcode = 0x0B5, .ranges = {} },
-            { .channel = 0, .direction = ExclusionDirection::ClientToServer, .action = ExclusionAction::Stub, .opcode = 0x0B6, .ranges = {} },
-            { .channel = 0, .direction = ExclusionDirection::ClientToServer, .action = ExclusionAction::Stub, .opcode = 0x0B7, .ranges = {} },
-            { .channel = 0, .direction = ExclusionDirection::ServerToClient, .action = ExclusionAction::Stub, .opcode = 0x0CC, .ranges = {} },
-            { .channel = 0, .direction = ExclusionDirection::ClientToServer, .action = ExclusionAction::Stub, .opcode = 0x0E2, .ranges = {} },
+            zero(ExclusionDirection::ServerToClient, 0x017, 0x17, toEnd), // Mes, after the sender's name
+            zero(ExclusionDirection::ClientToServer, 0x0B5, 0x06, toEnd), // Str
+            zero(ExclusionDirection::ClientToServer, 0x0B6, 0x15, toEnd), // Mes, after the name it goes to
+            zero(ExclusionDirection::ClientToServer, 0x0B7, 0x15, toEnd), // Mes, after the name
+            zero(ExclusionDirection::ServerToClient, 0x0CC, 0x08, 128),   // sMessage
+            zero(ExclusionDirection::ClientToServer, 0x0E2, 0x10, 128),   // sMessage
         },
     };
     return policy;
+}
+
+auto coversDefault(const ExclusionPolicy& policy) -> bool
+{
+    return std::ranges::all_of(defaultExclusionPolicy().rules, [&](const ExclusionRule& want)
+                               {
+                                   const auto  direction = want.direction == ExclusionDirection::ClientToServer ? PacketDirection::ClientToServer : PacketDirection::ServerToClient;
+                                   const auto* rule      = ruleFor(policy, want.channel, direction, want.opcode);
+                                   if (rule == nullptr || rule->action == ExclusionAction::Stub)
+                                   {
+                                       return rule != nullptr;
+                                   }
+                                   const auto end = [](const ByteRange& r)
+                                   {
+                                       return r.length == 0xFFFFFFFF ? UINT64_MAX : uint64_t{ r.offset } + r.length;
+                                   };
+                                   return std::ranges::all_of(want.ranges, [&](const ByteRange& w)
+                                                              {
+                                                                  return std::ranges::any_of(rule->ranges, [&](const ByteRange& r)
+                                                                                             {
+                                                                                                 return r.offset <= w.offset && end(r) >= end(w);
+                                                                                             });
+                                                              });
+                               });
 }
 
 Writer::Writer(const std::filesystem::path& path, WriterConfig config, FramePolicy policy)

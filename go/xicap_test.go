@@ -355,7 +355,7 @@ func TestPolicyAction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if a := s.Policy.Action(ChannelGame, DirServerToClient, 0x017); a != ActionStub {
+	if a := s.Policy.Action(ChannelGame, DirServerToClient, 0x017); a != ActionZeroRange || !s.CoversDefault {
 		t.Fatalf("chat to the client: action %d", a)
 	}
 	if a := s.Policy.Action(ChannelGame, DirClientToServer, 0x017); a != 0 {

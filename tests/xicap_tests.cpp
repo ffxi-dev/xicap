@@ -242,14 +242,14 @@ TEST_CASE("zone-ins are checked against the header's character")
     CHECK(mismatch(zoneIn(231, "Nouurs", 0x00000001)));
 }
 
-TEST_CASE("chat is stubbed before it reaches disk")
+TEST_CASE("chat text is zeroed before it reaches disk, and the packet keeps its layout")
 {
     TempCapture       tmp;
     const std::string secret = "meet me at the docks";
+    auto              chat   = gamePacket(0x017, 64, 0x11);
+    std::memcpy(chat.data() + 0x17, secret.data(), secret.size());
     {
         Writer w(tmp.path, config());
-        auto   chat = gamePacket(0x017, 64, 0);
-        std::memcpy(chat.data() + 20, secret.data(), secret.size());
         w.write(T0, PacketDirection::ServerToClient, chat);
         w.close();
     }
@@ -257,9 +257,13 @@ TEST_CASE("chat is stubbed before it reaches disk")
     CHECK(std::search(bytes.begin(), bytes.end(), secret.begin(), secret.end()) == bytes.end());
     const auto packets = readAll(tmp.path);
     REQUIRE(packets.size() == 1);
-    CHECK(packets[0].flags & PacketFlag::Excluded);
-    REQUIRE(packets[0].data.size() == 4);
-    CHECK(((packets[0].data[1] >> 1) & 0x7F) == 16); // original size, in words
+    CHECK((packets[0].flags & PacketFlag::Redacted) != 0);
+    CHECK((packets[0].flags & PacketFlag::Excluded) == 0);
+    REQUIRE(packets[0].data.size() == 64);
+    for (size_t i = 0; i < 64; ++i)
+    {
+        CHECK(packets[0].data[i] == (i < 0x17 ? static_cast<uint8_t>(chat[i]) : 0));
+    }
 }
 
 TEST_CASE("a writer refuses a policy too large for a reader to take")
@@ -284,23 +288,30 @@ TEST_CASE("a writer refuses a policy too large for a reader to take")
     }
 }
 
-TEST_CASE("the default policy stubs every chat opcode")
+TEST_CASE("the default policy zeroes the text of every chat packet and no other byte")
 {
-    TempCapture                                             tmp;
-    const std::vector<std::pair<uint16_t, PacketDirection>> chat{
-        { 0x017, PacketDirection::ServerToClient },
-        { 0x0B5, PacketDirection::ClientToServer },
-        { 0x0B6, PacketDirection::ClientToServer },
-        { 0x0B7, PacketDirection::ClientToServer },
-        { 0x0CC, PacketDirection::ServerToClient },
-        { 0x0E2, PacketDirection::ClientToServer },
+    TempCapture tmp;
+    struct Chat
+    {
+        uint16_t        opcode;
+        PacketDirection direction;
+        size_t          from; // the text's first byte
+        size_t          to;   // past its last
+    };
+    const std::vector<Chat> chat{
+        { 0x017, PacketDirection::ServerToClient, 0x17, 128 },
+        { 0x0B5, PacketDirection::ClientToServer, 0x06, 128 },
+        { 0x0B6, PacketDirection::ClientToServer, 0x15, 128 },
+        { 0x0B7, PacketDirection::ClientToServer, 0x15, 128 },
+        { 0x0CC, PacketDirection::ServerToClient, 0x08, 0x88 },
+        { 0x0E2, PacketDirection::ClientToServer, 0x10, 0x90 },
     };
     {
         Writer   w(tmp.path, config());
         uint64_t t = T0;
-        for (const auto& [opcode, direction] : chat)
+        for (const auto& c : chat)
         {
-            w.write(t++, direction, gamePacket(opcode, 64));
+            w.write(t++, c.direction, gamePacket(c.opcode, 128, 0x5A));
         }
         w.write(t, PacketDirection::ClientToServer, gamePacket(0x017, 64)); // 0x017 from the client is another packet: kept
         w.write(t, PacketDirection::ClientToServer, gamePacket(0x0E0, 64)); // search comment: public, kept
@@ -308,14 +319,30 @@ TEST_CASE("the default policy stubs every chat opcode")
     }
     const auto packets = readAll(tmp.path);
     REQUIRE(packets.size() == 8);
+    const auto sent = gamePacket(0, 128, 0x5A);
     for (size_t i = 0; i < chat.size(); ++i)
     {
-        CHECK(packets[i].flags & PacketFlag::Excluded);
-        CHECK(packets[i].data.size() == 4);
+        INFO(chat[i].opcode);
+        CHECK(packets[i].flags & PacketFlag::Redacted);
+        REQUIRE(packets[i].data.size() == 128);
+        for (size_t b = 4; b < 128; ++b) // the header holds the opcode
+        {
+            CHECK(packets[i].data[b] == (b >= chat[i].from && b < chat[i].to ? 0 : static_cast<uint8_t>(sent[b])));
+        }
     }
     CHECK(packets[6].data.size() == 64);
     CHECK(packets[7].data.size() == 64);
     CHECK(defaultExclusionPolicy().version == 2);
+    CHECK(coversDefault(defaultExclusionPolicy()));
+    CHECK_FALSE(coversDefault({ .name = "none", .version = 1, .rules = {} }));
+    auto stubs = defaultExclusionPolicy();
+    for (auto& rule : stubs.rules)
+    {
+        rule = { .channel = 0, .direction = rule.direction, .action = ExclusionAction::Stub, .opcode = rule.opcode, .ranges = {} };
+    }
+    CHECK(coversDefault(stubs));
+    stubs.rules.pop_back();
+    CHECK_FALSE(coversDefault(stubs));
 }
 
 TEST_CASE("redaction zeroes byte ranges and keeps the length")
@@ -374,14 +401,15 @@ TEST_CASE("applyPolicy gives what the writer stores")
         CHECK(stored.flags == packets[i].flags);
         CHECK(std::ranges::equal(stored.data, std::as_bytes(std::span{ packets[i].data })));
     }
-    CHECK(packets[0].flags == (PacketFlag::Provenance | PacketFlag::Excluded));
-    CHECK(packets[0].data.size() == 4);
+    CHECK(packets[0].flags == (PacketFlag::Provenance | PacketFlag::Redacted));
+    CHECK(packets[0].data.size() == 64);
+    CHECK(packets[0].data[0x17] == 0);
     CHECK(packets[1].flags == (PacketFlag::ClientToServer | PacketFlag::Modified | PacketFlag::Redacted));
     CHECK(packets[1].data[8] == 0);
     CHECK(packets[2].opcode == 0x015);
     CHECK(packets[3].opcode == 5);
 
-    CHECK(ruleFor(cfg.policy, 0, PacketDirection::ServerToClient, 0x017)->action == ExclusionAction::Stub);
+    CHECK(ruleFor(cfg.policy, 0, PacketDirection::ServerToClient, 0x017)->action == ExclusionAction::ZeroRange);
     CHECK(ruleFor(cfg.policy, 0, PacketDirection::ClientToServer, 0x017) == nullptr);
     CHECK(ruleFor(cfg.policy, 0, PacketDirection::ClientToServer, 0x020)->action == ExclusionAction::ZeroRange);
 

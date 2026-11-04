@@ -125,11 +125,11 @@ are real:
 
 | Mode | Name | The exclusion policy | Names and player ids |
 |-----:|------|----------------------|----------------------|
-| 0 | default | stubs chat, as the library's default does | as the game sent them |
+| 0 | default | removes the text of chat, as the library's default does | as the game sent them |
 | 1 | everything | has no rules: chat is kept | as the game sent them |
-| 2 | anonymous | stubs chat, as in mode 0 | replaced by the recorder with pseudonyms of the same length |
+| 2 | anonymous | removes the text of chat, as in mode 0 | replaced by the recorder with pseudonyms of the same length |
 
-A writer refuses mode 1 with a policy that has rules. Whether a policy stubs
+A writer refuses mode 1 with a policy that has rules. Whether a policy removes
 enough for mode 0 or 2 is the archive's rule.
 
 `dictionaryId` stays in the header so a later version can add a dictionary
@@ -612,17 +612,19 @@ A writer refuses a policy that stubs packets on a channel whose row in
   header, which holds the opcode the packet's `opcode` repeats; a writer refuses
   such a policy before it writes anything.
 
-The library's default policy, `xicap-default` version 2, stubs the game
-channel's packets that carry text players write to each other:
+The library's default policy, `xicap-default` version 2, zeroes the text
+players write to each other on the game channel, and nothing else, so each
+packet keeps its length and its other fields: kind, sender, target, and ids.
+Offsets count the 4-byte header; a range "to the end" covers text of any length.
 
-| Opcode | Direction | Packet |
-|-------:|-----------|--------|
-| `0x017` | to the client | chat, in every channel (say, shout, party, linkshell, tell, yell, unity, assist) |
-| `0x0B5` | from the client | chat |
-| `0x0B6` | from the client | tell |
-| `0x0B7` | from the client | the Assist Channel |
-| `0x0CC` | to the client | linkshell message board |
-| `0x0E2` | from the client | linkshell message board post |
+| Opcode | Direction | Packet | Zeroed |
+|-------:|-----------|--------|--------|
+| `0x017` | to the client | chat, in every channel (say, shout, party, linkshell, tell, yell, unity, assist) | `0x17` to the end (`Mes`) |
+| `0x0B5` | from the client | chat | `0x06` to the end (`Str`) |
+| `0x0B6` | from the client | tell | `0x15` to the end (`Mes`) |
+| `0x0B7` | from the client | the Assist Channel | `0x15` to the end (`Mes`) |
+| `0x0CC` | to the client | linkshell message board | `0x08`, 128 bytes (`sMessage`) |
+| `0x0E2` | from the client | linkshell message board post | `0x10`, 128 bytes (`sMessage`) |
 
 Opcodes and meanings follow atom0s's XiPackets. Public text, such as search and
 bazaar comments, is kept.
@@ -759,27 +761,30 @@ one packet frame, and the footer. Offsets are in hex.
 00000150  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
 00000160  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
 00000170  00 00 00 00 00 00 00 00 00 00 00 00 19 3b 9d 72  headerCrc
-00000180  09 00 00 00 58 00 00 00 78 69 63 61 70 2d 64 65  extension block: type 0x0009 (exclusion policy), length 88; policy name
+00000180  09 00 00 00 88 00 00 00 78 69 63 61 70 2d 64 65  extension block: type 0x0009 (exclusion policy), length 136; policy name
 00000190  66 61 75 6c 74 00 00 00 00 00 00 00 00 00 00 00
 000001a0  00 00 00 00 00 00 00 00 02 00 00 00 06 00 00 00  version 2, 6 rules, reserved
-000001b0  00 00 01 00 17 00 00 00 00 01 01 00 b5 00 00 00  rules: channel, direction, action 1 (stub), reserved, opcode, rangeCount
-000001c0  00 01 01 00 b6 00 00 00 00 01 01 00 b7 00 00 00
-000001d0  00 00 01 00 cc 00 00 00 00 01 01 00 e2 00 00 00
-000001e0  3b 31 09 9f 58 43 46 52 80 01 00 00 31 00 00 00  block CRC; frame: magic XCFR, kind 0x80 (packets), frameFlags 1 (restart), markerCount 0, payloadSize 49
-000001f0  03 00 00 00 00 6c 50 c4 a0 01 00 00 00 00 00 00  packetCount 3; baseTimestamp; zoneId 0, reserved
-00000200  46 00 00 00 28 b5 2f fd 04 00 25 01 00 90 00 0a  plainSize 70; payload: a whole zstd stream (decoded below)
-00000210  0a 00 df 01 00 00 00 02 02 02 30 df 08 00 01 02
-00000220  07 00 38 13 10 00 67 37 33 08 b8 43 b9 c0 17 20
-00000230  02 2e 49 ba 6a a0 90 f4 43 00 6c 50 c4 a0 01 00  frame CRC; footer index entry: timestamp
-00000240  00 e4 01 00 00 00 00 00 00 00 00 01 00 00 00 00  fileOffset, zoneId, flags 1 (restart), reserved
-00000250  00 14 6c 50 c4 a0 01 00 00 03 00 00 00 00 00 00  trailer: endTimestamp; totalPacketCount 3
-00000260  00 00 00 00 00 01 00 00 00 39 02 00 00 00 00 00  trailerFlags 0, entryCount 1, indexOffset
-00000270  00 94 34 dc 76 01 00 00 00 82 01 3f 19 b1 5c 9a  indexCrc, frameCount 1; signature
-00000280  fb 51 eb 5b a4 4c ed b1 b1 a7 56 0e 3b ea a1 f6
-00000290  26 cb ec 62 f2 aa b5 d1 30 85 d2 43 ef 5e da d7
-000002a0  74 37 8a d3 92 dd e0 b6 69 8c 59 c5 12 f4 d8 00
-000002b0  5c 79 16 2f 0d 95 70 8c 0b 9c ff 0f d3 58 43 50
-000002c0  46                                               trailerCrc (from 2b9), magic XCPF (from 2bd)
+000001b0  00 00 02 00 17 00 01 00 17 00 00 00 ff ff ff ff  rules: channel, direction, action 2 (zero ranges), reserved, opcode, rangeCount 1; range offset, length
+000001c0  00 01 02 00 b5 00 01 00 06 00 00 00 ff ff ff ff
+000001d0  00 01 02 00 b6 00 01 00 15 00 00 00 ff ff ff ff
+000001e0  00 01 02 00 b7 00 01 00 15 00 00 00 ff ff ff ff
+000001f0  00 00 02 00 cc 00 01 00 08 00 00 00 80 00 00 00
+00000200  00 01 02 00 e2 00 01 00 10 00 00 00 80 00 00 00
+00000210  0b 2b 93 a3 58 43 46 52 80 01 00 00 31 00 00 00  block CRC; frame: magic XCFR, kind 0x80 (packets), frameFlags 1 (restart), markerCount 0, payloadSize 49
+00000220  03 00 00 00 00 6c 50 c4 a0 01 00 00 00 00 00 00  packetCount 3; baseTimestamp; zoneId 0, reserved
+00000230  46 00 00 00 28 b5 2f fd 04 00 25 01 00 90 00 0a  plainSize 70; payload: a whole zstd stream (decoded below)
+00000240  0a 00 df 01 00 00 00 02 02 02 30 df 08 00 01 02
+00000250  07 00 38 13 10 00 67 37 33 08 b8 43 b9 c0 17 20
+00000260  02 2e 49 ba 6a a0 90 f4 43 00 6c 50 c4 a0 01 00  frame CRC (from 265); footer index entry: timestamp (from 269)
+00000270  00 14 02 00 00 00 00 00 00 00 00 01 00 00 00 00  fileOffset, zoneId, flags 1 (restart), reserved
+00000280  00 14 6c 50 c4 a0 01 00 00 03 00 00 00 00 00 00  trailer: endTimestamp (from 281); totalPacketCount
+00000290  00 00 00 00 00 01 00 00 00 69 02 00 00 00 00 00  trailerFlags 0, entryCount 1, indexOffset
+000002a0  00 00 00 3a e4 01 00 00 00 9d fe 1f c3 e8 c4 b6  indexCrc, frameCount 1; signature (from 2a9)
+000002b0  39 4d 4a 62 e3 b8 ab c6 af 76 86 fd a6 74 28 1a
+000002c0  9a bc b7 2e d2 2c a8 b3 53 c3 52 90 1e 9f 1b e6
+000002d0  fb cb d4 17 79 da 56 12 8c e9 b3 67 16 ca 4e 98
+000002e0  f7 19 f6 28 1d 4f 6d 5a 0b 7f 71 30 6e 58 43 50  trailerCrc (from 2e9), magic XCPF (from 2ed)
+000002f0  46
 ```
 
 The frame's payload, decoded:

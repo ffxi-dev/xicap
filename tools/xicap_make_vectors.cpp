@@ -286,7 +286,7 @@ int main(int argc, char* argv[])
               w.mark(MarkerKind::Login, "start");
               w.write(T0, PacketDirection::ServerToClient, zoneIn(230, 1));
               w.write({ .timestamp = T0 + 1, .direction = PacketDirection::ClientToServer, .data = game(0x015, 32, 7, 1), .provenance = PacketFlag::Injected | PacketFlag::FirstInChunk });
-              w.write(T0 + 2, PacketDirection::ServerToClient, game(0x017, 64, 'x', 2));  // chat: stubbed
+              w.write(T0 + 2, PacketDirection::ServerToClient, game(0x017, 64, 'x', 2));  // chat: its text zeroed
               w.write(T0 + 3, PacketDirection::ServerToClient, game(0x020, 40, 0xFF, 3)); // redacted
               const std::vector<std::byte> search(24, std::byte{ 0x5A });
               w.write({ .timestamp = T0 + 4, .direction = PacketDirection::ServerToClient, .data = search, .channel = 1, .opcode = 5 });

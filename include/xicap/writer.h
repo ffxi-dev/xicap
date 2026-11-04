@@ -25,8 +25,13 @@ class SigningKey;
 struct Access;
 } // namespace internal
 
-// Stubs chat on the game channel in both directions: xicap-default version 2. See FORMAT.md, Exclusion.
+// Zeroes the text of chat on the game channel in both directions, keeping each packet's layout: xicap-default
+// version 2. See FORMAT.md, Exclusion.
 [[nodiscard]] auto defaultExclusionPolicy() -> const ExclusionPolicy&;
+
+// Whether a policy removes at least what the default policy does: for each of its rules, the first rule of the policy
+// that matches the same packets stubs them or zeroes ranges that hold the default's.
+[[nodiscard]] auto coversDefault(const ExclusionPolicy& policy) -> bool;
 
 // Per-capture metadata, written into the header and the format-level
 // extension blocks.
