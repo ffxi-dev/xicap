@@ -1,13 +1,13 @@
 # XICAP Binary Format
 
-Version 4.1. This document is normative: a reader built from it alone, with the
+Version 4.0. This document is normative: a reader built from it alone, with the
 references below, must read every format-4 capture the library writes.
 [FORMAT-3.md](FORMAT-3.md) specifies format 3, which readers keep reading.
 
-**Status: in production** since 2026-11-03, when Mogsafe deployed xicap 4.0
-and began archiving format 4. Captures are kept for the long term, so readers
-keep reading every released version of format 4, and a change that an older
-reader cannot follow needs a new major version.
+**Status: draft.** Until the owner declares format 4 in production, a change
+may break compatibility. From that day captures are kept for the long term, so
+readers keep reading every released version of format 4, and a change that an
+older reader cannot follow needs a new major version.
 
 ## Conventions
 
@@ -40,7 +40,7 @@ reader cannot follow needs a new major version.
 |------|----------|
 | CRC-32 | Polynomial `0x04C11DB7` reflected (`0xEDB88320`), initial value `0xFFFFFFFF`, final XOR `0xFFFFFFFF` (CRC-32/ISO-HDLC, as zlib). Check value: CRC of ASCII `123456789` is `0xCBF43926`. |
 | SHA-512 | FIPS 180-4. |
-| Ed25519 | RFC 8032, pure Ed25519 (not Ed25519ph or Ed25519ctx). |
+| Ed25519 | RFC 8032, pure Ed25519 (not Ed25519ph or Ed25519ctx). Writers sign as section 5.1.6 says; a reader refuses a signature whose `S` is not below the group order, as section 5.1.7 says. |
 | zstd | RFC 8878. |
 | LEB128 | Unsigned LEB128, as DWARF and WebAssembly use it. |
 
@@ -267,7 +267,7 @@ order:
 | 3 | `channel` | `packetCount` 8-bit varints: see [Channels](#channels) |
 | 4 | `opcode` | `packetCount` 16-bit varints: meaning set by the channel |
 | 5 | `length` | `packetCount` 32-bit varints: `0` means the game header's `size` × 4; otherwise the packet's length + 1 |
-| 6 | `sync` | one zigzag 16-bit varint per game-channel packet, in packet order: the change from the sync of the previous game-channel packet in the same direction in this frame, or from 0 for the first |
+| 6 | `sync` | one zigzag 16-bit varint per game-channel packet, in packet order: the change from the sync of the previous game-channel packet in the same direction in this frame, or from 0 for the first. The change is `(sync - previous) mod 2^16` read as a signed 16-bit value; the reader adds it back modulo 2^16 |
 | 7 | markers | `markerCount` markers, see below |
 | 8 | group sizes | one 32-bit varint per group: the group's byte count |
 | 9 | group bytes | each group's packet bytes, back to back, groups in the order of section 8 |
@@ -281,10 +281,11 @@ learns how many groups there are, and their order, from sections 2 to 4, so
 section 8 holds no keys. A group's bytes are its packets' bytes in packet order.
 
 On the game channel, a packet sits in its group with bytes 2 and 3, its sync
-counter, set to zero; the reader puts back the sync from section 6. A writer
-writes `length` 0 exactly when the packet is on the game channel, its header's
-`size` is not 0, and its length is `size` × 4. A stub keeps the 4-byte header
-and an explicit length of 4 (written 5).
+counter, set to zero; the reader ignores the stored bytes and puts back the sync
+from section 6. A writer writes `length` 0 exactly when the packet is on the
+game channel, its header's `size` is not 0, and its length is `size` × 4. A stub
+keeps the 4-byte header, whose `size` still gives the original length, so its
+`length` is written 5 unless that `size` is 1.
 
 Each **marker** is:
 
@@ -330,7 +331,7 @@ frame is bad if:
 | 2 | blocked by an addon | may ignore |
 | 3 | modified by an addon | may ignore |
 | 4 | first packet of its datagram | may ignore |
-| 5 | carried: from before the capture's start, see [Carried packets](#carried-packets) (4.1) | may ignore |
+| 5 | carried: from before the capture's start, see [Carried packets](#carried-packets) | may ignore |
 | 6 to 7 | reserved | may ignore |
 | 8 | excluded: a stub, see [Exclusion](#exclusion) | must understand |
 | 9 | redacted: byte ranges zeroed | must understand |
@@ -404,9 +405,13 @@ byte 0     byte 1             byte 2     byte 3
 
 A zone-in (`0x00A`, to the client) names the character: a u32 `UniqueNo` at
 byte 4 and a 16-byte name at byte 132, counting the 4-byte header; its zone is
-the u32 at byte 48. A reader compares every zone-in it reads that is neither
-stubbed nor redacted with the header's `characterId` and `characterName`, and
-reports a capture where any differs. Field offsets follow atom0s's XiPackets.
+the u32 at byte 48, of which the frame's `zoneId` keeps the low 16 bits; a
+zone-in under 52 bytes leaves the zone as it was. A reader compares every
+zone-in it reads that is to the client, neither stubbed nor redacted, and at
+least 148 bytes long with the header: its `UniqueNo` with `characterId`, and
+its name up to the first zero byte with `characterName` up to the first zero
+byte, byte for byte, empty or zero values included. It reports a capture where
+any differs. Field offsets follow atom0s's XiPackets.
 
 A writer refuses a game packet shorter than 4 bytes and sets `opcode` to its
 `id`.
@@ -493,7 +498,9 @@ signed stream = header             all headerSize bytes, as the signer wrote the
 
 `'M'`, `'P'`, and `'E'` are single ASCII bytes, and the integers are
 little-endian. A packet record holds the packet as a reader yields it: its
-absolute timestamp, and its bytes with the sync in place.
+absolute timestamp, all 16 flag bits, and its bytes with the sync in place;
+`length` is the number of those bytes, not the value of the `length` column.
+`textLength` is the marker text's byte count.
 
 - `D(k)` is the SHA-512 of the header, the blocks, and the records of the first
   `k` packets with the markers before each.
@@ -621,6 +628,12 @@ A reader:
 3. reads frames, starting at the end of the extension blocks, and decodes each
    packet frame with the decoder its stream left.
 
+A refusal is of the whole file, wherever the reader meets its cause: a reader
+that has already passed on packets reports the refusal, and its caller drops
+them. A reader checks the exclusion policy block's layout, not its rules, and
+does not refuse a file for a missing `SOURCE` block; what an archive accepts is
+the archive's rule.
+
 A **bad frame** is one that is cut short, lacks the `XCFR` magic, fails its CRC,
 or breaks a rule of this document once read: a `plainSize` or `packetCount` out
 of range, a zstd error, a payload that does not decode to exactly `plainSize`
@@ -663,8 +676,8 @@ it parses.
 - **Frame boundaries.** A writer ends the packet frame being built before adding
   a packet that would push its `deltaMs` past 2^32 − 1, its `packetCount` past
   1,048,576, its markers past 65,535, or its plaintext past its frame size
-  limit (at most 16 MiB), and when the server sends a zone-in, so a frame never
-  spans two zones. It also ends frames by its own packet and time settings and
+  limit (at most 16 MiB), and before each zone-in the server sends, so a zone-in
+  is the first packet of its frame and a frame never spans two zones. It also ends frames by its own packet and time settings and
   when the host asks for a flush. The library's settings:
 
   | | live (the default) | archive |

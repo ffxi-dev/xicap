@@ -468,7 +468,7 @@ func TestCut(t *testing.T) {
 		s.Policy.Name != from.Policy.Name || s.RuleCount != from.RuleCount || s.CaptureAgent != "mogsafe" {
 		t.Fatalf("header: %+v\nsource: %+v", s, from)
 	}
-	if s.Origin != OriginConverted || s.StartContext != StartMidSession || s.Source == nil || s.Source.Format != "xicap" || s.Source.FormatVersion != "4.1" {
+	if s.Origin != OriginConverted || s.StartContext != StartMidSession || s.Source == nil || s.Source.Format != "xicap" || s.Source.FormatVersion != "4.0" {
 		t.Fatalf("provenance: %+v %+v", s, s.Source)
 	}
 	if m, err := Markers(dst); err != nil || !reflect.DeepEqual(m, []Marker{{MarkerNote, "cap start quest", 0, t0 + 10}}) {

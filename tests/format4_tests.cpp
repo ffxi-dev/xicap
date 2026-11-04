@@ -1173,7 +1173,7 @@ TEST_CASE("a cut carries the scene from before its range")
     CHECK(got[6] == from[12]);
 
     Reader r(dst.path);
-    CHECK(r.versionMinor() == 1);
+    CHECK(r.versionMinor() == 0);
     CHECK(r.startTimestamp() == T0 + 11);
     CHECK(r.verify().signedToEnd);
 
