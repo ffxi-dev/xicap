@@ -4,7 +4,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -20,8 +19,10 @@ inline auto gamePacket(uint16_t id, size_t length, uint16_t sync, uint8_t fill =
 {
     std::vector<std::byte> p(length, std::byte{ fill });
     const auto             word = static_cast<uint16_t>((id & 0x1FF) | ((length / 4) << 9));
-    std::memcpy(p.data(), &word, 2);
-    std::memcpy(p.data() + 2, &sync, 2);
+    p[0]                        = static_cast<std::byte>(word);
+    p[1]                        = static_cast<std::byte>(word >> 8);
+    p[2]                        = static_cast<std::byte>(sync);
+    p[3]                        = static_cast<std::byte>(sync >> 8);
     return p;
 }
 
