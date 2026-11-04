@@ -6,13 +6,12 @@ on:
   pull_request:
   workflow_dispatch:
 
-# Self-hosted runners keep a home directory; packages there must not leak into the job.
-env:
-  PYTHONNOUSERSITE: "1"
+permissions:
+  contents: read
 
 jobs:
   binding:
-    runs-on: [self-hosted, lsb]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -24,7 +23,7 @@ jobs:
 
   spec-reader:
     # A reader written from FORMAT.md alone must read every vector as its JSON says.
-    runs-on: [self-hosted, lsb]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
