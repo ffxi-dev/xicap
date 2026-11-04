@@ -149,8 +149,8 @@ auto readFile(const std::string& path, Reading& out, bool& complete) -> void
             r.seekToTime(out.packets[out.packets.size() / 2].timestamp);
             r.next(p);
         }
-        r.listZones();
-        r.durationMs();
+        static_cast<void>(r.listZones());
+        static_cast<void>(r.durationMs());
     }
     catch (const Error&)
     {
@@ -209,7 +209,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
         while (r.next(p))
         {
         }
-        r.verify();
+        static_cast<void>(r.verify());
     }
     catch (const Error&)
     {
