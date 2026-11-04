@@ -161,7 +161,8 @@ def test_transcode_refuses_and_leaves_nothing(tmp_path):
 
 
 def capture_with_marker(text: bytes) -> bytes:
-    """A cut-off format-4 capture of one 16-byte 0x0DF packet with a note marker; its frame is a raw zstd block."""
+    """A cut-off format-4 capture of one 16-byte 0x0DF packet with a note marker; its frame is a raw zstd block of a
+    stream with a checksum that the file stops before ending."""
     crc = lambda b: zlib.crc32(b) & 0xFFFFFFFF
     header = bytearray(384)
     header[0:8] = bytes([0x89, 0x58, 0x43, 0x50, 0x0D, 0x0A, 0x1A, 0x0A])
@@ -173,7 +174,7 @@ def capture_with_marker(text: bytes) -> bytes:
     block += struct.pack("<I", crc(block))
     packet = struct.pack("<H", (4 << 9) | 0x0DF) + bytes(14)
     plain = bytes([0, 0, 0, 0xDF, 0x01, 0, 0, 0, 0, len(text)]) + text + bytes([16]) + packet
-    payload = struct.pack("<I", 0xFD2FB528) + bytes(2) + (1 | len(plain) << 3).to_bytes(3, "little") + plain
+    payload = struct.pack("<I", 0xFD2FB528) + bytes([0x04, 0x00]) + (len(plain) << 3).to_bytes(3, "little") + plain
     frame = b"XCFR" + struct.pack("<BBHIIQHHI", 0x80, 1, 1, len(payload), 1, 1_790_000_000_000, 0, 0, len(plain)) + payload
     return bytes(header) + block + frame + struct.pack("<I", crc(frame))
 

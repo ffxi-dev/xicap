@@ -27,8 +27,9 @@ reader cannot follow needs a new major version.
 - A byte range `a..b` includes byte `a` and stops before byte `b`.
 - A **varint** is unsigned LEB128: 7 bits per byte, low bits first, the high
   bit set on every byte but the last. Each varint fills a field of a stated
-  width: 8, 16, or 32 bits. It takes at most 2, 3, or 5 bytes, and its value
-  fits the field. A reader refuses a longer varint or a larger value.
+  width: 8, 16, or 32 bits. It takes as few bytes as its value needs, so only a
+  one-byte varint ends in `00`, at most 2, 3, or 5 bytes, and its value fits the
+  field. A reader refuses a longer varint or a larger value.
 - **Zigzag** maps a signed 16-bit change `n` to the unsigned 16-bit
   `(n << 1) ^ (n >> 15)`, so small changes either way take one byte. Its
   inverse is `(z >> 1) ^ -(z & 1)`.
@@ -233,9 +234,11 @@ frame (RFC 8878) that runs across one or more packet frames:
   zstd frame. The first packet frame of a file always has the bit.
 - A packet frame without the bit continues the stream of the packet frame
   before it. Frames of other kinds in between are not part of any stream.
-- The zstd frame has no dictionary id and no `Frame_Content_Size`, has
-  `Content_Checksum_flag` set, and has a `Window_Size` of at most 8 MiB
-  (2^23). A reader refuses a larger window.
+- The zstd frame has no dictionary id, no `Frame_Content_Size`, and no
+  `Single_Segment_flag`, has `Content_Checksum_flag` set, and has a
+  `Window_Size` of at most 8 MiB (2^23). In its `Frame_Header_Descriptor`, bits
+  7, 6, 5, 3, 1, and 0 are clear and bit 2 is set. A frame that starts a stream
+  any other way is bad.
 - Each packet frame's payload is whole zstd blocks: fed to a decoder that has
   decoded the stream's earlier packet frames, it yields exactly `plainSize`
   bytes, with no later input.
@@ -313,7 +316,10 @@ frame is bad if:
   its header's `id`;
 - a packet off the game channel has `length` 0;
 - a marker's `packetIndex` is not below `packetCount`, or is below the
-  previous marker's.
+  previous marker's;
+- the first packet's `deltaMs` is not 0, or a timestamp passes 2^64 − 1;
+- read in file order after the frame before it, its `baseTimestamp` is earlier
+  than that frame's last packet: timestamps never go backwards.
 
 #### Packet flags
 
