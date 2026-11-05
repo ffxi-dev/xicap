@@ -3,7 +3,7 @@
 package xicap
 
 /*
-#cgo CXXFLAGS: -std=c++23 -I${SRCDIR}/../include -I${SRCDIR}/../src
+#cgo CXXFLAGS: -std=c++23 -I${SRCDIR}/../../include -I${SRCDIR}/../../src
 #cgo LDFLAGS: -lzstd
 #include <stdlib.h>
 #include "capi.h"

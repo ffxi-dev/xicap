@@ -60,7 +60,7 @@ Projects that use CMake can add the library with `FetchContent` and link
 ## Go
 
 ```go
-import xicap "github.com/ffxi-dev/xicap/v7/go"
+import xicap "github.com/ffxi-dev/xicap/v7/bindings/go"
 
 s, err := xicap.Read("session.xicap")   // the header, blocks, markers, and a summary of the packets
 ```
@@ -72,7 +72,7 @@ rewrites them (`Transcode`).
 ## Python
 
 ```
-pip install ./python
+pip install ./bindings/python
 ```
 
 ```python
@@ -91,10 +91,10 @@ packet without its markers.
 ## JavaScript
 
 The library compiled to WebAssembly, for browsers and Node 17 or later. Build
-it in `js/` with Emscripten and Ninja on the path: `npm ci && npm run build`.
+it in `bindings/js/` with Emscripten and Ninja on the path: `npm ci && npm run build`.
 
 ```js
-import { Reader, StreamReader } from "./js/dist/index.js";
+import { Reader, StreamReader } from "./bindings/js/dist/index.js";
 
 const r = await Reader.open(bytes);
 for (const p of r) { /* p.timestamp, p.channel, p.opcode, p.flags, p.data, p.markers */ }
