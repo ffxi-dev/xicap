@@ -13,7 +13,7 @@ namespace xicap::bytes
 template <size_t N>
 auto toField(const std::string_view text) noexcept -> std::array<char, N>
 {
-    // Cut between characters, never inside one.
+    // Back up over UTF-8 continuation bytes before truncating.
     auto n = std::min(text.size(), N - 1);
     while (n < text.size() && n > 0 && (static_cast<unsigned char>(text[n]) & 0xC0U) == 0x80U)
     {

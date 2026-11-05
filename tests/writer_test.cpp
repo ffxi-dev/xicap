@@ -115,3 +115,25 @@ TEST_CASE("a writer refuses a game packet under 4 bytes and a closed writer refu
     w.close();
     CHECK_THROWS_AS(w.write(test::out(1, test::gamePacket(0x00D, 8, 0))), Error);
 }
+
+TEST_CASE("a writer refuses metadata and frame policies outside the format, before it opens the file")
+{
+    const test::TempFile file;
+    auto                 m = test::metadata();
+    m.source               = Source{ .format = "captain", .formatVersion = "1", .skippedRecords = 0, .metadata = std::vector<uint8_t>(size_t{ 16 } * 1024 * 1024) };
+    CHECK_THROWS_AS(Writer(file, m), Error);
+    m.source.reset();
+    m.blocks = std::vector<Block>(256, Block{ .type = 0x8001, .payload = {} });
+    CHECK_THROWS_AS(Writer(file, m), Error);
+
+    auto policy               = FramePolicy::live();
+    policy.maxPacketsPerFrame = 1024 * 1024 + 1;
+    CHECK_THROWS_AS(Writer(file, test::metadata(), policy), Error);
+    policy           = FramePolicy::live();
+    policy.windowLog = 24;
+    CHECK_THROWS_AS(Writer(file, test::metadata(), policy), Error);
+    CHECK_FALSE(std::filesystem::exists(file));
+
+    Writer(file, test::metadata(), FramePolicy::archive()).close();
+    CHECK(Reader(file).complete());
+}

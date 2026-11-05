@@ -56,6 +56,8 @@ auto readHeader(const std::span<const uint8_t> bytes, Metadata& out) -> uint8_t
         .clientVersion     = bytes::fromField(h.clientVersion),
         .character         = { .contentId = h.contentId, .characterId = h.characterId, .name = bytes::fromField(h.characterName), .world = bytes::fromField(h.worldName) },
         .source            = {},
+        .blocks            = {},
+        .sourceIndex       = 0,
     };
     return h.blockCount;
 }
@@ -71,7 +73,7 @@ auto blockSize(const std::span<const uint8_t> first) -> uint64_t
     return sizeof(h) + uint64_t{ h.length } + sizeof(uint32_t);
 }
 
-auto readBlock(const std::span<const uint8_t> block, Metadata& out) -> uint32_t
+auto readBlock(const std::span<const uint8_t> block, Metadata& out) -> void
 {
     if (!bytes::endsWithCrc(block))
     {
@@ -82,10 +84,17 @@ auto readBlock(const std::span<const uint8_t> block, Metadata& out) -> uint32_t
     const auto payload = block.subspan(sizeof(h), h.length);
     if (h.type == format::BLOCK_SOURCE)
     {
-        out.source = readSource(payload);
+        if (out.source)
+        {
+            throw Error("xicap: a second source block");
+        }
+
+        out.source      = readSource(payload);
+        out.sourceIndex = out.blocks.size();
+        return;
     }
 
-    return h.type;
+    out.blocks.push_back({ .type = h.type, .payload = { payload.begin(), payload.end() } });
 }
 
 } // namespace xicap::metadata

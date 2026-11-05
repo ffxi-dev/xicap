@@ -5,6 +5,10 @@ option(XICAP_FETCH_ZSTD "Build zstd from source even when the system has it" OFF
 option(XICAP_BUILD_TESTS "Build the tests" OFF)
 option(XICAP_BUILD_FUZZERS "Build the libFuzzer targets (Clang)" OFF)
 
+if(XICAP_BUILD_FUZZERS AND XICAP_BUILD_TESTS)
+    message(FATAL_ERROR "XICAP_BUILD_FUZZERS skips CRC checks in the library; build the tests in another directory")
+endif()
+
 if(NOT XICAP_FETCH_ZSTD)
     find_package(zstd CONFIG QUIET)
     if(NOT zstd_FOUND)
@@ -49,6 +53,13 @@ target_include_directories(xicap PUBLIC include PRIVATE src)
 target_compile_features(xicap PUBLIC cxx_std_23)
 target_link_libraries(xicap PRIVATE ${XICAP_ZSTD})
 
+if(XICAP_BUILD_FUZZERS)
+    target_compile_options(xicap PRIVATE -fsanitize=fuzzer-no-link,address)
+    target_compile_definitions(xicap PRIVATE FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION)
+    add_subdirectory(tests/fuzz)
+endif()
+
 if(XICAP_BUILD_TESTS)
+    enable_testing()
     add_subdirectory(tests)
 endif()

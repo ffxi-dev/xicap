@@ -1,23 +1,29 @@
 #include "frame/encoder.h"
 #include "format/layout.h"
 
-#include <algorithm>
 #include <format>
+#include <utility>
 
 namespace xicap::frame
 {
 
 Encoder::Encoder(const FramePolicy& policy)
-: cctx_(ZSTD_createCCtx())
+: cctx_(ZSTD_createCCtx(), ZSTD_freeCCtx)
 {
     if (!cctx_)
     {
         throw Error("xicap: cannot create a zstd compressor");
     }
 
-    ZSTD_CCtx_setParameter(cctx_.get(), ZSTD_c_compressionLevel, policy.compressionLevel);
-    ZSTD_CCtx_setParameter(cctx_.get(), ZSTD_c_windowLog, std::clamp(policy.windowLog, 10, format::MAX_WINDOW_LOG));
-    ZSTD_CCtx_setParameter(cctx_.get(), ZSTD_c_hashLog, policy.hashLog);
+    for (const auto [parameter, value] : { std::pair{ ZSTD_c_compressionLevel, policy.compressionLevel },
+                                           std::pair{ ZSTD_c_windowLog, policy.windowLog },
+                                           std::pair{ ZSTD_c_hashLog, policy.hashLog } })
+    {
+        if (const auto rc = ZSTD_CCtx_setParameter(cctx_.get(), parameter, value); ZSTD_isError(rc))
+        {
+            throw Error(std::format("xicap: zstd: {}", ZSTD_getErrorName(rc)));
+        }
+    }
 }
 
 auto Encoder::compress(const std::span<const uint8_t> plain) -> std::vector<uint8_t>

@@ -1,17 +1,13 @@
 # xicap
 
 A file format and C++23 library for recording Final Fantasy XI network
-packets, with readers for Go, Python, and JavaScript.
+packets, with Go, Python, and JavaScript bindings.
 
-A capture holds one character's session: a header and packets in frames. Each frame stores its packets in columns and continues one
-zstd stream, so captures are small, and each frame can be read as soon as it
-is written: a capture can upload while it records, and a capture cut off by a
-crash reads up to its last whole frame. Every block and frame carries a CRC.
-Writers zero the text of chat before it reaches disk, keeping each packet's
-layout, unless told to keep chat.
+A capture holds one character's session. Frames store packets in columns in a
+zstd stream. A cut-off capture reads up to its last valid frame. Writers zero
+chat text unless configured to keep it.
 
-[FORMAT.md](FORMAT.md) specifies the format, with enough detail to write a
-reader from it alone.
+[FORMAT.md](FORMAT.md) specifies the format.
 
 ## C++
 
@@ -56,6 +52,19 @@ ctest --test-dir build
 Projects that use CMake can add the library with `FetchContent` and link
 `xicap`.
 
+A writer frames and compresses by a `FramePolicy`. The two presets:
+
+| | `FramePolicy::live()`, the default | `FramePolicy::archive()` |
+|---|---|---|
+| zstd level | 7 | 19 |
+| window | 2 MiB | 8 MiB |
+| match table (`hashLog`) | 2^19 | the level's own |
+| frame ends | 5 s, 1,000 packets, 64 KiB of plaintext, `flush()` | 1 MiB of plaintext |
+
+File readers expose the trailer's completion status, end timestamp and packet
+count. Without a valid trailer, completion is false and the numeric fields are
+zero.
+
 ## Go
 
 ```go
@@ -68,7 +77,7 @@ for {
     ...                  // p.Timestamp, p.Flags, p.Channel, p.Opcode, p.Data, p.Markers
 }
 
-w, err := xicap.Create("session.xicap", xicap.WriterInfo{CaptureAgent: "MyRecorder 1.0", Character: c})
+w, err := xicap.Create("session.xicap", xicap.Metadata{CaptureAgent: "MyRecorder 1.0", Character: c}, xicap.WriterOptions{})
 w.Write(xicap.OutPacket{Timestamp: ms, Data: bytes})
 w.Close()
 
@@ -77,10 +86,6 @@ err = xicap.Transcode("upload.xicap", "archived.xicap")
 
 The package builds the C++ library with cgo, so it needs a C++23 compiler and
 libzstd (`apt install libzstd-dev`).
-
-In every binding, `complete`, `endTimestamp`, and `packetCount` come from the
-trailer, so a reader knows them before reading a packet, and are 0 in a
-cut-off capture. For a cut-off capture, count the packets as you read them.
 
 ## Python
 
@@ -93,13 +98,14 @@ import xicap
 
 r = xicap.Reader("session.xicap")   # r.metadata, r.complete, r.packet_count, r.end_timestamp
 for p in r:
-    ...  # p.timestamp, p.channel, p.opcode, p.flags, p.direction, p.data (bytes), p.markers
+    ...  # p.timestamp, p.channel, p.opcode, p.flags, p.data (bytes), p.markers
 ```
 
 ## JavaScript
 
 The library compiled to WebAssembly, for browsers and Node 17 or later. Build
-it in `bindings/js/` with Emscripten and Ninja on the path: `npm ci && npm run build`.
+it in `bindings/js/` with Emscripten and Ninja on the path:
+`npm ci && npm run build`.
 
 ```js
 import { Reader, StreamReader } from "./bindings/js/dist/index.js";
@@ -119,11 +125,10 @@ s.close();
   `tests/reference_reader.py`, a reader written from FORMAT.md alone that CI
   runs over the vectors. Regenerate the vectors with
   `build/tests/make_vectors tests/vectors`.
-- `tests/vectors/` holds captures with the reading each must give. The C++
-  tests and each binding read all of them.
-- The bindings wrap the C++ library; none reimplements the format.
-- The fuzzers in `tests/fuzz/` need Clang (`-DXICAP_BUILD_FUZZERS=ON`). CI
-  does not build them; run them by hand after changing a decoder.
+- Run the fuzzers in `tests/fuzz/` after changing a decoder. They need Clang:
+  `cmake -S . -B build-fuzz -G Ninja -DCMAKE_CXX_COMPILER=clang++ -DXICAP_BUILD_FUZZERS=ON`,
+  `cmake --build build-fuzz`, then `build-fuzz/tests/fuzz/fuzz_reader`. CI does
+  not build them.
 - A release sets its version in `CMakeLists.txt`, which the Python package
   reads too, then tags `v<version>`. A major release also changes the `/vN`
   suffix of the module path in `go.mod` and in the Go import above.

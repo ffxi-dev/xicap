@@ -3,6 +3,7 @@
 #include "metadata/codec.h"
 #include "xicap/xicap.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <exception>
@@ -24,6 +25,58 @@ auto guarded(F&& f) -> char*
     {
         return strdup(e.what());
     }
+}
+
+auto toC(const xicap::Metadata& m) -> xicap_metadata
+{
+    const auto* const s   = m.source ? &*m.source : nullptr;
+    auto              out = xicap_metadata{
+        .capture_id            = {},
+        .previous_capture_id   = {},
+        .start_timestamp       = m.startTimestamp,
+        .origin                = static_cast<uint8_t>(m.origin),
+        .server_kind           = static_cast<uint8_t>(m.serverKind),
+        .capture_agent         = m.captureAgent.c_str(),
+        .client_version        = m.clientVersion.c_str(),
+        .content_id            = m.character.contentId,
+        .character_id          = m.character.characterId,
+        .character_name        = m.character.name.c_str(),
+        .world_name            = m.character.world.c_str(),
+        .has_source            = s != nullptr,
+        .source_format         = s ? s->format.c_str() : nullptr,
+        .source_format_version = s ? s->formatVersion.c_str() : nullptr,
+        .skipped_records       = s ? s->skippedRecords : 0,
+        .source_metadata       = s ? s->metadata.data() : nullptr,
+        .source_metadata_size  = s ? s->metadata.size() : 0,
+    };
+    std::ranges::copy(m.captureId, out.capture_id);
+    std::ranges::copy(m.previousCaptureId, out.previous_capture_id);
+    return out;
+}
+
+auto fromC(const xicap_metadata& c) -> xicap::Metadata
+{
+    auto m = xicap::Metadata{
+        .startTimestamp = c.start_timestamp,
+        .origin         = static_cast<xicap::Origin>(c.origin),
+        .serverKind     = static_cast<xicap::ServerKind>(c.server_kind),
+        .captureAgent   = c.capture_agent,
+        .clientVersion  = c.client_version,
+        .character      = { .contentId = c.content_id, .characterId = c.character_id, .name = c.character_name, .world = c.world_name },
+    };
+    std::ranges::copy(c.capture_id, m.captureId.begin());
+    std::ranges::copy(c.previous_capture_id, m.previousCaptureId.begin());
+    if (c.has_source)
+    {
+        m.source = xicap::Source{
+            .format         = c.source_format,
+            .formatVersion  = c.source_format_version,
+            .skippedRecords = c.skipped_records,
+            .metadata       = { c.source_metadata, c.source_metadata + c.source_metadata_size },
+        };
+    }
+
+    return m;
 }
 
 } // namespace
@@ -56,29 +109,11 @@ extern "C"
         return guarded([&]
                        {
                            auto* const r = new xicap_reader{ .reader = xicap::Reader(path) };
-                           const auto& m = r->reader.metadata();
-                           const auto* s = m.source ? &*m.source : nullptr;
                            *info         = {
-                               .capture_id            = m.captureId.data(),
-                               .previous_capture_id   = m.previousCaptureId.data(),
-                               .start_timestamp       = m.startTimestamp,
-                               .origin                = static_cast<uint8_t>(m.origin),
-                               .server_kind           = static_cast<uint8_t>(m.serverKind),
-                               .capture_agent         = m.captureAgent.c_str(),
-                               .client_version        = m.clientVersion.c_str(),
-                               .content_id            = m.character.contentId,
-                               .character_id          = m.character.characterId,
-                               .character_name        = m.character.name.c_str(),
-                               .world_name            = m.character.world.c_str(),
-                               .has_source            = s != nullptr,
-                               .source_format         = s ? s->format.c_str() : nullptr,
-                               .source_format_version = s ? s->formatVersion.c_str() : nullptr,
-                               .skipped_records       = s ? s->skippedRecords : 0,
-                               .source_metadata       = s ? s->metadata.data() : nullptr,
-                               .source_metadata_size  = s ? s->metadata.size() : 0,
-                               .complete              = r->reader.complete(),
-                               .end_timestamp         = r->reader.endTimestamp(),
-                               .packet_count          = r->reader.packetCount(),
+                               .metadata      = toC(r->reader.metadata()),
+                               .complete      = r->reader.complete(),
+                               .end_timestamp = r->reader.endTimestamp(),
+                               .packet_count  = r->reader.packetCount(),
                            };
                            *out = r;
                        });
@@ -119,30 +154,13 @@ extern "C"
         delete r;
     }
 
-    auto xicap_writer_open(const char* const path, const xicap_writer_info* const info, xicap_writer** const out) -> char*
+    auto xicap_writer_open(const char* const path, const xicap_metadata* const metadata, const bool keep_chat, const bool archive, xicap_writer** const out) -> char*
     {
         return guarded([&]
                        {
-                           auto m = xicap::Metadata{
-                               .origin        = static_cast<xicap::Origin>(info->origin),
-                               .serverKind    = static_cast<xicap::ServerKind>(info->server_kind),
-                               .captureAgent  = info->capture_agent,
-                               .clientVersion = info->client_version,
-                               .character     = { .contentId = info->content_id, .characterId = info->character_id, .name = info->character_name, .world = info->world_name },
-                           };
-                           if (info->has_source)
-                           {
-                               m.source = xicap::Source{
-                                   .format         = info->source_format,
-                                   .formatVersion  = info->source_format_version,
-                                   .skippedRecords = info->skipped_records,
-                                   .metadata       = { info->source_metadata, info->source_metadata + info->source_metadata_size },
-                               };
-                           }
-
-                           const auto policy = info->archive ? xicap::FramePolicy::archive() : xicap::FramePolicy::live();
-                           const auto chat   = info->keep_chat ? xicap::Chat::Keep : xicap::Chat::Redact;
-                           *out              = new xicap_writer{ xicap::Writer(path, std::move(m), policy, chat) };
+                           const auto policy = archive ? xicap::FramePolicy::archive() : xicap::FramePolicy::live();
+                           const auto chat   = keep_chat ? xicap::Chat::Keep : xicap::Chat::Redact;
+                           *out              = new xicap_writer{ xicap::Writer(path, fromC(*metadata), policy, chat) };
                        });
     }
 

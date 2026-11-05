@@ -34,7 +34,7 @@ struct FramePolicy
     {
         return {
             .maxFrameSize       = size_t{ 1024 } * 1024,
-            .maxPacketsPerFrame = UINT32_MAX,
+            .maxPacketsPerFrame = 1024 * 1024,
             .maxFrameTimeMs     = UINT64_MAX,
             .compressionLevel   = 19,
             .windowLog          = 23,

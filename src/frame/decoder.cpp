@@ -6,7 +6,7 @@ namespace xicap::frame
 {
 
 Decoder::Decoder()
-: dctx_(ZSTD_createDCtx())
+: dctx_(ZSTD_createDCtx(), ZSTD_freeDCtx)
 {
     if (!dctx_)
     {

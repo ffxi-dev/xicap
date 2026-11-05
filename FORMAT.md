@@ -1,26 +1,21 @@
 # xicap format
 
-Format 5. This document is normative: a reader built from it alone, with the
-references below, must read every capture the library writes.
+Format version 5. This specification is normative. It is a draft: until the
+format is declared stable, a change may break compatibility.
 
-Paragraphs that start with **Why** give the reason for a choice. They are not
-rules.
-
-**Status: draft.** Until the format is declared stable, a change may break
-compatibility.
+A capture holds one character's session.
 
 ## Conventions
 
 - Every integer is little-endian. Structures are byte-packed, with no padding.
 - Offsets and sizes are in bytes; a KiB is 2^10 bytes and a MiB 2^20. `u8`,
   `u16`, `u32`, `u64` are unsigned.
-- A text field of N bytes holds UTF-8, padded with zero bytes. It holds at
-  most N - 1 bytes of text, cut only between characters, so it always ends
-  with a zero byte. A reader takes the text up to the first zero byte, or the
+- Writers encode text, in fields and markers, as UTF-8. An N-byte text field
+  holds at most N - 1 bytes of text, cut at a character boundary and padded
+  with zero bytes. A reader takes the text up to the first zero byte, or the
   whole field if it finds none.
-- Text, in fields and markers, is UTF-8, and writers write nothing else. A
-  reader that finds bytes that are not UTF-8 does not refuse the file; it may
-  yield them as stored or replace them with U+FFFD.
+- A reader accepts text that is not UTF-8, and may yield it as stored or
+  replace the bad bytes with U+FFFD.
 - Timestamps are milliseconds since the Unix epoch, in UTC.
 - A byte range `a..b` includes byte `a` and stops before byte `b`.
 - A **varint** is unsigned LEB128: 7 bits per byte, low bits first, the high
@@ -38,7 +33,6 @@ compatibility.
 |-----------|----------|
 | CRC-32 | Polynomial `0x04C11DB7` reflected (`0xEDB88320`), initial value `0xFFFFFFFF`, final XOR `0xFFFFFFFF` (CRC-32/ISO-HDLC, as zlib computes it). The CRC of ASCII `123456789` is `0xCBF43926`. |
 | zstd | RFC 8878. |
-| LEB128 | Unsigned LEB128, as DWARF and WebAssembly use it. |
 
 ## File layout
 
@@ -54,20 +48,11 @@ compatibility.
 +--------------------+
 ```
 
-A writer only appends, and never changes what it has written, so every copy of
-a file being recorded is a prefix of the finished file. A file whose last 24
-bytes are a valid trailer is **complete**. A file without one is **cut off**:
-the recorder crashed, or is still recording. A trailer whose CRC fails is not a
-valid trailer, so a file that ends with one is cut off.
-
-**Why** append only: a recorder uploads a file while it grows, and a game
-client can be killed at any moment. Either way, the bytes on hand already read
-as a capture.
+Writers append without modifying earlier bytes. A file whose last 24 bytes are
+a valid trailer, one with the `XCPF` magic and a matching CRC, is **complete**.
+A file without one is **cut off**: the recorder crashed, or is still recording.
 
 ## Header
-
-A writer writes the header, with every field final, along with the first
-frame, or when it closes a capture that holds no packet.
 
 | Off | Size | Field | Notes |
 |----:|-----:|-------|-------|
@@ -94,12 +79,6 @@ The magic follows PNG's:
     X  C  P \r \n ^Z \n
 ```
 
-**Why** PNG's pattern: a transfer that rewrites line ends, strips the high bit,
-or stops at `^Z` breaks the magic, so the damage shows at the first bytes.
-
-A capture holds one character's session. A recorder that starts a capture after
-a login, or after a crash, sets `previousCaptureId` to the capture it
-continues, if it knows it.
 
 ## Blocks
 
@@ -114,8 +93,8 @@ continues, if it knows it.
 |-----:|------|---------|---------|
 | `2` | source | at most once, in converted captures | [Source](#source) |
 
-Readers skip blocks of other types. A later version of this document may
-define them; types from `0x8000` are for other programs.
+Readers skip blocks of other types. Types from `0x8000` are for other
+programs.
 
 ### Source
 
@@ -146,21 +125,8 @@ A frame holds packets: a 28-byte header, the payload, and a CRC.
 The payloads of the file's frames, in order, are one zstd stream (RFC 8878)
 with no dictionary and a window of at most 8 MiB. Each frame's payload, fed to
 a decoder that has decoded the payloads before it, yields exactly `plainSize`
-bytes with no later input. So a frame decodes as soon as it is written, but
-only after the frames before it. A writer flushes the stream at the end of
-each frame; it need not end the zstd frame.
-
-**Why** one stream: zstd's window then spans frames, which makes files
-smaller, and a frame still decodes as soon as it is written. The cost is that a
-reader cannot seek inside a file or read past damage: one bad byte loses the
-rest of the file. A reader that needs to seek can build its own index, and an
-archive keeps a hash and a backup of each file. A dictionary was tried and
-dropped: one trained on real captures held player names verbatim, and level 12
-without one was already smaller than with it.
-
-**Why** a CRC per frame: zstd's own checksum sits at the end of a zstd frame,
-which a file still recording never reaches. The CRC checks each frame as it
-arrives.
+bytes with no later input. A writer flushes the stream at the end of each
+frame; it need not end the zstd frame.
 
 ### Plaintext
 
@@ -184,8 +150,8 @@ packet of the frame up to and including its own.
 
 A **group** is every packet of the frame with the same channel, direction
 (`flags` bit 0), and opcode. Groups are ordered by their first packet. A reader
-learns the groups from sections 2 to 4, so section 8 holds no keys. A group's
-bytes are its packets' bytes in packet order.
+learns the groups from sections 2 to 4. A group's bytes are its packets' bytes
+in packet order.
 
 On the game channel, a packet sits in its group with bytes 2 and 3, its sync
 counter, set to zero; the reader puts back the sync from section 6. A writer
@@ -205,19 +171,8 @@ A marker marks a moment between two packets, so it sits just before the next
 packet written after it. A marker with no packet after it when the capture
 closes is dropped. A frame's markers follow the order they were written in.
 
-**Decoding** is one pass. Read sections 1 to 7 front to back, each counted by
-`packetCount`, the number of game-channel packets, or `markerCount`. Find the
-groups from sections 2 to 4, read section 8, and check that the group sizes add
-up to the bytes left. Then, packet by packet, take the next bytes from the
-packet's group: for a game-channel packet, its 4-byte header first, which gives
-`size` when `length` is 0, then the rest, then put back its sync.
-
-**Why** columns: zstd finds more to reuse when like bytes sit together. A
-14-hour capture at level 19 took 10.73 MB with each packet's fields and bytes
-in a row, 9.96 MB with the fields in columns and the bytes in groups, and 8.50
-MB once the sync counters moved to their own column. Coding entity updates as
-deltas gained nothing. Columns for the fields of single opcodes were left out,
-since packet layouts change between client versions.
+To decode a game-channel packet, read its 4-byte header from its group first,
+which gives its length when `length` is 0, then restore its sync from section 6.
 
 #### Packet flags
 
@@ -268,27 +223,18 @@ number.
 
 The first 4 bytes of a game packet are its FFXI header:
 
-```
-byte 0     byte 1             byte 2     byte 3
-[id_lo:8]  [size:7 | id_hi:1] [sync_lo:8] [sync_hi:8]
-```
-
-Byte 1 holds bit 8 of `id` in its lowest bit and `size` in its high 7 bits:
-
 - `id` = `u16(bytes 0..2) & 0x01FF`
 - `size` = `u16(bytes 0..2) >> 9`, in 4-byte words
 - `sync` = `u16(bytes 2..4)`, a sequence counter per direction
 
-A writer refuses a game packet shorter than 4 bytes, and sets `opcode` to its
-`id`.
+A writer refuses a game packet shorter than 4 bytes.
 
 ## Redaction
 
-A writer zeroes the text players write to each other before it compresses the
-packet, so that text never reaches the file. It zeroes the bytes below in each
-game-channel packet with this opcode and direction, stopping at the packet's
-end, and sets the packet's redacted flag. The packet keeps its length and
-every other field. Offsets count the 4-byte header.
+A writer zeroes the ranges below in each game-channel packet with the listed
+opcode and direction, before compression, and sets the packet's redacted flag.
+A range that runs past the packet's end stops there. The packet keeps its
+length and every byte outside the ranges. Offsets count the 4-byte header.
 
 | Opcode | Direction | Packet | Zeroed |
 |-------:|-----------|--------|--------|
@@ -299,18 +245,13 @@ every other field. Offsets count the 4-byte header.
 | `0x0CC` | to the client | linkshell message board | `0x08`, 128 bytes (`sMessage`) |
 | `0x0E2` | from the client | linkshell message board post | `0x10`, 128 bytes (`sMessage`) |
 
-Opcodes and field names follow atom0s's XiPackets. A writer told to keep chat
-zeroes nothing, so a packet in the table without the redacted flag holds its
-text as written. Changing the table needs a new format version.
+Opcodes and field names follow atom0s's XiPackets. When configured to keep
+chat, writers preserve those bytes. Changing the table needs a new format
+version.
 
 A packet with the excluded flag is a stub: it holds only its 4-byte game
 header, and keeps its timestamp, channel, direction, provenance flags, and
-opcode. Writers no longer write stubs; captures converted from older formats,
-which cut chat packets to their header, still hold them.
-
-**Why** zero in place: a capture should still parse in ten years, with every
-field where the packet's layout puts it. Zeroing only the text keeps the
-length and every other field.
+opcode. Converted captures may preserve four-byte stubs from older formats.
 
 ## Trailer
 
@@ -320,9 +261,6 @@ length and every other field.
 | 4 | 8 | `endTimestamp` | the last packet's timestamp; `0` if none |
 | 12 | 8 | `packetCount` | packets in the file |
 | 20 | 4 | `crc` | CRC-32 of trailer bytes `0..20` |
-
-The last 24 bytes of a complete file are its trailer, so a reader can learn
-the end time from them alone, and check that it read every packet.
 
 ## Reading
 
@@ -338,8 +276,7 @@ A reader refuses the file, wherever it meets the cause, when:
 - its frames end at a valid trailer that is not the file's last 24 bytes, or
   the trailer's `packetCount` or `endTimestamp` differs from the packets read.
 
-A reader that has already passed on packets reports the refusal, and its
-caller drops them.
+A refusal found after packets were passed on refuses the whole file.
 
 A **bad frame** is one that is cut short, lacks the `XCFR` magic, has a
 `payloadSize` over 17 MiB, fails its CRC, has a `plainSize` or `packetCount`
@@ -358,8 +295,7 @@ out of range, makes the zstd decoder fail, does not decode to exactly
 - the first packet's `deltaMs` is not 0, or a timestamp passes 2^64 − 1;
 - its `baseTimestamp` is earlier than the last packet of the frame before it.
 
-Since a frame decodes only after the frames before it, the frames after a bad
-one cannot be read. A cut-off file ends at its first bad frame.
+A cut-off file ends at its first bad frame.
 
 A reader of a file that arrives as it downloads reads frames until it meets a
 valid trailer, or bytes that are neither a whole, valid frame nor a valid
@@ -377,50 +313,26 @@ if it reads.
 - **Frames.** A writer ends the frame being built before adding a packet that
   would push its `deltaMs` past 2^32 − 1, its `packetCount` past 1,048,576, or
   its plaintext past 16 MiB. It also ends frames by its own settings and when
-  its host asks it to. The library's two settings:
-
-  | | live (the default) | archive |
-  |---|---|---|
-  | zstd level | 7 | 19 |
-  | window | 2 MiB | 8 MiB |
-  | match table (`hashLog`) | 2^19 | the level's own |
-  | frame ends | 5 s, 1,000 packets, 64 KiB of plaintext, host flush | 1 MiB of plaintext |
-
-  **Why** two settings: a recorder runs inside a 32-bit game, where level 7
-  with a 2^19 match table needs about 5.5 MB of memory; level 12 needs about
-  40 MB and level 19 about 81 MB. An archive rewrites each capture once, at
-  level 19. xz would make archived files about 12% smaller, but it would mean a
-  second decoder in every reader for ten years, and it decodes about seven
-  times slower.
-
+  its host asks it to.
+- **Header.** A writer writes the header and blocks with the first frame, or at
+  close for an empty capture, so `startTimestamp` is final.
 - **Durability.** A writer hands each frame to the operating system as soon as
   it is written. After a write fails, it writes nothing more, trailer
   included, so the file reads as cut off before the failure.
-- **Empty captures** still get a header, their blocks, and a trailer.
+- **Empty captures** have a header, their blocks, and a trailer.
 - **Rewriting.** A program may rewrite a capture with other frames and
   compression. It keeps the header's fields, the blocks, and every packet and
   marker in order; the bytes depend on the compressor.
 
-**Why** no signatures: format 4 signed packets with a key on the recorder's
-PC. The person recording controls that key, so a signature cannot show that a
-capture is real play, only which key signed it. An archive already knows who
-uploaded each file and can keep its SHA-256. A rewrite is checked by comparing
-the decoded packets, not by keeping a signature valid.
-
 ## Conformance
 
 `tests/vectors/` holds test files, each with a JSON file of its expected
-reading. The C++ library and every binding read all of them in CI, and
-`tests/reference_reader.py`, a reader written from this document alone, reads
-them too.
-
-A refused file's JSON is `{"refused": true}`. Any other holds `refused`,
-`complete`, `endTimestamp` and `packetCount` from the trailer (both `0` in a
-cut-off file), `metadata`, and `packets`. Header text fields are JSON strings;
-capture ids, source metadata, packet bytes, and marker text are lowercase hex.
-Each packet lists
-`timestamp`, `flags`, `channel`, `opcode`, `data`, and `markers`, each marker
-with its `kind` and `text`.
+reading. A refused file's JSON is `{"refused": true}`. Any other holds
+`refused`, `complete`, `endTimestamp` and `packetCount` from the trailer (both
+`0` in a cut-off file), `metadata`, and `packets`. Header text fields are JSON
+strings; capture ids, source metadata, packet bytes, and marker text are
+lowercase hex. Each packet lists `timestamp`, `flags`, `channel`, `opcode`,
+`data`, and `markers`, each marker with its `kind` and `text`.
 
 ## Worked example
 
@@ -454,6 +366,6 @@ conformance file and that it reads them.
 
 ## Versioning
 
-A reader refuses a version other than 5. Changes old readers already handle as
-this document says, such as a new channel, marker kind, or block type, keep
-version 5. Any other change gets a new version.
+Changes old readers already handle as this document says, such as a new
+channel, marker kind, or block type, keep version 5. Any other change gets a
+new version.

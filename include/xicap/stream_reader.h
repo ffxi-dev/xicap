@@ -11,8 +11,6 @@
 namespace xicap
 {
 
-// Reads a capture as its bytes arrive, as a download does. It holds the frame being received and the zstd history,
-// nothing more.
 class StreamReader
 {
 public:

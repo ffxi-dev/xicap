@@ -23,13 +23,3 @@ target_include_directories(make_vectors PRIVATE ${PROJECT_SOURCE_DIR}/src)
 
 include(${catch2_SOURCE_DIR}/extras/Catch.cmake)
 catch_discover_tests(xicap_tests)
-
-if(XICAP_BUILD_FUZZERS)
-    foreach(target reader columns)
-        add_executable(fuzz_${target} fuzz/${target}.cpp)
-        target_link_libraries(fuzz_${target} PRIVATE xicap ${XICAP_ZSTD})
-        target_include_directories(fuzz_${target} PRIVATE ${PROJECT_SOURCE_DIR}/src)
-        target_compile_options(fuzz_${target} PRIVATE -fsanitize=fuzzer)
-        target_link_options(fuzz_${target} PRIVATE -fsanitize=fuzzer)
-    endforeach()
-endif()

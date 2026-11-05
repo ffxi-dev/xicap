@@ -9,7 +9,6 @@ VECTORS = sorted((Path(__file__).parents[3] / "tests" / "vectors").glob("*.json"
 
 
 def describe(r, packets):
-    """The reading as the vectors' JSON holds it."""
     m, c, s = r.metadata, r.metadata.character, r.metadata.source
     return {
         "refused": False,
@@ -61,4 +60,16 @@ def test_vector(path):
     r = xicap.Reader(capture)
     packets = list(r)
     assert describe(r, packets) == want
-    assert [int(p.direction) for p in packets] == [p.flags & 1 for p in packets]
+
+
+def test_constants_compare_with_what_the_reader_returns():
+    r = xicap.Reader(Path(__file__).parents[3] / "tests" / "vectors" / "5-packets.xicap")
+    packets = list(r)
+    assert r.metadata.origin == xicap.Origin.Live and r.metadata.server_kind == xicap.ServerKind.Retail
+    assert any(p.channel == xicap.Channel.Game for p in packets)
+    assert any(p.channel == xicap.Channel.Search for p in packets)
+    unknown = [p.channel for p in packets if p.channel not in (xicap.Channel.Game, xicap.Channel.Search)]
+    assert unknown == [7] and type(unknown[0]) is int
+    kinds = [m.kind for p in packets for m in p.markers]
+    assert xicap.MarkerKind.Login in kinds and 9 in kinds
+    assert any(p.flags & xicap.PacketFlag.ClientToServer for p in packets)

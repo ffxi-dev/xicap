@@ -112,19 +112,22 @@ auto decode(const std::span<const uint8_t> plain, const uint32_t packetCount, co
         });
     }
 
-    std::vector<uint32_t> group;
-    const auto            sizes = column(plain, pos, 32, assignGroups(out.packets, group));
-    std::vector<size_t>   cursor(sizes.size());
-    std::vector<size_t>   end(sizes.size());
-    auto                  at = pos;
+    std::vector<uint32_t>                 group;
+    const auto                            sizes = column(plain, pos, 32, assignGroups(out.packets, group));
+    std::vector<std::span<const uint8_t>> rest(sizes.size());
+    auto                                  unread = plain.subspan(pos);
     for (size_t g{ 0 }; g < sizes.size(); ++g)
     {
-        cursor[g] = at;
-        at += sizes[g];
-        end[g] = at;
+        if (sizes[g] > unread.size())
+        {
+            bad("group sizes do not add up");
+        }
+
+        rest[g] = unread.first(sizes[g]);
+        unread  = unread.subspan(sizes[g]);
     }
 
-    if (at != plain.size())
+    if (!unread.empty())
     {
         bad("group sizes do not add up");
     }
@@ -135,8 +138,7 @@ auto decode(const std::span<const uint8_t> plain, const uint32_t packetCount, co
     for (uint32_t i{ 0 }; i < packetCount; ++i)
     {
         auto&      p      = out.packets[i];
-        const auto g      = group[i];
-        const auto left   = plain.subspan(cursor[g], end[g] - cursor[g]);
+        auto&      left   = rest[group[i]];
         const auto length = [&]() -> size_t
         {
             if (!isGame(p.channel))
@@ -171,10 +173,11 @@ auto decode(const std::span<const uint8_t> plain, const uint32_t packetCount, co
             bad("packet does not fit its group");
         }
 
-        p.offset = out.bytes.size();
-        p.length = length;
-        out.bytes.insert(out.bytes.end(), left.begin(), left.begin() + static_cast<std::ptrdiff_t>(length));
-        cursor[g] += length;
+        p.offset         = out.bytes.size();
+        p.length         = length;
+        const auto taken = left.first(length);
+        out.bytes.insert(out.bytes.end(), taken.begin(), taken.end());
+        left = left.subspan(length);
         if (isGame(p.channel))
         {
             auto& last              = lastSync[p.flags & PacketFlag::ClientToServer];
@@ -184,7 +187,10 @@ auto decode(const std::span<const uint8_t> plain, const uint32_t packetCount, co
         }
     }
 
-    if (cursor != end)
+    if (!std::ranges::all_of(rest, [](const std::span<const uint8_t> r)
+                             {
+                                 return r.empty();
+                             }))
     {
         bad("group bytes left over");
     }

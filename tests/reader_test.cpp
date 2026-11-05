@@ -31,7 +31,7 @@ TEST_CASE("a cut-off file reads up to its last whole frame, wherever it was cut"
 
     const test::TempFile cut;
     Writer(cut, test::metadata()).close();
-    const auto blocksEnd = std::filesystem::file_size(cut.path()) - 24;
+    const auto blocksEnd = std::filesystem::file_size(cut) - 24;
     size_t     previous{ 0 };
     for (auto size = blocksEnd; size < bytes.size(); ++size)
     {
@@ -56,4 +56,19 @@ TEST_CASE("a file that is not a whole capture start is refused")
     test::save(file, bytes);
     CHECK_THROWS_AS(Reader(file), Error);
     CHECK_THROWS_AS(Reader("no such file"), Error);
+}
+
+TEST_CASE("a reader refuses bytes after a trailer that ends a read chunk")
+{
+    // 160 bytes of header, a 65,340-byte block with its 12 bytes of framing, and a 24-byte trailer: 64 KiB.
+    const test::TempFile file;
+    auto                 m = test::metadata();
+    m.blocks               = { { .type = 0x8001, .payload = std::vector<uint8_t>(65'340) } };
+    Writer(file, m).close();
+    auto bytes = test::bytesOf(file);
+    REQUIRE(bytes.size() == size_t{ 64 } * 1024);
+    CHECK(test::readAll(file).empty());
+    bytes.push_back(0);
+    test::save(file, bytes);
+    CHECK_THROWS_AS(test::readAll(file), Error);
 }

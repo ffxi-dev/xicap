@@ -1,9 +1,9 @@
-"""A reader written from FORMAT.md alone, to show the document is enough to read every capture.
+"""Independent FORMAT.md conformance reader.
 
     python reference_reader.py <vectors dir>      reads each vector and compares with its JSON
     python reference_reader.py --example FORMAT.md checks the worked example against its vector
 
-Needs the zstandard package. For tests only: it is slow and not a binding.
+Needs the zstandard package.
 """
 
 import json
@@ -28,7 +28,11 @@ class Bad(Exception):
 
 
 def text(field):
-    return field.split(b"\0", 1)[0]
+    return field.split(b"\0", 1)[0].decode(errors="replace")
+
+
+def decoder():
+    return zstandard.ZstdDecompressor(max_window_size=8 * MIB).decompressobj(read_across_frames=True)
 
 
 def crc_ok(b):
@@ -54,7 +58,7 @@ def source(p):
     if len(p) < 36:
         raise Refused("short source")
     fmt, version, skipped = struct.unpack_from("<16s16sI", p)
-    return {"format": text(fmt).decode(), "formatVersion": text(version).decode(), "skippedRecords": skipped, "metadata": p[36:].hex()}
+    return {"format": text(fmt), "formatVersion": text(version), "skippedRecords": skipped, "metadata": p[36:].hex()}
 
 
 def plaintext(plain, count, markers, base):
@@ -136,8 +140,8 @@ def read(b):
     cid, prev, start, agent, client, content, character, name, world = struct.unpack_from("<16s16sQ32s32sII16s16s", b, 12)
     meta = {
         "captureId": cid.hex(), "previousCaptureId": prev.hex(), "startTimestamp": start, "origin": origin, "serverKind": server_kind,
-        "captureAgent": text(agent).decode(), "clientVersion": text(client).decode(),
-        "character": {"contentId": content, "characterId": character, "name": text(name).decode(), "world": text(world).decode()},
+        "captureAgent": text(agent), "clientVersion": text(client),
+        "character": {"contentId": content, "characterId": character, "name": text(name), "world": text(world)},
         "source": None,
     }
     pos = 160
@@ -158,7 +162,7 @@ def read(b):
     complete = trailer[:4] == b"XCPF" and crc_ok(trailer)
     end = len(b) - 24 if complete else len(b)
 
-    packets, decoder, last = [], zstandard.ZstdDecompressor().decompressobj(), 0
+    packets, stream, last = [], decoder(), 0
     while pos < end:
         if b[pos : pos + 4] == b"XCPF" and pos + 24 <= len(b) and crc_ok(b[pos : pos + 24]):
             raise Refused("bytes follow a trailer")
@@ -170,8 +174,8 @@ def read(b):
                 raise Bad("bad frame")
             if not 1 <= plain_size <= 16 * MIB or not 1 <= count <= MIB or base < last:
                 raise Bad("frame out of range")
-            plain = decoder.decompress(b[pos + 28 : pos + 28 + size])
-            if len(plain) != plain_size:
+            plain = stream.decompress(b[pos + 28 : pos + 28 + size])
+            if len(plain) != plain_size or stream.unused_data:
                 raise Bad("wrong plain size")
             frame = plaintext(plain, count, markers, base)
         except (Bad, zstandard.ZstdError):
@@ -195,7 +199,20 @@ def describe(path):
         return {"refused": True}
 
 
+def check_stream():
+    z = zstandard.ZstdCompressor()
+    first, second = z.compress(b"a" * 10), z.compress(b"b" * 10)
+    stream = decoder()
+    assert stream.decompress(first) == b"a" * 10 and stream.decompress(second) == b"b" * 10, "ended zstd frames do not chain"
+    try:
+        decoder().decompress(first + b"junk")
+    except zstandard.ZstdError:
+        return
+    raise AssertionError("bytes after an ended zstd frame are accepted")
+
+
 def main(args):
+    check_stream()
     if args[:1] == ["--example"]:
         doc = Path(args[1]).read_text(encoding="utf-8").split("## Worked example", 1)[1]
         rows = re.findall(r"^[0-9a-f]{8}  ((?:[0-9a-f]{2} ?){1,16})", doc, re.M)

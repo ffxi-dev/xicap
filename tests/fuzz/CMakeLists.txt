@@ -1,0 +1,7 @@
+foreach(target reader columns)
+    add_executable(fuzz_${target} ${target}.cpp)
+    target_link_libraries(fuzz_${target} PRIVATE xicap ${XICAP_ZSTD})
+    target_include_directories(fuzz_${target} PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    target_compile_options(fuzz_${target} PRIVATE -fsanitize=fuzzer,address)
+    target_link_options(fuzz_${target} PRIVATE -fsanitize=fuzzer,address)
+endforeach()

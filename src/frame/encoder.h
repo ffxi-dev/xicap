@@ -21,15 +21,7 @@ public:
     [[nodiscard]] auto compress(std::span<const uint8_t> plain) -> std::vector<uint8_t>;
 
 private:
-    struct Free
-    {
-        auto operator()(ZSTD_CCtx* c) const noexcept -> void
-        {
-            ZSTD_freeCCtx(c);
-        }
-    };
-
-    std::unique_ptr<ZSTD_CCtx, Free> cctx_;
+    std::unique_ptr<ZSTD_CCtx, decltype(&ZSTD_freeCCtx)> cctx_;
 };
 
 } // namespace xicap::frame

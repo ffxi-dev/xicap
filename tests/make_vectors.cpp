@@ -23,7 +23,6 @@ using Bytes = std::vector<uint8_t>;
 
 constexpr uint64_t T0 = 1'767'225'600'000; // 2026-01-01T00:00:00Z
 
-// Overwrites the bytes at `at` with v.
 template <typename T>
 auto put(Bytes& b, const size_t at, const T& v) -> void
 {
@@ -46,9 +45,9 @@ auto layout(const Bytes& b) -> Layout
 {
     Layout l;
     size_t at{ sizeof(format::Header) };
-    for (size_t i{ 0 }; i < b[11]; ++i)
+    for (size_t i{ 0 }; i < b[offsetof(format::Header, blockCount)]; ++i)
     {
-        const auto size = size_t{ 12 } + bytes::load<uint32_t>(std::span{ b }, at + 4);
+        const auto size = sizeof(format::BlockHeader) + bytes::load<uint32_t>(std::span{ b }, at + offsetof(format::BlockHeader, length)) + 4;
         l.blocks.emplace_back(at, size);
         at += size;
     }
@@ -106,7 +105,7 @@ auto mixed(Writer& w) -> void
 
     w.mark(MarkerKind::Login);
     w.write(test::out(T0, zoneIn));
-    w.write({ .timestamp = T0 + 5, .direction = ClientToServer, .data = move, .provenance = PacketFlag::Modified | PacketFlag::FirstInChunk });
+    w.write({ .timestamp = T0 + 5, .direction = ClientToServer, .data = move, .provenance = PacketFlag::Modified | PacketFlag::FirstInDatagram });
     w.write(test::out(T0 + 9, chat));
     w.mark(MarkerKind::Note, "cap start \xE6\x88\xA6\xE3\x81\x84");
     w.write(test::out(T0 + 20, tell, ClientToServer));
@@ -183,7 +182,7 @@ auto main(int argc, char** argv) -> int
         block.insert(block.end(), { 'a', 'b', 'c' });
         bytes::appendCrc(block);
         b.insert(b.begin() + static_cast<std::ptrdiff_t>(at), block.begin(), block.end());
-        b[11]++;
+        b[offsetof(format::Header, blockCount)]++;
         fixCrc(b, 0, sizeof(format::Header));
         writeVector(dir, "5-unknown-block", b);
     }
@@ -205,7 +204,7 @@ auto main(int argc, char** argv) -> int
 
     {
         auto b = packets;
-        b[60] ^= 1;
+        b[offsetof(format::Header, captureAgent)] ^= 1;
         writeVector(dir, "5-bad-header-crc", b);
     }
 
@@ -219,14 +218,14 @@ auto main(int argc, char** argv) -> int
         auto       b     = converted;
         const auto block = layout(b).blocks[0];
         b.insert(b.begin() + static_cast<std::ptrdiff_t>(block.first + block.second), converted.begin() + static_cast<std::ptrdiff_t>(block.first), converted.begin() + static_cast<std::ptrdiff_t>(block.first + block.second));
-        b[11]++;
+        b[offsetof(format::Header, blockCount)]++;
         fixCrc(b, 0, sizeof(format::Header));
         writeVector(dir, "5-second-source", b);
     }
 
     {
-        auto b = packets;
-        b[8]   = 4;
+        auto b                               = packets;
+        b[offsetof(format::Header, version)] = 4;
         fixCrc(b, 0, sizeof(format::Header));
         writeVector(dir, "5-version-4", b);
     }

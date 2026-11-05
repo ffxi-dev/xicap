@@ -10,7 +10,6 @@
 namespace xicap
 {
 
-// A packet as a writer stores it.
 struct StoredPacket
 {
     uint16_t               opcode{};
