@@ -91,15 +91,17 @@ type Marker struct {
 	Timestamp uint64
 }
 
-// Summary is what Read learns from a capture. EndTimestamp and PacketCount come from the packets read, so a cut-off
-// capture has them too.
+// Summary is what Read learns from a capture. Complete, EndTimestamp, and PacketCount come from the trailer, as in the
+// other bindings, and are zero in a cut-off capture; the rest comes from reading every packet.
 type Summary struct {
 	Metadata
-	EndTimestamp uint64
-	PacketCount  uint64
-	Complete     bool    // a trailer ends the file
-	Channels     []uint8 // in order
-	Markers      []Marker
+	Complete      bool
+	EndTimestamp  uint64
+	PacketCount   uint64
+	LastTimestamp uint64
+	PacketsRead   uint64
+	Channels      []uint8 // in order
+	Markers       []Marker
 }
 
 func check(err *C.char) error {
@@ -146,9 +148,11 @@ func Read(path string) (Summary, error) {
 			},
 			Policy: Policy{Name: C.GoString(&s.policy_name[0]), Version: uint32(s.policy_version), Rules: int(s.policy_rules)},
 		},
-		EndTimestamp: uint64(s.end_timestamp),
-		PacketCount:  uint64(s.packet_count),
-		Complete:     bool(s.complete),
+		Complete:      bool(s.complete),
+		EndTimestamp:  uint64(s.end_timestamp),
+		PacketCount:   uint64(s.packet_count),
+		LastTimestamp: uint64(s.last_timestamp),
+		PacketsRead:   uint64(s.packets_read),
 	}
 	if s.has_source {
 		out.Source = &Source{

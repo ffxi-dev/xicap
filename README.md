@@ -63,7 +63,7 @@ Projects that use CMake can add the library with `FetchContent` and link
 import xicap "github.com/ffxi-dev/xicap/v7/bindings/go"
 
 s, err := xicap.Read("session.xicap")
-// s.Metadata, s.PacketCount, s.EndTimestamp, s.Complete, s.Channels, s.Markers
+// s.Metadata, s.Complete, s.EndTimestamp, s.PacketCount, s.LastTimestamp, s.PacketsRead, s.Channels, s.Markers
 
 w, err := xicap.Create("session.xicap", xicap.WriterInfo{CaptureAgent: "MyRecorder 1.0", Character: c})
 w.Write(xicap.Packet{Timestamp: ms, Data: bytes})
@@ -75,6 +75,11 @@ err = xicap.Transcode("upload.xicap", "archived.xicap")
 The package builds the C++ library with cgo, so it needs a C++23 compiler and
 libzstd (`apt install libzstd-dev`). Go reads a capture whole, into a summary
 without the packets.
+
+In every binding, `complete`, `endTimestamp`, and `packetCount` come from the
+trailer, so a reader knows them before reading a packet, and are 0 in a
+cut-off capture. Go also gives `LastTimestamp` and `PacketsRead`, what
+reading every packet found, which a cut-off capture has too.
 
 ## Python
 

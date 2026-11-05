@@ -42,9 +42,11 @@ extern "C"
         uint32_t      skipped_records;
         uint8_t*      source_metadata;
         size_t        source_metadata_size;
+        bool          complete;
         uint64_t      end_timestamp;
         uint64_t      packet_count;
-        bool          complete;
+        uint64_t      last_timestamp;
+        uint64_t      packets_read;
         bool          channels[256];
         xicap_marker* markers;
         size_t        marker_count;

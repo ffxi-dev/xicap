@@ -80,16 +80,18 @@ auto summarize(const char* path, xicap_summary& s) -> void
         s.channels[p.channel] = true;
         for (const auto& marker : p.markers)
         {
-            markers.push_back({ static_cast<uint8_t>(marker.kind), copyOut(marker.text), marker.text.size(), s.packet_count, p.timestamp });
+            markers.push_back({ static_cast<uint8_t>(marker.kind), copyOut(marker.text), marker.text.size(), s.packets_read, p.timestamp });
         }
 
-        s.end_timestamp = p.timestamp;
-        s.packet_count++;
+        s.last_timestamp = p.timestamp;
+        s.packets_read++;
     }
 
-    s.complete     = r.complete();
-    s.markers      = copyOut(markers);
-    s.marker_count = markers.size();
+    s.complete      = r.complete();
+    s.end_timestamp = r.endTimestamp();
+    s.packet_count  = r.packetCount();
+    s.markers       = copyOut(markers);
+    s.marker_count  = markers.size();
 }
 
 } // namespace

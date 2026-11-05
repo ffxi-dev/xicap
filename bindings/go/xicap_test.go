@@ -24,9 +24,11 @@ func (h *hexBytes) UnmarshalJSON(b []byte) (err error) {
 
 // vector is the reading tests/vectors/<name>.json gives for <name>.xicap.
 type vector struct {
-	Refused  bool
-	Complete bool
-	Metadata struct {
+	Refused      bool
+	Complete     bool
+	EndTimestamp uint64
+	PacketCount  uint64
+	Metadata     struct {
 		CaptureID, PreviousCaptureID hexBytes
 		StartTimestamp               uint64
 		Origin                       Origin
@@ -69,14 +71,16 @@ func (v vector) summary() Summary {
 			Character:         m.Character,
 			Policy:            Policy{m.Policy.Name, m.Policy.Version, len(m.Policy.Rules)},
 		},
-		PacketCount: uint64(len(v.Packets)),
-		Complete:    v.Complete,
+		Complete:     v.Complete,
+		EndTimestamp: v.EndTimestamp,
+		PacketCount:  v.PacketCount,
+		PacketsRead:  uint64(len(v.Packets)),
 	}
 	if src := m.Source; src != nil {
 		s.Source = &Source{src.Format, src.FormatVersion, src.SkippedRecords, src.Metadata}
 	}
 	for i, p := range v.Packets {
-		s.EndTimestamp = p.Timestamp
+		s.LastTimestamp = p.Timestamp
 		if !slices.Contains(s.Channels, p.Channel) {
 			s.Channels = append(s.Channels, p.Channel)
 		}
@@ -154,8 +158,8 @@ func TestWriteThenRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !s.Complete || s.PacketCount != 5 || s.Policy.Rules != 0 || s.Source.Format != "captain" || string(s.Source.Metadata) != "manifest" ||
-		!reflect.DeepEqual(s.Channels, []uint8{0, 1}) || s.StartTimestamp != 1000 || s.EndTimestamp != 1003 {
+	if !s.Complete || s.PacketCount != 5 || s.PacketsRead != 5 || s.Policy.Rules != 0 || s.Source.Format != "captain" || string(s.Source.Metadata) != "manifest" ||
+		!reflect.DeepEqual(s.Channels, []uint8{0, 1}) || s.StartTimestamp != 1000 || s.EndTimestamp != 1003 || s.LastTimestamp != 1003 {
 		t.Errorf("%+v", s)
 	}
 
