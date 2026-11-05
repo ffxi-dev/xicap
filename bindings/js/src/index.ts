@@ -1,7 +1,8 @@
-// The xicap C++ reader, compiled to WebAssembly.
 // @ts-expect-error: emcc writes this file.
 import createXicap from "../dist/xicap.js";
 
+export const Origin = { Unknown: 0, Live: 1, Converted: 2 } as const;
+export const Network = { Unknown: 0, Retail: 1, Private: 2 } as const;
 export const MarkerKind = { Note: 0, Login: 1, Logout: 2 } as const;
 export const PacketFlag = {
     ClientToServer: 0x0001,
@@ -16,23 +17,23 @@ export const PacketFlag = {
 export interface Metadata {
     captureId: Uint8Array;
     previousCaptureId: Uint8Array;
-    startTimestamp: number; // Unix ms
+    startTimestamp: number;
     origin: number;
     network: number;
     captureAgent: string;
     clientVersion: string;
     character: { contentId: number; characterId: number; name: string; world: string };
-    policy: { name: string; version: number; rules: number }; // no rules: chat was kept
+    policy: { name: string; version: number; rules: number };
     source: { format: string; formatVersion: string; skippedRecords: number; metadata: Uint8Array } | null;
 }
 
 export interface Packet {
-    timestamp: number; // Unix ms
+    timestamp: number;
     flags: number;
     channel: number;
     opcode: number;
     data: Uint8Array;
-    markers: { kind: number; text: string }[]; // the markers just before this packet
+    markers: { kind: number; text: string }[]; // those just before this packet
 }
 
 let options: object = {};
@@ -45,25 +46,23 @@ export function configureXicap(loaderOptions: object): void {
 
 const load = () => (module ??= createXicap(options));
 
-let files = 0;
-
 /** Reads a whole capture. A complete one is read whole or refused; a cut-off one reads up to its first bad frame. */
 export class Reader {
     static async open(bytes: ArrayBuffer | Uint8Array): Promise<Reader> {
         const m = await load();
-        const path = `/capture-${files++}.xicap`;
+        // Nothing awaits between writing and unlinking, so one path serves every reader, and an open file outlives its name.
+        const path = "/capture.xicap";
         m.FS.writeFile(path, bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes));
         try {
-            return new Reader(new m.Reader(path), () => m.FS.unlink(path));
-        } catch (e) {
+            return new Reader(new m.Reader(path));
+        } finally {
             m.FS.unlink(path);
-            throw e;
         }
     }
 
     readonly metadata: Metadata;
 
-    private constructor(private native: any, private release: () => void) {
+    private constructor(private native: any) {
         this.metadata = native.metadata();
     }
 
@@ -71,6 +70,7 @@ export class Reader {
     get complete(): boolean { return this.native.complete(); }
     /** The trailer's end time, or 0 in a cut-off file. */
     get endTimestamp(): number { return this.native.endTimestamp(); }
+    /** The trailer's packet count, or 0 in a cut-off file. */
     get packetCount(): number { return this.native.packetCount(); }
 
     *[Symbol.iterator](): IterableIterator<Packet> {
@@ -78,14 +78,12 @@ export class Reader {
     }
 
     close(): void {
-        if (!this.native) return;
-        this.native.delete();
+        this.native?.delete();
         this.native = null;
-        this.release();
     }
 }
 
-/** Reads a capture as its bytes arrive, as a download does. */
+/** Reads a capture as its bytes arrive. */
 export class StreamReader {
     static async create(): Promise<StreamReader> {
         return new StreamReader(new (await load()).StreamReader());
@@ -98,9 +96,9 @@ export class StreamReader {
     /** True once the header and blocks are read, so that metadata holds them. */
     get ready(): boolean { return this.native.ready(); }
     get metadata(): Metadata { return this.native.metadata(); }
-    /** True once the trailer is read, which comes after every packet. */
+    /** True once the trailer is read. */
     get complete(): boolean { return this.native.complete(); }
-    /** True once the reader has met bytes that are neither a whole, valid frame nor a trailer; it reads nothing more. */
+    /** True once the reader meets bytes that are neither a valid frame nor a trailer; it reads nothing more. */
     get stopped(): boolean { return this.native.stopped(); }
 
     close(): void {
