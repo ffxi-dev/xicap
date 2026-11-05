@@ -8,7 +8,6 @@
 #include "enums/server_kind.h"
 
 #include <array>
-#include <cstddef>
 #include <cstdint>
 #include <span>
 #include <stdexcept>
@@ -59,12 +58,12 @@ struct Marker
 // data and markers point into the reader and last until its next call.
 struct Packet
 {
-    uint64_t                   timestamp{};
-    uint16_t                   flags{};
-    uint8_t                    channel{};
-    uint16_t                   opcode{};
-    std::span<const std::byte> data;
-    std::span<const Marker>    markers; // the markers just before this packet
+    uint64_t                 timestamp{};
+    uint16_t                 flags{};
+    Channel                  channel{};
+    uint16_t                 opcode{};
+    std::span<const uint8_t> data;
+    std::span<const Marker>  markers; // the markers just before this packet
 
     [[nodiscard]] auto direction() const noexcept -> PacketDirection
     {
@@ -72,14 +71,14 @@ struct Packet
     }
 };
 
-struct OutPacket
+struct WritePacket
 {
-    uint64_t                   timestamp{};
-    PacketDirection            direction{};
-    std::span<const std::byte> data;
-    uint8_t                    channel{ static_cast<uint8_t>(Channel::Game) };
-    uint16_t                   opcode{};     // ignored on the game channel, where the packet's header holds it
-    uint16_t                   provenance{}; // PacketFlag::Provenance bits
+    uint64_t                 timestamp{};
+    PacketDirection          direction{};
+    uint16_t                 provenance{}; // PacketFlag::Provenance bits
+    Channel                  channel{ Channel::Game };
+    uint16_t                 opcode{}; // ignored on the game channel, where the packet's header holds it
+    std::span<const uint8_t> data;
 };
 
 class Error : public std::runtime_error

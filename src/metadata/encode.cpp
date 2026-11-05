@@ -74,9 +74,7 @@ auto encode(const Metadata& m) -> std::vector<uint8_t>
         .crc               = 0,
     };
     std::vector<uint8_t> out;
-    bytes::append(out, header);
-    out.resize(out.size() - sizeof(header.crc));
-    bytes::appendCrc(out);
+    bytes::appendWithCrc(out, header);
     for (size_t i{ 0 }; i <= m.blocks.size(); ++i)
     {
         if (m.source && i == m.sourceIndex)

@@ -1,6 +1,8 @@
+#include "format/layout.h"
 #include "support.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 
 using namespace xicap;
 
@@ -14,7 +16,7 @@ auto writeSample(const std::filesystem::path& path) -> void
     Writer w(path, test::metadata(), policy);
     for (uint16_t i{ 0 }; i < 10; ++i)
     {
-        w.write(test::out(uint64_t{ 10 } * i, test::gamePacket(0x00D, 24, i, static_cast<uint8_t>(i))));
+        w.write(test::packet(uint64_t{ 10 } * i, test::gamePacket(0x00D, 24, i, static_cast<uint8_t>(i))));
     }
 
     w.close();
@@ -31,7 +33,7 @@ TEST_CASE("a cut-off file reads up to its last whole frame, wherever it was cut"
 
     const test::TempFile cut;
     Writer(cut, test::metadata()).close();
-    const auto blocksEnd = std::filesystem::file_size(cut) - 24;
+    const auto blocksEnd = std::filesystem::file_size(cut) - sizeof(format::Trailer);
     size_t     previous{ 0 };
     for (auto size = blocksEnd; size < bytes.size(); ++size)
     {
@@ -56,6 +58,17 @@ TEST_CASE("a file that is not a whole capture start is refused")
     test::save(file, bytes);
     CHECK_THROWS_AS(Reader(file), Error);
     CHECK_THROWS_AS(Reader("no such file"), Error);
+    CHECK_THROWS_AS(Reader(std::filesystem::temp_directory_path()), Error);
+}
+
+TEST_CASE("a refused complete file says which check failed")
+{
+    const test::TempFile file;
+    writeSample(file);
+    auto bytes = test::bytesOf(file);
+    bytes[sizeof(format::Header) + sizeof(format::FrameHeader)] ^= 0xFF; // the first frame's payload
+    test::save(file, bytes);
+    CHECK_THROWS_WITH(test::readAll(file), Catch::Matchers::ContainsSubstring("CRC mismatch"));
 }
 
 TEST_CASE("a reader refuses bytes after a trailer that ends a read chunk")

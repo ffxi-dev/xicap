@@ -20,17 +20,17 @@ auto Decoder::decode(const format::FrameHeader& header, const std::span<const ui
 {
     if (header.plainSize == 0 || header.plainSize > format::MAX_PLAIN_SIZE)
     {
-        bad(std::format("plain size {}", header.plainSize));
+        throwBadFrame(std::format("plain size {}", header.plainSize));
     }
 
     if (header.packetCount == 0 || header.packetCount > format::MAX_PACKETS)
     {
-        bad(std::format("packet count {}", header.packetCount));
+        throwBadFrame(std::format("packet count {}", header.packetCount));
     }
 
     if (header.baseTimestamp < lastTimestamp_)
     {
-        bad("it starts before the frame before it ends");
+        throwBadFrame("it starts before the frame before it ends");
     }
 
     // One byte more than expected, to catch a payload that decodes to more.
@@ -44,7 +44,7 @@ auto Decoder::decode(const format::FrameHeader& header, const std::span<const ui
         const auto rc        = ZSTD_decompressStream(dctx_.get(), &buf, &in);
         if (ZSTD_isError(rc))
         {
-            bad(std::format("zstd: {}", ZSTD_getErrorName(rc)));
+            throwBadFrame(std::format("zstd: {}", ZSTD_getErrorName(rc)));
         }
 
         if (in.pos == inBefore && buf.pos == outBefore)
@@ -55,10 +55,10 @@ auto Decoder::decode(const format::FrameHeader& header, const std::span<const ui
 
     if (in.pos != in.size || buf.pos != header.plainSize)
     {
-        bad("its payload does not decode to its plain size");
+        throwBadFrame("its payload does not decode to its plain size");
     }
 
-    frame::decode(std::span{ plain_ }.first(header.plainSize), header.packetCount, header.markerCount, header.baseTimestamp, out);
+    decodeColumns(std::span{ plain_ }.first(header.plainSize), header.packetCount, header.markerCount, header.baseTimestamp, out);
     lastTimestamp_ = out.packets.back().timestamp;
 }
 

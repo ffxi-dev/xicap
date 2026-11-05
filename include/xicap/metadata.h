@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -27,5 +28,10 @@ struct Metadata
 
     auto operator==(const Metadata&) const -> bool = default;
 };
+
+inline constexpr size_t HEADER_SIZE = 160;
+
+// Throws Error unless bytes start with a header this library reads.
+auto checkHeader(std::span<const uint8_t> bytes) -> void;
 
 } // namespace xicap

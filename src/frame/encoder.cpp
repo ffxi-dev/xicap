@@ -26,8 +26,9 @@ Encoder::Encoder(const FramePolicy& policy)
     }
 }
 
-auto Encoder::compress(const std::span<const uint8_t> plain) -> std::vector<uint8_t>
+auto Encoder::encode(const Frame& frame) -> std::vector<uint8_t>
 {
+    const auto           plain = encodeColumns(frame);
     std::vector<uint8_t> payload(ZSTD_compressBound(plain.size()));
     auto                 in  = ZSTD_inBuffer{ .src = plain.data(), .size = plain.size(), .pos = 0 };
     auto                 out = ZSTD_outBuffer{ .dst = payload.data(), .size = payload.size(), .pos = 0 };
@@ -49,8 +50,17 @@ auto Encoder::compress(const std::span<const uint8_t> plain) -> std::vector<uint
         out.size = payload.size();
     }
 
-    payload.resize(out.pos);
-    return payload;
+    std::vector<uint8_t> encoded;
+    bytes::append(encoded, format::FrameHeader{
+                               .magic         = format::FRAME_MAGIC,
+                               .payloadSize   = static_cast<uint32_t>(out.pos),
+                               .plainSize     = static_cast<uint32_t>(plain.size()),
+                               .packetCount   = static_cast<uint32_t>(frame.packets.size()),
+                               .markerCount   = static_cast<uint32_t>(frame.markers.size()),
+                               .baseTimestamp = frame.packets.front().timestamp,
+                           });
+    encoded.insert(encoded.end(), payload.begin(), payload.begin() + static_cast<std::ptrdiff_t>(out.pos));
+    return encoded;
 }
 
 } // namespace xicap::frame

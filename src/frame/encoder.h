@@ -1,5 +1,6 @@
 #pragma once
 
+#include "frame/frame.h"
 #include "xicap/writer.h"
 
 #include <cstdint>
@@ -11,14 +12,14 @@
 namespace xicap::frame
 {
 
-// Compresses frames in file order into one zstd stream.
+// Encodes frames in file order: their payloads are one zstd stream.
 class Encoder
 {
 public:
     explicit Encoder(const FramePolicy& policy);
 
-    // Flushed, so the payload decodes as soon as it is on disk.
-    [[nodiscard]] auto compress(std::span<const uint8_t> plain) -> std::vector<uint8_t>;
+    // The frame's header and payload, flushed so it decodes as soon as it is on disk.
+    [[nodiscard]] auto encode(const Frame& frame) -> std::vector<uint8_t>;
 
 private:
     std::unique_ptr<ZSTD_CCtx, decltype(&ZSTD_freeCCtx)> cctx_;

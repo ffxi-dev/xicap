@@ -49,7 +49,8 @@ public:
         return stream_.bytesRead();
     }
 
-    // The next packet; false at the end of the capture. Throws Error for a complete file with a bad frame.
+    // The next packet; false at the end of the capture. Throws Error for a file that must be refused: a complete file
+    // with a bad frame, a trailer that disagrees with the frames, or bytes after the trailer.
     auto next(Packet& packet) -> bool;
 
     class Iterator
@@ -99,12 +100,12 @@ public:
 private:
     auto pushChunk() -> bool;
 
-    std::ifstream          file_;
-    StreamReader           stream_;
-    std::vector<std::byte> chunk_;
-    bool                   complete_{ false };
-    uint64_t               endTimestamp_{};
-    uint64_t               packetCount_{};
+    std::ifstream        file_;
+    StreamReader         stream_;
+    std::vector<uint8_t> chunk_;
+    bool                 complete_{ false };
+    uint64_t             endTimestamp_{};
+    uint64_t             packetCount_{};
 };
 
 } // namespace xicap

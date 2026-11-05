@@ -2,7 +2,6 @@
 #include "bytes/crc32.h"
 #include "format/layout.h"
 #include "frame/encoder.h"
-#include "frame/frame.h"
 #include "metadata/codec.h"
 #include "xicap/redaction.h"
 
@@ -54,7 +53,7 @@ struct Writer::State
     }
 
     auto checkWritable() const -> void;
-    auto start() -> void;
+    auto writeHeader() -> void;
     auto add(Packet packet) -> void;
     auto endFrame() -> void;
     auto writeFrame() -> void;
@@ -65,7 +64,7 @@ struct Writer::State
     FramePolicy    policy;
     Chat           chat;
     frame::Encoder encoder;
-    bool           started{ false };
+    bool           headerWritten{ false };
     bool           closed{ false };
     bool           failed{ false };
 
@@ -74,7 +73,7 @@ struct Writer::State
     std::vector<Marker> pendingMarkers;
     size_t              pendingMarkerSize{};
     uint64_t            lastTimestamp{};
-    uint64_t            packets{};
+    uint64_t            packetCount{};
 };
 
 Writer::Writer(const std::filesystem::path& path, Metadata metadata, const FramePolicy policy, const Chat chat)
@@ -114,26 +113,27 @@ auto Writer::captureId() const noexcept -> const CaptureId&
     return state_->metadata.captureId;
 }
 
-auto Writer::write(const OutPacket& packet) -> void
+auto Writer::write(const WritePacket& packet) -> void
 {
-    state_->checkWritable();
-    const auto stored = redact(packet, state_->chat);
-    state_->add({ .timestamp = packet.timestamp, .flags = stored.flags, .channel = packet.channel, .opcode = stored.opcode, .data = stored.data, .markers = {} });
+    auto& s = *state_;
+    s.checkWritable();
+    const auto game   = packet.channel == Channel::Game;
+    const auto opcode = game && packet.data.size() >= format::GAME_HEADER_SIZE ? format::gameId(packet.data) : packet.opcode;
+    const auto flags  = static_cast<uint16_t>((packet.provenance & PacketFlag::Provenance) | static_cast<uint16_t>(packet.direction));
+    s.add({ .timestamp = packet.timestamp, .flags = flags, .channel = packet.channel, .opcode = opcode, .data = packet.data, .markers = {} });
+    if (game && s.chat == Chat::Redact)
+    {
+        auto& added = s.frame.packets.back();
+        if (redact(s.frame.data(added), packet.direction))
+        {
+            added.flags |= PacketFlag::Redacted;
+        }
+    }
 }
 
 auto Writer::copy(const Packet& packet) -> void
 {
     state_->checkWritable();
-    if (frame::isGame(packet.channel) && (packet.data.size() < format::GAME_HEADER_SIZE || format::gameId(packet.data) != packet.opcode))
-    {
-        throw Error("xicap: a game packet is at least 4 bytes and its header holds its opcode");
-    }
-
-    for (const auto& m : packet.markers)
-    {
-        mark(m.kind, m.text);
-    }
-
     state_->add(packet);
 }
 
@@ -144,6 +144,11 @@ auto Writer::mark(const MarkerKind kind, const std::string_view text) -> void
     if (text.size() > UINT16_MAX)
     {
         throw Error("xicap: marker text over 65,535 bytes");
+    }
+
+    if (PACKET_OVERHEAD + s.pendingMarkerSize + MARKER_OVERHEAD + text.size() > format::MAX_PLAIN_SIZE)
+    {
+        throw Error("xicap: markers before one packet over 16 MiB");
     }
 
     s.pendingMarkers.push_back({ .kind = kind, .text = std::string(text) });
@@ -159,17 +164,16 @@ auto Writer::flush() -> void
 auto Writer::close() -> void
 {
     auto& s = *state_;
-    if (s.closed || s.failed)
+    if (s.closed)
     {
         return;
     }
 
+    s.checkWritable();
     s.endFrame();
-    s.start();
+    s.writeHeader();
     std::vector<uint8_t> trailer;
-    bytes::append(trailer, format::Trailer{ .magic = format::TRAILER_MAGIC, .endTimestamp = s.lastTimestamp, .packetCount = s.packets, .crc = 0 });
-    trailer.resize(trailer.size() - sizeof(uint32_t));
-    bytes::appendCrc(trailer);
+    bytes::appendWithCrc(trailer, format::Trailer{ .magic = format::TRAILER_MAGIC, .endTimestamp = s.lastTimestamp, .packetCount = s.packetCount, .crc = 0 });
     s.emit(trailer);
     s.closed = true;
     s.file.close();
@@ -189,28 +193,41 @@ auto Writer::State::checkWritable() const -> void
 }
 
 // The header and blocks go out with the first frame, once the start time is known.
-auto Writer::State::start() -> void
+auto Writer::State::writeHeader() -> void
 {
-    if (!started)
+    if (!headerWritten)
     {
         emit(metadata::encode(metadata));
-        started = true;
+        headerWritten = true;
     }
 }
 
+// Places the queued markers, then packet.markers, before the packet. Throws before changing anything.
 auto Writer::State::add(Packet packet) -> void
 {
-    if (packets > 0)
+    if (packet.channel == Channel::Game && !format::holdsGameHeader(packet.data, packet.opcode))
     {
-        packet.timestamp = std::max(packet.timestamp, lastTimestamp);
+        throw Error("xicap: a game packet is at least 4 bytes and its header holds its opcode");
     }
 
-    const auto added = PACKET_OVERHEAD + packet.data.size() + pendingMarkerSize;
+    auto markerSize = pendingMarkerSize;
+    for (const auto& m : packet.markers)
+    {
+        if (m.text.size() > UINT16_MAX)
+        {
+            throw Error("xicap: marker text over 65,535 bytes");
+        }
+
+        markerSize += MARKER_OVERHEAD + m.text.size();
+    }
+
+    const auto added = PACKET_OVERHEAD + packet.data.size() + markerSize;
     if (added > format::MAX_PLAIN_SIZE)
     {
         throw Error("xicap: a packet and the markers before it are over 16 MiB");
     }
 
+    packet.timestamp = std::max(packet.timestamp, lastTimestamp);
     if (!frame.packets.empty() &&
         (frame.packets.size() >= policy.maxPacketsPerFrame || frameSize + added > policy.maxFrameSize ||
          packet.timestamp - frame.packets.front().timestamp >= policy.maxFrameTimeMs || packet.timestamp - lastTimestamp > UINT32_MAX))
@@ -218,18 +235,19 @@ auto Writer::State::add(Packet packet) -> void
         endFrame();
     }
 
-    if (packets == 0)
+    if (packetCount == 0)
     {
         metadata.startTimestamp = packet.timestamp;
     }
 
+    pendingMarkers.insert(pendingMarkers.end(), packet.markers.begin(), packet.markers.end());
     packet.markers = pendingMarkers;
     frame.add(packet);
     pendingMarkers.clear();
     pendingMarkerSize = 0;
     frameSize += added;
     lastTimestamp = packet.timestamp;
-    packets++;
+    packetCount++;
 }
 
 auto Writer::State::endFrame() -> void
@@ -252,19 +270,8 @@ auto Writer::State::endFrame() -> void
 
 auto Writer::State::writeFrame() -> void
 {
-    start();
-    const auto           plain   = frame::encode(frame);
-    const auto           payload = encoder.compress(plain);
-    std::vector<uint8_t> out;
-    bytes::append(out, format::FrameHeader{
-                           .magic         = format::FRAME_MAGIC,
-                           .payloadSize   = static_cast<uint32_t>(payload.size()),
-                           .plainSize     = static_cast<uint32_t>(plain.size()),
-                           .packetCount   = static_cast<uint32_t>(frame.packets.size()),
-                           .markerCount   = static_cast<uint32_t>(frame.markers.size()),
-                           .baseTimestamp = frame.packets.front().timestamp,
-                       });
-    out.insert(out.end(), payload.begin(), payload.end());
+    writeHeader();
+    auto out = encoder.encode(frame);
     bytes::appendCrc(out);
     emit(out);
     frame.clear();

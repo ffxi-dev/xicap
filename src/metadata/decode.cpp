@@ -98,3 +98,19 @@ auto readBlock(const std::span<const uint8_t> block, Metadata& out) -> void
 }
 
 } // namespace xicap::metadata
+
+namespace xicap
+{
+
+auto checkHeader(const std::span<const uint8_t> bytes) -> void
+{
+    if (bytes.size() < HEADER_SIZE)
+    {
+        throw Error("xicap: short header");
+    }
+
+    Metadata m;
+    metadata::readHeader(bytes, m);
+}
+
+} // namespace xicap

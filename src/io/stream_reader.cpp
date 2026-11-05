@@ -1,9 +1,9 @@
 #include "xicap/stream_reader.h"
-#include "bytes/crc32.h"
 #include "frame/decoder.h"
 #include "metadata/codec.h"
 
 #include <algorithm>
+#include <string>
 
 namespace xicap
 {
@@ -21,6 +21,7 @@ struct StreamReader::State
 
     auto parse() -> void;
     auto parseFrame(std::span<const uint8_t> avail) -> bool;
+    auto stop(std::string_view why) -> bool;
 
     Stage                stage{ Stage::Header };
     std::vector<uint8_t> buffer;
@@ -31,8 +32,8 @@ struct StreamReader::State
     frame::Decoder       decoder;
     frame::Frame         frame;
     size_t               nextPacket{};
-    uint64_t             packets{};
-    uint64_t             lastTimestamp{};
+    uint64_t             packetCount{};
+    std::string          stopReason;
 };
 
 StreamReader::StreamReader()
@@ -57,6 +58,11 @@ auto StreamReader::stopped() const noexcept -> bool
     return state_->stage == State::Stage::Stopped;
 }
 
+auto StreamReader::stopReason() const noexcept -> std::string_view
+{
+    return state_->stopReason;
+}
+
 auto StreamReader::metadata() const noexcept -> const Metadata&
 {
     return state_->metadata;
@@ -67,7 +73,7 @@ auto StreamReader::bytesRead() const noexcept -> uint64_t
     return state_->dropped + state_->pos;
 }
 
-auto StreamReader::push(const std::span<const std::byte> bytes) -> void
+auto StreamReader::push(const std::span<const uint8_t> bytes) -> void
 {
     auto& s = *state_;
     if (s.stage == State::Stage::Stopped || bytes.empty())
@@ -83,8 +89,7 @@ auto StreamReader::push(const std::span<const std::byte> bytes) -> void
         s.pos = 0;
     }
 
-    s.buffer.resize(s.buffer.size() + bytes.size());
-    std::ranges::copy(bytes, std::as_writable_bytes(std::span{ s.buffer }).last(bytes.size()).begin());
+    s.buffer.insert(s.buffer.end(), bytes.begin(), bytes.end());
     s.parse();
 }
 
@@ -175,13 +180,6 @@ auto StreamReader::State::parseFrame(const std::span<const uint8_t> avail) -> bo
     }
 
     const auto magic = bytes::load<uint32_t>(avail);
-    const auto stop  = [this]
-    {
-        stage = Stage::Stopped;
-        frame.clear();
-        return false;
-    };
-
     if (magic == format::TRAILER_MAGIC)
     {
         if (avail.size() < sizeof(format::Trailer))
@@ -189,25 +187,25 @@ auto StreamReader::State::parseFrame(const std::span<const uint8_t> avail) -> bo
             return false;
         }
 
-        if (!bytes::endsWithCrc(avail.first(sizeof(format::Trailer))))
+        const auto t = format::readTrailer(avail);
+        if (!t)
         {
-            return stop();
+            return stop("xicap: trailer CRC mismatch");
         }
 
-        const auto t = bytes::load<format::Trailer>(avail);
-        if (t.packetCount != packets || t.endTimestamp != lastTimestamp)
+        if (t->packetCount != packetCount || t->endTimestamp != decoder.lastTimestamp())
         {
             throw Error("xicap: the trailer disagrees with the frames");
         }
 
-        pos += sizeof(t);
+        pos += sizeof(format::Trailer);
         stage = Stage::Complete;
         return true;
     }
 
     if (magic != format::FRAME_MAGIC)
     {
-        return stop();
+        return stop("xicap: bad frame: no frame magic");
     }
 
     if (avail.size() < sizeof(format::FrameHeader))
@@ -218,7 +216,7 @@ auto StreamReader::State::parseFrame(const std::span<const uint8_t> avail) -> bo
     const auto h = bytes::load<format::FrameHeader>(avail);
     if (h.payloadSize > format::MAX_PAYLOAD_SIZE)
     {
-        return stop();
+        return stop("xicap: bad frame: payload over 17 MiB");
     }
 
     const auto size = sizeof(h) + size_t{ h.payloadSize } + sizeof(uint32_t);
@@ -229,23 +227,30 @@ auto StreamReader::State::parseFrame(const std::span<const uint8_t> avail) -> bo
 
     if (!bytes::endsWithCrc(avail.first(size)))
     {
-        return stop();
+        return stop("xicap: bad frame: CRC mismatch");
     }
 
     try
     {
         decoder.decode(h, avail.subspan(sizeof(h), h.payloadSize), frame);
     }
-    catch (const Error&)
+    catch (const Error& e)
     {
-        return stop();
+        return stop(e.what());
     }
 
     pos += size;
     nextPacket = 0;
-    packets += frame.packets.size();
-    lastTimestamp = frame.packets.back().timestamp;
+    packetCount += frame.packets.size();
     return true;
+}
+
+auto StreamReader::State::stop(const std::string_view why) -> bool
+{
+    stage      = Stage::Stopped;
+    stopReason = why;
+    frame.clear();
+    return false;
 }
 
 } // namespace xicap

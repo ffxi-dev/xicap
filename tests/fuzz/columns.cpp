@@ -18,7 +18,7 @@ extern "C" auto LLVMFuzzerTestOneInput(const uint8_t* data, const size_t size) -
     try
     {
         xicap::frame::Frame frame;
-        xicap::frame::decode({ data + 4, size - 4 }, packets, markers, 0, frame);
+        xicap::frame::decodeColumns({ data + 4, size - 4 }, packets, markers, 0, frame);
     }
     catch (const xicap::Error&)
     {

@@ -3,10 +3,10 @@
 #include "metadata.h"
 #include "types.h"
 
-#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <span>
+#include <string_view>
 
 namespace xicap
 {
@@ -22,8 +22,9 @@ public:
     auto operator=(StreamReader&&) -> StreamReader&      = delete;
 
     // The capture's next bytes, in order. Throws Error for a capture that must be refused.
-    auto push(std::span<const std::byte> bytes) -> void;
-    // The next packet whose frame has arrived whole; false until another has.
+    auto push(std::span<const uint8_t> bytes) -> void;
+    // The next packet whose frame has arrived whole; false until another has. Throws Error for a capture that must be
+    // refused, as push() does: which of the two finds it depends on where the bytes were cut.
     auto next(Packet& packet) -> bool;
 
     // True once the header and blocks are read, so that metadata() holds them.
@@ -32,6 +33,8 @@ public:
     [[nodiscard]] auto complete() const noexcept -> bool;
     // True once the reader has met bytes that are neither a whole, valid frame nor a trailer; it reads nothing more.
     [[nodiscard]] auto stopped() const noexcept -> bool;
+    // Why the reader stopped, once it has.
+    [[nodiscard]] auto stopReason() const noexcept -> std::string_view;
     [[nodiscard]] auto metadata() const noexcept -> const Metadata&;
     // The bytes read so far, up to the end of the last frame decoded or of the trailer.
     [[nodiscard]] auto bytesRead() const noexcept -> uint64_t;

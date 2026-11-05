@@ -15,7 +15,7 @@ auto same(const Packet& a, const Packet& b) -> bool
            std::ranges::equal(a.data, b.data) && std::ranges::equal(a.markers, b.markers);
 }
 
-auto compare(const std::filesystem::path& src, const std::filesystem::path& dst) -> void
+auto checkUnchanged(const std::filesystem::path& src, const std::filesystem::path& dst) -> void
 {
     Reader a(src);
     Reader b(dst);
@@ -68,7 +68,7 @@ auto transcode(const std::filesystem::path& src, const std::filesystem::path& ds
             out.close();
         }
 
-        compare(src, dst);
+        checkUnchanged(src, dst);
     }
     catch (...)
     {

@@ -45,6 +45,16 @@ inline auto appendCrc(std::vector<uint8_t>& out, const size_t from = 0) -> void
     append(out, crc32(std::span{ out }.subspan(from)));
 }
 
+// Appends value, a struct whose last field is its CRC, with that CRC filled in.
+template <typename T>
+auto appendWithCrc(std::vector<uint8_t>& out, const T& value) -> void
+{
+    const auto start = out.size();
+    append(out, value);
+    out.resize(out.size() - sizeof(uint32_t));
+    appendCrc(out, start);
+}
+
 // The last 4 bytes are the CRC of the rest. Fuzzing builds skip the check, so mutated input reaches the decoders behind
 // it.
 [[nodiscard]] inline auto endsWithCrc(const std::span<const uint8_t> bytes) noexcept -> bool

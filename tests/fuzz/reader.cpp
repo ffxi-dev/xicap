@@ -13,7 +13,7 @@ extern "C" auto LLVMFuzzerTestOneInput(const uint8_t* data, const size_t size) -
         return 0;
     }
 
-    const auto bytes = std::as_bytes(std::span{ data, size });
+    const auto bytes = std::span{ data, size };
     const auto split = std::min<size_t>(data[0] * 64, size);
     try
     {

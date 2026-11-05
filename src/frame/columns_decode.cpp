@@ -4,16 +4,9 @@
 
 #include <algorithm>
 #include <array>
-#include <format>
-#include <string_view>
 
 namespace xicap::frame
 {
-
-auto bad(const std::string_view why) -> void
-{
-    throw Error(std::format("xicap: bad frame: {}", why));
-}
 
 namespace
 {
@@ -25,7 +18,7 @@ auto column(const std::span<const uint8_t> plain, size_t& pos, const unsigned bi
     {
         if (!bytes::getVarint(plain, pos, bits, v))
         {
-            bad("bad varint");
+            throwBadFrame("bad varint");
         }
     }
 
@@ -42,18 +35,18 @@ auto readMarkers(const std::span<const uint8_t> plain, size_t& pos, const uint32
         uint32_t length{ 0 };
         if (!bytes::getVarint(plain, pos, 32, index) || pos >= plain.size())
         {
-            bad("bad marker");
+            throwBadFrame("bad marker");
         }
 
         const auto kind = static_cast<MarkerKind>(plain[pos++]);
         if (!bytes::getVarint(plain, pos, 16, length) || length > plain.size() - pos)
         {
-            bad("bad marker");
+            throwBadFrame("bad marker");
         }
 
         if (index >= packetCount || index < lastIndex)
         {
-            bad("marker out of place");
+            throwBadFrame("marker out of place");
         }
 
         lastIndex       = index;
@@ -67,13 +60,13 @@ auto readMarkers(const std::span<const uint8_t> plain, size_t& pos, const uint32
 
 } // namespace
 
-auto decode(const std::span<const uint8_t> plain, const uint32_t packetCount, const uint32_t markerCount, const uint64_t baseTimestamp, Frame& out) -> void
+auto decodeColumns(const std::span<const uint8_t> plain, const uint32_t packetCount, const uint32_t markerCount, const uint64_t baseTimestamp, Frame& out) -> void
 {
     out.clear();
     // Each packet takes at least one byte in each of the first five columns, and each marker three.
     if (packetCount == 0 || uint64_t{ packetCount } * 5 + uint64_t{ markerCount } * 3 > plain.size())
     {
-        bad("packet and marker counts do not fit the plaintext");
+        throwBadFrame("packet and marker counts do not fit the plaintext");
     }
 
     size_t     pos{ 0 };
@@ -82,11 +75,11 @@ auto decode(const std::span<const uint8_t> plain, const uint32_t packetCount, co
     const auto channel = column(plain, pos, 8, packetCount);
     const auto opcode  = column(plain, pos, 16, packetCount);
     const auto lengths = column(plain, pos, 32, packetCount);
-    const auto sync    = column(plain, pos, 16, static_cast<size_t>(std::ranges::count(channel, uint32_t{ 0 })));
+    const auto sync    = column(plain, pos, 16, static_cast<size_t>(std::ranges::count(channel, uint32_t{ static_cast<uint8_t>(Channel::Game) })));
     const auto marked  = readMarkers(plain, pos, markerCount, packetCount, out.markers);
     if (delta[0] != 0)
     {
-        bad("the first packet's deltaMs is not 0");
+        throwBadFrame("the first packet's deltaMs is not 0");
     }
 
     out.packets.reserve(packetCount);
@@ -95,7 +88,7 @@ auto decode(const std::span<const uint8_t> plain, const uint32_t packetCount, co
     {
         if (timestamp + delta[i] < timestamp)
         {
-            bad("a timestamp past 2^64");
+            throwBadFrame("a timestamp past 2^64");
         }
 
         timestamp += delta[i];
@@ -103,7 +96,7 @@ auto decode(const std::span<const uint8_t> plain, const uint32_t packetCount, co
         out.packets.push_back({
             .timestamp   = timestamp,
             .flags       = static_cast<uint16_t>(flags[i]),
-            .channel     = static_cast<uint8_t>(channel[i]),
+            .channel     = static_cast<Channel>(channel[i]),
             .opcode      = static_cast<uint16_t>(opcode[i]),
             .offset      = 0,
             .length      = 0,
@@ -120,7 +113,7 @@ auto decode(const std::span<const uint8_t> plain, const uint32_t packetCount, co
     {
         if (sizes[g] > unread.size())
         {
-            bad("group sizes do not add up");
+            throwBadFrame("group sizes do not add up");
         }
 
         rest[g] = unread.first(sizes[g]);
@@ -129,48 +122,31 @@ auto decode(const std::span<const uint8_t> plain, const uint32_t packetCount, co
 
     if (!unread.empty())
     {
-        bad("group sizes do not add up");
+        throwBadFrame("group sizes do not add up");
     }
 
     out.bytes.reserve(plain.size() - pos);
     std::array<uint16_t, 2> lastSync{};
-    size_t                  game{ 0 };
+    size_t                  syncIndex{ 0 };
     for (uint32_t i{ 0 }; i < packetCount; ++i)
     {
-        auto&      p      = out.packets[i];
-        auto&      left   = rest[group[i]];
-        const auto length = [&]() -> size_t
+        auto&      p    = out.packets[i];
+        auto&      left = rest[group[i]];
+        const auto game = p.channel == Channel::Game;
+        if (game && !format::holdsGameHeader(left, p.opcode))
         {
-            if (!isGame(p.channel))
-            {
-                if (lengths[i] == 0)
-                {
-                    bad("implied length off the game channel");
-                }
+            throwBadFrame("game packet without its header");
+        }
 
-                return size_t{ lengths[i] } - 1;
-            }
-
-            if (left.size() < format::GAME_HEADER_SIZE)
-            {
-                bad("game packet under 4 bytes");
-            }
-
-            if (format::gameId(left) != p.opcode)
-            {
-                bad("game packet opcode differs from its header");
-            }
-
-            if (lengths[i] == 0)
-            {
-                return format::gameLength(left);
-            }
-
-            return size_t{ lengths[i] } - 1;
-        }();
-        if (length > left.size() || (isGame(p.channel) && length < format::GAME_HEADER_SIZE))
+        if (!game && lengths[i] == 0)
         {
-            bad("packet does not fit its group");
+            throwBadFrame("implied length off the game channel");
+        }
+
+        const auto length = lengths[i] == 0 ? format::gameLength(left) : size_t{ lengths[i] } - 1;
+        if (length > left.size() || (game && length < format::GAME_HEADER_SIZE))
+        {
+            throwBadFrame("packet does not fit its group");
         }
 
         p.offset         = out.bytes.size();
@@ -178,10 +154,10 @@ auto decode(const std::span<const uint8_t> plain, const uint32_t packetCount, co
         const auto taken = left.first(length);
         out.bytes.insert(out.bytes.end(), taken.begin(), taken.end());
         left = left.subspan(length);
-        if (isGame(p.channel))
+        if (game)
         {
             auto& last              = lastSync[p.flags & PacketFlag::ClientToServer];
-            last                    = static_cast<uint16_t>(last + bytes::unzigzag16(static_cast<uint16_t>(sync[game++])));
+            last                    = static_cast<uint16_t>(last + bytes::unzigzag16(static_cast<uint16_t>(sync[syncIndex++])));
             out.bytes[p.offset + 2] = static_cast<uint8_t>(last);
             out.bytes[p.offset + 3] = static_cast<uint8_t>(last >> 8);
         }
@@ -192,7 +168,7 @@ auto decode(const std::span<const uint8_t> plain, const uint32_t packetCount, co
                                  return r.empty();
                              }))
     {
-        bad("group bytes left over");
+        throwBadFrame("group bytes left over");
     }
 }
 

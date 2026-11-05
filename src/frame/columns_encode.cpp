@@ -10,9 +10,9 @@ namespace xicap::frame
 namespace
 {
 
-auto storedLength(const std::span<const uint8_t> data, const uint8_t channel) noexcept -> uint64_t
+auto storedLength(const std::span<const uint8_t> data, const Channel channel) noexcept -> uint64_t
 {
-    if (isGame(channel) && format::gameLength(data) == data.size())
+    if (channel == Channel::Game && format::gameLength(data) == data.size())
     {
         return 0;
     }
@@ -22,7 +22,7 @@ auto storedLength(const std::span<const uint8_t> data, const uint8_t channel) no
 
 } // namespace
 
-auto encode(const Frame& frame) -> std::vector<uint8_t>
+auto encodeColumns(const Frame& frame) -> std::vector<uint8_t>
 {
     const auto&          packets = frame.packets;
     std::vector<uint8_t> out;
@@ -33,30 +33,34 @@ auto encode(const Frame& frame) -> std::vector<uint8_t>
         previous = p.timestamp;
     }
 
-    for (const auto& p : packets)
+    const auto put = [&](const auto field)
     {
-        bytes::putVarint(out, p.flags);
-    }
-
-    for (const auto& p : packets)
-    {
-        bytes::putVarint(out, p.channel);
-    }
-
-    for (const auto& p : packets)
-    {
-        bytes::putVarint(out, p.opcode);
-    }
-
-    for (const auto& p : packets)
-    {
-        bytes::putVarint(out, storedLength(frame.data(p), p.channel));
-    }
+        for (const auto& p : packets)
+        {
+            bytes::putVarint(out, field(p));
+        }
+    };
+    put([](const FramePacket& p)
+        {
+            return p.flags;
+        });
+    put([](const FramePacket& p)
+        {
+            return static_cast<uint8_t>(p.channel);
+        });
+    put([](const FramePacket& p)
+        {
+            return p.opcode;
+        });
+    put([&](const FramePacket& p)
+        {
+            return storedLength(frame.data(p), p.channel);
+        });
 
     std::array<uint16_t, 2> lastSync{};
     for (const auto& p : packets | std::views::filter([](const FramePacket& p)
                                                       {
-                                                          return isGame(p.channel);
+                                                          return p.channel == Channel::Game;
                                                       }))
     {
         auto&      last = lastSync[p.flags & PacketFlag::ClientToServer];
@@ -101,7 +105,7 @@ auto encode(const Frame& frame) -> std::vector<uint8_t>
             const auto data  = frame.data(packets[i]);
             const auto start = out.size();
             out.insert(out.end(), data.begin(), data.end());
-            if (isGame(packets[i].channel))
+            if (packets[i].channel == Channel::Game)
             {
                 out[start + 2] = 0;
                 out[start + 3] = 0;

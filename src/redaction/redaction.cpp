@@ -1,6 +1,5 @@
 #include "xicap/redaction.h"
 #include "format/layout.h"
-#include "frame/frame.h"
 
 #include <algorithm>
 #include <array>
@@ -32,40 +31,29 @@ constexpr auto CHAT_TEXT = std::array{
 
 } // namespace
 
-auto redact(const OutPacket& packet, const Chat chat) -> StoredPacket
+auto redact(const std::span<uint8_t> packet, const PacketDirection direction) -> bool
 {
-    auto stored = StoredPacket{
-        .opcode = packet.opcode,
-        .flags  = static_cast<uint16_t>((packet.provenance & PacketFlag::Provenance) | static_cast<uint16_t>(packet.direction)),
-        .data   = { packet.data.begin(), packet.data.end() },
-    };
-    if (!frame::isGame(packet.channel))
+    if (packet.size() < format::GAME_HEADER_SIZE)
     {
-        return stored;
+        return false;
     }
 
-    if (packet.data.size() < format::GAME_HEADER_SIZE)
+    const auto opcode = format::gameId(packet);
+    const auto text   = std::ranges::find_if(CHAT_TEXT, [&](const ChatText& t)
+                                             {
+                                               return t.direction == direction && t.opcode == opcode;
+                                             });
+    if (text == CHAT_TEXT.end())
     {
-        throw Error("xicap: a game packet is at least 4 bytes");
+        return false;
     }
 
-    stored.opcode   = format::gameId(packet.data);
-    const auto text = std::ranges::find_if(CHAT_TEXT, [&](const ChatText& t)
-                                           {
-                                               return t.direction == packet.direction && t.opcode == stored.opcode;
-                                           });
-    if (chat == Chat::Keep || text == CHAT_TEXT.end())
+    if (text->offset < packet.size())
     {
-        return stored;
+        std::fill_n(packet.begin() + static_cast<ptrdiff_t>(text->offset), std::min(text->length, packet.size() - text->offset), uint8_t{ 0 });
     }
 
-    if (text->offset < stored.data.size())
-    {
-        std::fill_n(stored.data.begin() + static_cast<ptrdiff_t>(text->offset), std::min(text->length, stored.data.size() - text->offset), std::byte{ 0 });
-    }
-
-    stored.flags |= PacketFlag::Redacted;
-    return stored;
+    return true;
 }
 
 } // namespace xicap

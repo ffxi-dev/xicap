@@ -20,6 +20,11 @@ public:
 
     // Throws Error for a bad frame. Its CRC is already checked.
     auto decode(const format::FrameHeader& header, std::span<const uint8_t> payload, Frame& out) -> void;
+    // The last packet's timestamp, or 0 before the first frame.
+    [[nodiscard]] auto lastTimestamp() const noexcept -> uint64_t
+    {
+        return lastTimestamp_;
+    }
 
 private:
     std::unique_ptr<ZSTD_DCtx, decltype(&ZSTD_freeDCtx)> dctx_;

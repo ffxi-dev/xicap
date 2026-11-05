@@ -88,7 +88,7 @@ auto example(Writer& w) -> void
 {
     for (uint16_t i{ 0 }; i < 3; ++i)
     {
-        w.write(test::out(T0 + uint64_t{ 10 } * i, test::gamePacket(0x0DF, 16, i + 1, static_cast<uint8_t>(i))));
+        w.write(test::packet(T0 + uint64_t{ 10 } * i, test::gamePacket(0x0DF, 16, i + 1, static_cast<uint8_t>(i))));
     }
 }
 
@@ -100,23 +100,23 @@ auto mixed(Writer& w) -> void
     const auto tell   = test::gamePacket(0x0B6, 40, 1, 0x42);
     const auto move   = test::gamePacket(0x015, 32, 2, 0x22);
     const auto odd    = test::gamePacket(0x00D, 10, 3, 0x33); // 10 bytes: the header's size says 8
-    const auto search = std::vector<std::byte>(24, std::byte{ 0x0B });
-    const auto other  = std::vector<std::byte>{ std::byte{ 1 }, std::byte{ 2 } };
+    const auto search = std::vector<uint8_t>(24, 0x0B);
+    const auto other  = std::vector<uint8_t>{ 1, 2 };
 
     w.mark(MarkerKind::Login);
-    w.write(test::out(T0, zoneIn));
-    w.write({ .timestamp = T0 + 5, .direction = ClientToServer, .data = move, .provenance = PacketFlag::Modified | PacketFlag::FirstInDatagram });
-    w.write(test::out(T0 + 9, chat));
+    w.write(test::packet(T0, zoneIn));
+    w.write({ .timestamp = T0 + 5, .direction = ClientToServer, .provenance = PacketFlag::Modified | PacketFlag::FirstInDatagram, .data = move });
+    w.write(test::packet(T0 + 9, chat));
     w.mark(MarkerKind::Note, "cap start \xE6\x88\xA6\xE3\x81\x84");
-    w.write(test::out(T0 + 20, tell, ClientToServer));
+    w.write(test::packet(T0 + 20, tell, ClientToServer));
     // A stub, as captures converted from older formats hold.
-    w.copy({ .timestamp = T0 + 20, .flags = PacketFlag::Excluded | PacketFlag::ClientToServer, .channel = 0, .opcode = 0x0B6, .data = std::span{ tell }.first(4), .markers = {} });
-    w.write({ .timestamp = T0 + 20, .direction = ServerToClient, .data = search, .channel = 1, .opcode = 0x0B, .provenance = PacketFlag::Injected });
-    w.copy({ .timestamp = T0 + 31, .flags = 0x8020 | PacketFlag::Blocked, .channel = 7, .opcode = 0x1234, .data = other, .markers = {} });
-    w.write(test::out(T0 + 31, odd));
+    w.copy({ .timestamp = T0 + 20, .flags = PacketFlag::Excluded | PacketFlag::ClientToServer, .channel = Channel::Game, .opcode = 0x0B6, .data = std::span{ tell }.first(4), .markers = {} });
+    w.write({ .timestamp = T0 + 20, .direction = ServerToClient, .provenance = PacketFlag::Injected, .channel = Channel::Search, .opcode = 0x0B, .data = search });
+    w.copy({ .timestamp = T0 + 31, .flags = 0x8020 | PacketFlag::Blocked, .channel = static_cast<Channel>(7), .opcode = 0x1234, .data = other, .markers = {} });
+    w.write(test::packet(T0 + 31, odd));
     w.mark(MarkerKind::Logout);
     w.mark(static_cast<MarkerKind>(9), "unknown kind");
-    w.write(test::out(T0 + 5000, move, ClientToServer));
+    w.write(test::packet(T0 + 5000, move, ClientToServer));
 }
 
 // One frame whose plaintext is given, then a trailer.
@@ -251,10 +251,7 @@ auto main(int argc, char** argv) -> int
         for (uint8_t i{ 0 }; i < 3; ++i)
         {
             const auto p = test::gamePacket(0x0DF, 16, 0, i);
-            std::ranges::transform(p, std::back_inserter(plain), [](std::byte b)
-                                   {
-                                       return static_cast<uint8_t>(b);
-                                   });
+            plain.insert(plain.end(), p.begin(), p.end());
         }
 
         writeVector(dir, "5-bad-plaintext", withPlaintext(plain, 3));

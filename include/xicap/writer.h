@@ -55,14 +55,14 @@ public:
     auto operator=(Writer&&) -> Writer&      = delete;
 
     // Zeroes chat text unless the writer keeps chat, then adds the packet.
-    auto write(const OutPacket& packet) -> void;
+    auto write(const WritePacket& packet) -> void;
     // Adds a packet as a reader yielded it, flags and markers included, unchanged.
     auto copy(const Packet& packet) -> void;
     // Places a marker just before the next packet. One with no packet after it is dropped.
     auto mark(MarkerKind kind, std::string_view text = {}) -> void;
     // Ends the frame being built, so its packets are on disk.
     auto flush() -> void;
-    // Writes the last frame and the trailer.
+    // Writes the last frame and the trailer. Throws Error if an earlier write failed, which leaves the file cut off.
     auto close() -> void;
 
     [[nodiscard]] auto captureId() const noexcept -> const CaptureId&;

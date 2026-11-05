@@ -1,6 +1,7 @@
 #include "frame/frame.h"
 
 #include <algorithm>
+#include <format>
 #include <unordered_map>
 
 namespace xicap::frame
@@ -11,10 +12,15 @@ namespace
 // Packets that share a channel, direction, and opcode are stored together.
 auto groupKey(const FramePacket& p) noexcept -> uint32_t
 {
-    return (uint32_t{ p.channel } << 17) | (static_cast<uint32_t>(p.flags & PacketFlag::ClientToServer) << 16) | p.opcode;
+    return (uint32_t{ static_cast<uint8_t>(p.channel) } << 17) | (static_cast<uint32_t>(p.flags & PacketFlag::ClientToServer) << 16) | p.opcode;
 }
 
 } // namespace
+
+auto throwBadFrame(const std::string_view why) -> void
+{
+    throw Error(std::format("xicap: bad frame: {}", why));
+}
 
 auto Frame::add(const Packet& packet) -> void
 {
@@ -29,7 +35,7 @@ auto Frame::add(const Packet& packet) -> void
         .markerCount = packet.markers.size(),
     });
     bytes.resize(bytes.size() + packet.data.size());
-    std::ranges::copy(packet.data, std::as_writable_bytes(std::span{ bytes }).subspan(packets.back().offset).begin());
+    std::ranges::copy(packet.data, bytes.begin() + static_cast<std::ptrdiff_t>(packets.back().offset));
     markers.insert(markers.end(), packet.markers.begin(), packet.markers.end());
 }
 
@@ -45,6 +51,11 @@ auto Frame::data(const FramePacket& packet) const noexcept -> std::span<const ui
     return std::span{ bytes }.subspan(packet.offset, packet.length);
 }
 
+auto Frame::data(const FramePacket& packet) noexcept -> std::span<uint8_t>
+{
+    return std::span{ bytes }.subspan(packet.offset, packet.length);
+}
+
 auto Frame::packet(const size_t i) const noexcept -> Packet
 {
     const auto& p = packets[i];
@@ -53,7 +64,7 @@ auto Frame::packet(const size_t i) const noexcept -> Packet
         .flags     = p.flags,
         .channel   = p.channel,
         .opcode    = p.opcode,
-        .data      = std::as_bytes(data(p)),
+        .data      = data(p),
         .markers   = std::span{ markers }.subspan(p.firstMarker, p.markerCount),
     };
 }

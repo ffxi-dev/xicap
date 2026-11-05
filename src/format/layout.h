@@ -1,11 +1,12 @@
 #pragma once
 
-#include "bytes/bytes.h"
-#include "xicap/types.h"
+#include "bytes/crc32.h"
+#include "xicap/metadata.h"
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 
 // The on-disk layout. See FORMAT.md.
@@ -28,17 +29,20 @@ inline constexpr int      MAX_WINDOW_LOG   = 23;
 // The game channel's 4-byte packet header: a 9-bit id, a 7-bit size in 4-byte words, and a 16-bit sync counter.
 inline constexpr size_t GAME_HEADER_SIZE = 4;
 
-template <typename Byte>
-[[nodiscard]] auto gameId(const std::span<Byte> packet) noexcept -> uint16_t
+[[nodiscard]] inline auto gameId(const std::span<const uint8_t> packet) noexcept -> uint16_t
 {
     return bytes::load<uint16_t>(packet) & 0x1FFU;
 }
 
 // The packet length the header's size gives.
-template <typename Byte>
-[[nodiscard]] auto gameLength(const std::span<Byte> packet) noexcept -> size_t
+[[nodiscard]] inline auto gameLength(const std::span<const uint8_t> packet) noexcept -> size_t
 {
     return static_cast<size_t>(bytes::load<uint16_t>(packet) >> 9U) * 4;
+}
+
+[[nodiscard]] inline auto holdsGameHeader(const std::span<const uint8_t> packet, const uint16_t opcode) noexcept -> bool
+{
+    return packet.size() >= GAME_HEADER_SIZE && gameId(packet) == opcode;
 }
 
 #pragma pack(push, 1)
@@ -61,7 +65,7 @@ struct Header
     std::array<char, 16>   worldName;
     uint32_t               crc;
 };
-static_assert(sizeof(Header) == 160);
+static_assert(sizeof(Header) == HEADER_SIZE);
 
 // Followed by length bytes of payload, then a CRC of both.
 struct BlockHeader
@@ -101,5 +105,22 @@ struct Trailer
 static_assert(sizeof(Trailer) == 24);
 
 #pragma pack(pop)
+
+// The trailer at the start of raw, if its magic and CRC hold.
+[[nodiscard]] inline auto readTrailer(const std::span<const uint8_t> raw) noexcept -> std::optional<Trailer>
+{
+    if (raw.size() < sizeof(Trailer))
+    {
+        return std::nullopt;
+    }
+
+    const auto t = bytes::load<Trailer>(raw);
+    if (t.magic != TRAILER_MAGIC || !bytes::endsWithCrc(raw.first(sizeof(Trailer))))
+    {
+        return std::nullopt;
+    }
+
+    return t;
+}
 
 } // namespace xicap::format

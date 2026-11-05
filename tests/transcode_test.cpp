@@ -1,3 +1,4 @@
+#include "format/layout.h"
 #include "support.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -17,7 +18,7 @@ auto writeSample(const std::filesystem::path& path, const Metadata& metadata = t
             w.mark(MarkerKind::Note, "every hundred");
         }
 
-        w.write(test::out(i, test::gamePacket(0x017, 40, i, static_cast<uint8_t>(i))));
+        w.write(test::packet(i, test::gamePacket(0x017, 40, i, static_cast<uint8_t>(i))));
     }
 
     w.close();
@@ -42,7 +43,7 @@ TEST_CASE("transcode completes a cut-off capture")
     const test::TempFile dst;
     writeSample(src);
     auto bytes = test::bytesOf(src);
-    bytes.resize(bytes.size() - 24);
+    bytes.resize(bytes.size() - sizeof(format::Trailer));
     test::save(src, bytes);
     REQUIRE_FALSE(Reader(src).complete());
     transcode(src, dst);
