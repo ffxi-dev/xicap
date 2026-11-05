@@ -1,16 +1,16 @@
-#include "redaction/redaction.h"
+#include "xicap/redaction.h"
 #include "format/layout.h"
 #include "frame/frame.h"
 
 #include <algorithm>
 #include <array>
 
-namespace xicap::redaction
+namespace xicap
 {
 namespace
 {
 
-struct Text
+struct ChatText
 {
     PacketDirection direction;
     uint16_t        opcode;
@@ -21,18 +21,18 @@ struct Text
 constexpr auto TO_END = SIZE_MAX;
 
 // After atom0s's XiPackets. Offsets count the 4-byte header.
-constexpr auto TEXT = std::array{
-    Text{ PacketDirection::ServerToClient, 0x017, 0x17, TO_END }, // chat
-    Text{ PacketDirection::ClientToServer, 0x0B5, 0x06, TO_END }, // chat
-    Text{ PacketDirection::ClientToServer, 0x0B6, 0x15, TO_END }, // tell
-    Text{ PacketDirection::ClientToServer, 0x0B7, 0x15, TO_END }, // Assist Channel
-    Text{ PacketDirection::ServerToClient, 0x0CC, 0x08, 128 },    // linkshell message board
-    Text{ PacketDirection::ClientToServer, 0x0E2, 0x10, 128 },    // linkshell message board post
+constexpr auto CHAT_TEXT = std::array{
+    ChatText{ PacketDirection::ServerToClient, 0x017, 0x17, TO_END }, // chat
+    ChatText{ PacketDirection::ClientToServer, 0x0B5, 0x06, TO_END }, // chat
+    ChatText{ PacketDirection::ClientToServer, 0x0B6, 0x15, TO_END }, // tell
+    ChatText{ PacketDirection::ClientToServer, 0x0B7, 0x15, TO_END }, // Assist Channel
+    ChatText{ PacketDirection::ServerToClient, 0x0CC, 0x08, 128 },    // linkshell message board
+    ChatText{ PacketDirection::ClientToServer, 0x0E2, 0x10, 128 },    // linkshell message board post
 };
 
 } // namespace
 
-auto apply(const OutPacket& packet, const Chat chat) -> StoredPacket
+auto redact(const OutPacket& packet, const Chat chat) -> StoredPacket
 {
     auto stored = StoredPacket{
         .opcode = packet.opcode,
@@ -50,11 +50,11 @@ auto apply(const OutPacket& packet, const Chat chat) -> StoredPacket
     }
 
     stored.opcode   = format::gameId(packet.data);
-    const auto text = std::ranges::find_if(TEXT, [&](const Text& t)
+    const auto text = std::ranges::find_if(CHAT_TEXT, [&](const ChatText& t)
                                            {
                                                return t.direction == packet.direction && t.opcode == stored.opcode;
                                            });
-    if (chat == Chat::Keep || text == TEXT.end())
+    if (chat == Chat::Keep || text == CHAT_TEXT.end())
     {
         return stored;
     }
@@ -68,4 +68,4 @@ auto apply(const OutPacket& packet, const Chat chat) -> StoredPacket
     return stored;
 }
 
-} // namespace xicap::redaction
+} // namespace xicap

@@ -4,7 +4,7 @@
 #include "frame/encoder.h"
 #include "frame/frame.h"
 #include "metadata/codec.h"
-#include "redaction/redaction.h"
+#include "xicap/redaction.h"
 
 #include <algorithm>
 #include <fstream>
@@ -103,7 +103,7 @@ auto Writer::captureId() const noexcept -> const CaptureId&
 auto Writer::write(const OutPacket& packet) -> void
 {
     state_->usable();
-    const auto stored = redaction::apply(packet, state_->chat);
+    const auto stored = redact(packet, state_->chat);
     state_->add({ .timestamp = packet.timestamp, .flags = stored.flags, .channel = packet.channel, .opcode = stored.opcode, .data = stored.data, .markers = {} });
 }
 
