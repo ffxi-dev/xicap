@@ -1,7 +1,6 @@
 # xicap format
 
-Format version 5. This specification is normative. It is a draft: until the
-format is declared stable, a change may break compatibility.
+Format version 5. This specification is normative.
 
 A capture holds one character's session.
 
