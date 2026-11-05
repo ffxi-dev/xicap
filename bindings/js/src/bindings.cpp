@@ -68,7 +68,7 @@ auto metadata(const xicap::Metadata& m) -> em::val
     o.set("previousCaptureId", bytes(m.previousCaptureId));
     o.set("startTimestamp", static_cast<double>(m.startTimestamp));
     o.set("origin", static_cast<int>(m.origin));
-    o.set("network", static_cast<int>(m.network));
+    o.set("serverKind", static_cast<int>(m.serverKind));
     o.set("captureAgent", text(m.captureAgent));
     o.set("clientVersion", text(m.clientVersion));
     o.set("character", character);
@@ -129,7 +129,6 @@ public:
         return static_cast<double>(reader_->packetCount());
     }
 
-    // The next packet, or undefined at the end.
     auto next() -> em::val
     {
         return guard([&]
@@ -151,13 +150,11 @@ private:
 class StreamReader
 {
 public:
-    // The packets whose frames these bytes completed.
     auto push(const em::val& chunk) -> em::val
     {
         return guard([&]
                      {
-                         std::vector<uint8_t> data(chunk["length"].as<size_t>());
-                         em::val(em::typed_memory_view(data.size(), data.data())).call<void>("set", chunk);
+                         const auto data = em::convertJSArrayToNumberVector<uint8_t>(chunk);
                          reader_.push(std::as_bytes(std::span{ data }));
                          auto          out = em::val::array();
                          xicap::Packet p;

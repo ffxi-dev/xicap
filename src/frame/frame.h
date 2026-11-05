@@ -62,7 +62,7 @@ inline auto assignGroups(std::span<const FramePacket> packets, std::vector<uint3
 {
     std::unordered_map<uint32_t, uint32_t> index;
     group.resize(packets.size());
-    for (size_t i = 0; i < packets.size(); ++i)
+    for (size_t i{ 0 }; i < packets.size(); ++i)
     {
         group[i] = index.try_emplace(groupKey(packets[i]), static_cast<uint32_t>(index.size())).first->second;
     }

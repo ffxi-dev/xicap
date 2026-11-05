@@ -39,7 +39,7 @@ inline auto describe(const xicap::Metadata& m) -> nlohmann::ordered_json
         rules.push_back({ { "channel", r.channel }, { "direction", r.direction }, { "action", r.action }, { "opcode", r.opcode }, { "ranges", ranges } });
     }
 
-    nlohmann::ordered_json source = nullptr;
+    nlohmann::ordered_json source;
     if (m.source)
     {
         source = { { "format", m.source->format }, { "formatVersion", m.source->formatVersion }, { "skippedRecords", m.source->skippedRecords }, { "metadata", hex(m.source->metadata) } };
@@ -50,7 +50,7 @@ inline auto describe(const xicap::Metadata& m) -> nlohmann::ordered_json
         { "previousCaptureId", hex(m.previousCaptureId) },
         { "startTimestamp", m.startTimestamp },
         { "origin", m.origin },
-        { "network", m.network },
+        { "serverKind", m.serverKind },
         { "captureAgent", m.captureAgent },
         { "clientVersion", m.clientVersion },
         { "character", { { "contentId", m.character.contentId }, { "characterId", m.character.characterId }, { "name", m.character.name }, { "world", m.character.world } } },

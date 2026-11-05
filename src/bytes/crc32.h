@@ -14,10 +14,10 @@ namespace xicap::bytes
 inline constexpr auto CRC32_TABLE = []
 {
     std::array<uint32_t, 256> table{};
-    for (uint32_t i = 0; i < 256; ++i)
+    for (uint32_t i{ 0 }; i < 256; ++i)
     {
         auto c = i;
-        for (int k = 0; k < 8; ++k)
+        for (int k{ 0 }; k < 8; ++k)
         {
             c = (c >> 1) ^ ((c & 1U) * 0xEDB88320U);
         }

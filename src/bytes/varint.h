@@ -24,8 +24,8 @@ inline auto putVarint(std::vector<uint8_t>& out, uint64_t value) -> void
 // ceil(bits / 7) bytes, or holds a value too large for the field.
 [[nodiscard]] inline auto getVarint(std::span<const uint8_t> in, size_t& pos, unsigned bits, uint32_t& out) noexcept -> bool
 {
-    uint64_t value = 0;
-    for (unsigned shift = 0; shift < bits && pos < in.size(); shift += 7)
+    uint64_t value{ 0 };
+    for (unsigned shift{ 0 }; shift < bits && pos < in.size(); shift += 7)
     {
         const auto b = in[pos++];
         value |= uint64_t{ b & 0x7FU } << shift;

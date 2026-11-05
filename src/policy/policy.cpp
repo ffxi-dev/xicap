@@ -64,7 +64,7 @@ auto check(const ExclusionPolicy& policy) -> void
         throw Error("xicap: too many exclusion rules");
     }
 
-    uint64_t size = sizeof(format::PolicyHeader);
+    uint64_t size{ sizeof(format::PolicyHeader) };
     for (const auto& rule : policy.rules)
     {
         checkRule(rule);

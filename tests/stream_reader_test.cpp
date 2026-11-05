@@ -12,7 +12,7 @@ TEST_CASE("a stream reader fed a byte at a time reads what the reader reads")
         policy.maxPacketsPerFrame = 2;
         Writer w(file, test::metadata(), policy);
         w.mark(MarkerKind::Login);
-        for (uint16_t i = 0; i < 7; ++i)
+        for (uint16_t i{ 0 }; i < 7; ++i)
         {
             w.write(test::out(i, test::gamePacket(0x00D, 12, i, 1)));
         }

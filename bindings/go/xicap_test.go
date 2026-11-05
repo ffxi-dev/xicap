@@ -11,6 +11,17 @@ import (
 	"testing"
 )
 
+// hexBytes reads the lowercase hex the vectors hold bytes as.
+type hexBytes []byte
+
+func (h *hexBytes) UnmarshalJSON(b []byte) (err error) {
+	var s string
+	if err = json.Unmarshal(b, &s); err == nil {
+		*h, err = hex.DecodeString(s)
+	}
+	return err
+}
+
 // vector is the reading tests/vectors/<name>.json gives for <name>.xicap.
 type vector struct {
 	Refused      bool
@@ -18,29 +29,21 @@ type vector struct {
 	EndTimestamp uint64
 	PacketCount  uint64
 	Metadata     struct {
-		CaptureID         string
-		PreviousCaptureID string
-		StartTimestamp    uint64
-		Origin            Origin
-		Network           Network
-		CaptureAgent      string
-		ClientVersion     string
-		Character         struct {
-			ContentID   uint32
-			CharacterID uint32
-			Name        string
-			World       string
-		}
-		Policy struct {
+		CaptureID, PreviousCaptureID hexBytes
+		StartTimestamp               uint64
+		Origin                       Origin
+		ServerKind                   ServerKind
+		CaptureAgent, ClientVersion  string
+		Character                    Character
+		Policy                       struct {
 			Name    string
 			Version uint32
 			Rules   []json.RawMessage
 		}
 		Source *struct {
-			Format         string
-			FormatVersion  string
-			SkippedRecords uint32
-			Metadata       string
+			Format, FormatVersion string
+			SkippedRecords        uint32
+			Metadata              hexBytes
 		}
 	}
 	Packets []struct {
@@ -48,49 +51,44 @@ type vector struct {
 		Channel   uint8
 		Markers   []struct {
 			Kind MarkerKind
-			Text string
+			Text hexBytes
 		}
 	}
 }
 
-func unhex(t *testing.T, s string) []byte {
-	b, err := hex.DecodeString(s)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return b
-}
-
-// want is the Summary a vector's JSON describes.
-func (v vector) want(t *testing.T) Summary {
+// summary is what Read must make of the vector's capture.
+func (v vector) summary() Summary {
 	m := v.Metadata
 	s := Summary{
-		StartTimestamp: m.StartTimestamp,
-		Origin:         m.Origin,
-		Network:        m.Network,
-		CaptureAgent:   m.CaptureAgent,
-		ClientVersion:  m.ClientVersion,
-		Character:      Character(m.Character),
-		Policy:         Policy{Name: m.Policy.Name, Version: m.Policy.Version, Rules: len(m.Policy.Rules)},
-		Packets:        uint64(len(v.Packets)),
-		Complete:       v.Complete,
+		Metadata: Metadata{
+			CaptureID:         [16]byte(m.CaptureID),
+			PreviousCaptureID: [16]byte(m.PreviousCaptureID),
+			StartTimestamp:    m.StartTimestamp,
+			Origin:            m.Origin,
+			ServerKind:        m.ServerKind,
+			CaptureAgent:      m.CaptureAgent,
+			ClientVersion:     m.ClientVersion,
+			Character:         m.Character,
+			Policy:            Policy{m.Policy.Name, m.Policy.Version, len(m.Policy.Rules)},
+		},
+		Complete:     v.Complete,
+		EndTimestamp: v.EndTimestamp,
+		PacketCount:  v.PacketCount,
+		PacketsRead:  uint64(len(v.Packets)),
 	}
-	copy(s.CaptureID[:], unhex(t, m.CaptureID))
-	copy(s.PreviousCaptureID[:], unhex(t, m.PreviousCaptureID))
 	if src := m.Source; src != nil {
-		s.Source = &Source{Format: src.Format, FormatVersion: src.FormatVersion, Skipped: src.SkippedRecords, Metadata: unhex(t, src.Metadata)}
+		s.Source = &Source{src.Format, src.FormatVersion, src.SkippedRecords, src.Metadata}
 	}
-	seen := map[uint8]bool{}
 	for i, p := range v.Packets {
-		s.EndTimestamp = p.Timestamp
-		if !seen[p.Channel] {
-			seen[p.Channel] = true
+		s.LastTimestamp = p.Timestamp
+		if !slices.Contains(s.Channels, p.Channel) {
 			s.Channels = append(s.Channels, p.Channel)
 		}
 		for _, mk := range p.Markers {
-			s.Markers = append(s.Markers, Marker{Kind: mk.Kind, Text: string(unhex(t, mk.Text)), Packet: uint64(i), Timestamp: p.Timestamp})
+			s.Markers = append(s.Markers, Marker{mk.Kind, string(mk.Text), uint64(i), p.Timestamp})
 		}
 	}
+	slices.Sort(s.Channels)
 	return s
 }
 
@@ -119,9 +117,7 @@ func TestVectors(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := v.want(t)
-			slices.Sort(want.Channels) // Read gives them in channel order
-			if !reflect.DeepEqual(got, want) {
+			if want := v.summary(); !reflect.DeepEqual(got, want) {
 				t.Errorf("got  %+v\nwant %+v", got, want)
 			}
 		})
@@ -132,8 +128,8 @@ func TestWriteThenRead(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "c.xicap")
 	w, err := Create(path, WriterInfo{
 		CaptureAgent: "mogsafe", ClientVersion: "1.0", Character: Character{CharacterID: 7, Name: "Rhavyn"},
-		Origin: OriginConverted, Network: NetworkPrivate, KeepChat: true, Archive: true,
-		Source: &Source{Format: "captain", FormatVersion: "1.4", Skipped: 2, Metadata: []byte("manifest")},
+		Origin: OriginConverted, ServerKind: ServerKindPrivate, KeepChat: true, Archive: true,
+		Source: &Source{Format: "captain", FormatVersion: "1.4", SkippedRecords: 2, Metadata: []byte("manifest")},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -162,8 +158,8 @@ func TestWriteThenRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !s.Complete || s.Packets != 5 || s.Policy.Rules != 0 || s.Source.Format != "captain" || string(s.Source.Metadata) != "manifest" ||
-		!reflect.DeepEqual(s.Channels, []uint8{0, 1}) || s.StartTimestamp != 1000 || s.EndTimestamp != 1003 {
+	if !s.Complete || s.PacketCount != 5 || s.PacketsRead != 5 || s.Policy.Rules != 0 || s.Source.Format != "captain" || string(s.Source.Metadata) != "manifest" ||
+		!reflect.DeepEqual(s.Channels, []uint8{0, 1}) || s.StartTimestamp != 1000 || s.EndTimestamp != 1003 || s.LastTimestamp != 1003 {
 		t.Errorf("%+v", s)
 	}
 

@@ -8,7 +8,7 @@
     "previousCaptureId": "00000000000000000000000000000000",
     "startTimestamp": 1767225600000,
     "origin": 2,
-    "network": 2,
+    "serverKind": 2,
     "captureAgent": "mogsafe",
     "clientVersion": "30251101_2",
     "character": {

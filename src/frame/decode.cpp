@@ -36,10 +36,10 @@ auto column(std::span<const uint8_t> plain, size_t& pos, unsigned bits, size_t c
 auto readMarkers(std::span<const uint8_t> plain, size_t& pos, uint32_t count, uint32_t packetCount, std::vector<Marker>& out) -> std::vector<uint32_t>
 {
     std::vector<uint32_t> indexes(count);
-    uint32_t              lastIndex = 0;
+    uint32_t              lastIndex{ 0 };
     for (auto& index : indexes)
     {
-        uint32_t length = 0;
+        uint32_t length{ 0 };
         if (!bytes::getVarint(plain, pos, 32, index) || pos >= plain.size())
         {
             bad("bad marker");
@@ -76,7 +76,7 @@ auto decode(std::span<const uint8_t> plain, uint32_t packetCount, uint32_t marke
         bad("packet and marker counts do not fit the plaintext");
     }
 
-    size_t     pos     = 0;
+    size_t     pos{ 0 };
     const auto delta   = column(plain, pos, 32, packetCount);
     const auto flags   = column(plain, pos, 16, packetCount);
     const auto channel = column(plain, pos, 8, packetCount);
@@ -91,7 +91,7 @@ auto decode(std::span<const uint8_t> plain, uint32_t packetCount, uint32_t marke
 
     out.packets.reserve(packetCount);
     auto timestamp = baseTimestamp;
-    for (uint32_t i = 0; i < packetCount; ++i)
+    for (uint32_t i{ 0 }; i < packetCount; ++i)
     {
         if (timestamp + delta[i] < timestamp)
         {
@@ -117,7 +117,7 @@ auto decode(std::span<const uint8_t> plain, uint32_t packetCount, uint32_t marke
     std::vector<size_t>   cursor(sizes.size());
     std::vector<size_t>   end(sizes.size());
     auto                  at = pos;
-    for (size_t g = 0; g < sizes.size(); ++g)
+    for (size_t g{ 0 }; g < sizes.size(); ++g)
     {
         cursor[g] = at;
         at += sizes[g];
@@ -131,8 +131,8 @@ auto decode(std::span<const uint8_t> plain, uint32_t packetCount, uint32_t marke
 
     out.bytes.reserve(plain.size() - pos);
     std::array<uint16_t, 2> lastSync{};
-    size_t                  game = 0;
-    for (uint32_t i = 0; i < packetCount; ++i)
+    size_t                  game{ 0 };
+    for (uint32_t i{ 0 }; i < packetCount; ++i)
     {
         auto&      p      = out.packets[i];
         const auto g      = group[i];

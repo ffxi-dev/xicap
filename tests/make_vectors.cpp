@@ -45,8 +45,8 @@ struct Layout
 auto layout(const Bytes& b) -> Layout
 {
     Layout l;
-    size_t at = sizeof(format::Header);
-    for (int i = 0; i < b[11]; ++i)
+    size_t at{ sizeof(format::Header) };
+    for (int i{ 0 }; i < b[11]; ++i)
     {
         const auto size = size_t{ 12 } + bytes::load<uint32_t>(std::span{ b }, at + 4);
         l.blocks.emplace_back(at, size);
@@ -87,7 +87,7 @@ auto capture(const std::filesystem::path& dir, const Metadata& m, FramePolicy po
 
 auto example(Writer& w) -> void
 {
-    for (uint16_t i = 0; i < 3; ++i)
+    for (uint16_t i{ 0 }; i < 3; ++i)
     {
         w.write(test::out(T0 + i * 10, test::gamePacket(0x0DF, 16, i + 1, static_cast<uint8_t>(i))));
     }
@@ -174,7 +174,7 @@ auto main(int argc, char** argv) -> int
 
     auto converted         = test::metadata();
     converted.origin       = Origin::Converted;
-    converted.network      = Network::Private;
+    converted.serverKind   = ServerKind::Private;
     converted.captureAgent = "mogsafe";
     converted.policy       = {};
     converted.source       = Source{ .format = "captain", .formatVersion = "1.4.2", .skippedRecords = 2, .metadata = { 'v', '=', '1', '\n' } };
@@ -261,7 +261,7 @@ auto main(int argc, char** argv) -> int
     {
         // FORMAT.md's example plaintext, but its first deltaMs is 1.
         auto plain = Bytes{ 0x01, 0x0a, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xdf, 0x01, 0xdf, 0x01, 0xdf, 0x01, 0x00, 0x00, 0x00, 0x02, 0x02, 0x02, 0x30 };
-        for (uint8_t i = 0; i < 3; ++i)
+        for (uint8_t i{ 0 }; i < 3; ++i)
         {
             const auto p = test::gamePacket(0x0DF, 16, 0, i);
             std::ranges::transform(p, std::back_inserter(plain), [](std::byte b)

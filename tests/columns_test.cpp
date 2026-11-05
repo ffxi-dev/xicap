@@ -49,7 +49,7 @@ TEST_CASE("columns keep markers, groups, and lengths the header does not give")
     frame::Frame frame;
     frame::decode(frame::encode(written), 4, 3, 1, frame);
     REQUIRE(frame.packets.size() == 4);
-    for (size_t i = 0; i < written.packets.size(); ++i)
+    for (size_t i{ 0 }; i < written.packets.size(); ++i)
     {
         const auto p = frame.packet(i);
         const auto w = written.packet(i);

@@ -152,10 +152,10 @@ def plaintext(plain, count, markers, base):
 def read(b):
     if len(b) < 160 or b[:8] != MAGIC or b[8] != 5 or not crc_ok(b[:160]):
         raise Refused("bad header")
-    origin, network, blocks = b[9], b[10], b[11]
+    origin, server_kind, blocks = b[9], b[10], b[11]
     cid, prev, start, agent, client, content, character, name, world = struct.unpack_from("<16s16sQ32s32sII16s16s", b, 12)
     meta = {
-        "captureId": cid.hex(), "previousCaptureId": prev.hex(), "startTimestamp": start, "origin": origin, "network": network,
+        "captureId": cid.hex(), "previousCaptureId": prev.hex(), "startTimestamp": start, "origin": origin, "serverKind": server_kind,
         "captureAgent": text(agent).decode(), "clientVersion": text(client).decode(),
         "character": {"contentId": content, "characterId": character, "name": text(name).decode(), "world": text(world).decode()},
         "policy": None, "source": None,

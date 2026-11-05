@@ -2,10 +2,10 @@
 
 #include "enums/channel.h"
 #include "enums/marker_kind.h"
-#include "enums/network.h"
 #include "enums/origin.h"
 #include "enums/packet_direction.h"
 #include "enums/packet_flag.h"
+#include "enums/server_kind.h"
 
 #include <array>
 #include <cstddef>
@@ -71,7 +71,7 @@ struct OutPacket
     uint64_t                   timestamp{};
     PacketDirection            direction{};
     std::span<const std::byte> data;
-    uint8_t                    channel = static_cast<uint8_t>(Channel::Game);
+    uint8_t                    channel{ static_cast<uint8_t>(Channel::Game) };
     uint16_t                   opcode{};     // ignored on the game channel, where the packet's header holds it
     uint16_t                   provenance{}; // PacketFlag::Provenance bits
 };
