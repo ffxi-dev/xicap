@@ -5,6 +5,10 @@ option(XICAP_FETCH_ZSTD "Build zstd from source even when the system has it" OFF
 option(XICAP_BUILD_TESTS "Build the tests" OFF)
 option(XICAP_BUILD_FUZZERS "Build the libFuzzer targets (Clang)" OFF)
 
+if(XICAP_BUILD_FUZZERS AND XICAP_BUILD_TESTS)
+    message(FATAL_ERROR "XICAP_BUILD_FUZZERS skips CRC checks in the library; build the tests in another directory")
+endif()
+
 if(NOT XICAP_FETCH_ZSTD)
     find_package(zstd CONFIG QUIET)
     if(NOT zstd_FOUND)

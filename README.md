@@ -127,7 +127,8 @@ s.close();
   `build/tests/make_vectors tests/vectors`.
 - Run the fuzzers in `tests/fuzz/` after changing a decoder. They need Clang:
   `cmake -S . -B build-fuzz -G Ninja -DCMAKE_CXX_COMPILER=clang++ -DXICAP_BUILD_FUZZERS=ON`,
-  then `build-fuzz/tests/fuzz/fuzz_reader`. CI does not build them.
+  `cmake --build build-fuzz`, then `build-fuzz/tests/fuzz/fuzz_reader`. CI does
+  not build them.
 - A release sets its version in `CMakeLists.txt`, which the Python package
   reads too, then tags `v<version>`. A major release also changes the `/vN`
   suffix of the module path in `go.mod` and in the Go import above.

@@ -52,22 +52,13 @@ PYBIND11_MODULE(xicap, m)
 
     py::register_exception<xicap::Error>(m, "Error");
 
-    py::enum_<xicap::Origin>(m, "Origin")
-        .value("Unknown", xicap::Origin::Unknown)
-        .value("Live", xicap::Origin::Live)
-        .value("Converted", xicap::Origin::Converted);
-    py::enum_<xicap::ServerKind>(m, "ServerKind")
-        .value("Unknown", xicap::ServerKind::Unknown)
-        .value("Retail", xicap::ServerKind::Retail)
-        .value("Private", xicap::ServerKind::Private);
-    py::enum_<xicap::MarkerKind>(m, "MarkerKind")
-        .value("Note", xicap::MarkerKind::Note)
-        .value("Login", xicap::MarkerKind::Login)
-        .value("Logout", xicap::MarkerKind::Logout);
-    py::enum_<xicap::Channel>(m, "Channel")
-        .value("Game", xicap::Channel::Game)
-        .value("Search", xicap::Channel::Search);
-    m.attr("PacketFlag") = py::module_::import("enum").attr("IntFlag")("PacketFlag", py::dict(py::arg("ClientToServer") = xicap::PacketFlag::ClientToServer, py::arg("Injected") = xicap::PacketFlag::Injected, py::arg("Blocked") = xicap::PacketFlag::Blocked, py::arg("Modified") = xicap::PacketFlag::Modified, py::arg("FirstInDatagram") = xicap::PacketFlag::FirstInDatagram, py::arg("Excluded") = xicap::PacketFlag::Excluded, py::arg("Redacted") = xicap::PacketFlag::Redacted));
+    // Python enums over plain ints, so a value compares with what the API returns and an unknown one stays an int.
+    const auto python    = py::module_::import("enum");
+    m.attr("Origin")     = python.attr("IntEnum")("Origin", py::dict(py::arg("Unknown") = 0, py::arg("Live") = 1, py::arg("Converted") = 2));
+    m.attr("ServerKind") = python.attr("IntEnum")("ServerKind", py::dict(py::arg("Unknown") = 0, py::arg("Retail") = 1, py::arg("Private") = 2));
+    m.attr("MarkerKind") = python.attr("IntEnum")("MarkerKind", py::dict(py::arg("Note") = 0, py::arg("Login") = 1, py::arg("Logout") = 2));
+    m.attr("Channel")    = python.attr("IntEnum")("Channel", py::dict(py::arg("Game") = 0, py::arg("Search") = 1));
+    m.attr("PacketFlag") = python.attr("IntFlag")("PacketFlag", py::dict(py::arg("ClientToServer") = xicap::PacketFlag::ClientToServer, py::arg("Injected") = xicap::PacketFlag::Injected, py::arg("Blocked") = xicap::PacketFlag::Blocked, py::arg("Modified") = xicap::PacketFlag::Modified, py::arg("FirstInDatagram") = xicap::PacketFlag::FirstInDatagram, py::arg("Excluded") = xicap::PacketFlag::Excluded, py::arg("Redacted") = xicap::PacketFlag::Redacted));
 
     py::class_<xicap::Character>(m, "Character")
         .def_readonly("content_id", &xicap::Character::contentId)
@@ -85,15 +76,24 @@ PYBIND11_MODULE(xicap, m)
         .def_property_readonly("capture_id", bytes(&xicap::Metadata::captureId))
         .def_property_readonly("previous_capture_id", bytes(&xicap::Metadata::previousCaptureId))
         .def_readonly("start_timestamp", &xicap::Metadata::startTimestamp)
-        .def_readonly("origin", &xicap::Metadata::origin)
-        .def_readonly("server_kind", &xicap::Metadata::serverKind)
+        .def_property_readonly("origin", [](const xicap::Metadata& o)
+                               {
+                                   return static_cast<int>(o.origin);
+                               })
+        .def_property_readonly("server_kind", [](const xicap::Metadata& o)
+                               {
+                                   return static_cast<int>(o.serverKind);
+                               })
         .def_property_readonly("capture_agent", text(&xicap::Metadata::captureAgent))
         .def_property_readonly("client_version", text(&xicap::Metadata::clientVersion))
         .def_readonly("character", &xicap::Metadata::character)
         .def_readonly("source", &xicap::Metadata::source);
 
     py::class_<xicap::Marker>(m, "Marker")
-        .def_readonly("kind", &xicap::Marker::kind)
+        .def_property_readonly("kind", [](const xicap::Marker& o)
+                               {
+                                   return static_cast<int>(o.kind);
+                               })
         .def_property_readonly("text", text(&xicap::Marker::text));
 
     py::class_<Packet>(m, "Packet")
