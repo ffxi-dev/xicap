@@ -62,12 +62,19 @@ Projects that use CMake can add the library with `FetchContent` and link
 ```go
 import xicap "github.com/ffxi-dev/xicap/v7/bindings/go"
 
-s, err := xicap.Read("session.xicap")   // the header, blocks, markers, and a summary of the packets
+s, err := xicap.Read("session.xicap")
+// s.Metadata, s.PacketCount, s.EndTimestamp, s.Complete, s.Channels, s.Markers
+
+w, err := xicap.Create("session.xicap", xicap.WriterInfo{CaptureAgent: "MyRecorder 1.0", Character: c})
+w.Write(xicap.Packet{Timestamp: ms, Data: bytes})
+w.Close()
+
+err = xicap.Transcode("upload.xicap", "archived.xicap")
 ```
 
 The package builds the C++ library with cgo, so it needs a C++23 compiler and
-libzstd (`apt install libzstd-dev`). It also writes captures (`Create`) and
-rewrites them (`Transcode`).
+libzstd (`apt install libzstd-dev`). Go reads a capture whole, into a summary
+without the packets.
 
 ## Python
 
@@ -78,15 +85,10 @@ pip install ./bindings/python
 ```python
 import xicap
 
-r = xicap.Reader("session.xicap")
-print(r.character.name, r.client_version, r.start_timestamp)
+r = xicap.Reader("session.xicap")   # r.metadata, r.complete, r.packet_count, r.end_timestamp
 for p in r:
-    ...  # p.timestamp, p.channel, p.opcode, p.flags, p.direction, p.data (bytes)
+    ...  # p.timestamp, p.channel, p.opcode, p.flags, p.direction, p.data (bytes), p.markers
 ```
-
-The Python binding is narrow: the character's name and id, the client
-version, the network, the start and end times, the packet count, and each
-packet without its markers.
 
 ## JavaScript
 
@@ -96,7 +98,7 @@ it in `bindings/js/` with Emscripten and Ninja on the path: `npm ci && npm run b
 ```js
 import { Reader, StreamReader } from "./bindings/js/dist/index.js";
 
-const r = await Reader.open(bytes);
+const r = await Reader.open(bytes);   // r.metadata, r.complete, r.packetCount, r.endTimestamp
 for (const p of r) { /* p.timestamp, p.channel, p.opcode, p.flags, p.data, p.markers */ }
 r.close();
 
