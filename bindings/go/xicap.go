@@ -12,6 +12,7 @@ import "C"
 
 import (
 	"errors"
+	"io"
 	"unsafe"
 )
 
@@ -45,6 +46,8 @@ const (
 	FlagBlocked      uint16 = 0x0004
 	FlagModified     uint16 = 0x0008
 	FlagFirstInChunk uint16 = 0x0010
+	FlagExcluded     uint16 = 0x0100
+	FlagRedacted     uint16 = 0x0200
 )
 
 type Character struct {
@@ -62,13 +65,6 @@ type Source struct {
 	Metadata       []byte // such as captain's manifest.txt
 }
 
-// Policy names the exclusion policy a capture was written with. One with no rules kept chat.
-type Policy struct {
-	Name    string
-	Version uint32
-	Rules   int
-}
-
 // Metadata is what a capture's header and blocks say about it.
 type Metadata struct {
 	CaptureID         [16]byte
@@ -79,29 +75,22 @@ type Metadata struct {
 	CaptureAgent      string
 	ClientVersion     string
 	Character         Character
-	Policy            Policy
 	Source            *Source
 }
 
-// Marker is a note, login, or logout, with the packet it precedes.
 type Marker struct {
-	Kind      MarkerKind
-	Text      string
-	Packet    uint64
-	Timestamp uint64
+	Kind MarkerKind
+	Text string
 }
 
-// Summary is what Read learns from a capture. Complete, EndTimestamp, and PacketCount come from the trailer, as in the
-// other bindings, and are zero in a cut-off capture; the rest comes from reading every packet.
-type Summary struct {
-	Metadata
-	Complete      bool
-	EndTimestamp  uint64
-	PacketCount   uint64
-	LastTimestamp uint64
-	PacketsRead   uint64
-	Channels      []uint8 // in order
-	Markers       []Marker
+// Packet is a packet as a reader yields it.
+type Packet struct {
+	Timestamp uint64 // Unix ms
+	Flags     uint16
+	Channel   uint8
+	Opcode    uint16
+	Data      []byte
+	Markers   []Marker // the markers just before this packet
 }
 
 func check(err *C.char) error {
@@ -120,57 +109,80 @@ func CheckHeader(b []byte) error {
 	return check(C.xicap_check_header((*C.uint8_t)(unsafe.SliceData(b)), C.size_t(len(b))))
 }
 
-// Read reads the capture at path. A cut-off capture reads up to its last whole frame; a bad frame in a complete one
-// is an error.
-func Read(path string) (Summary, error) {
+// Reader reads a capture. A cut-off capture reads up to its last whole frame; a bad frame in a complete one is an
+// error. It is not safe for concurrent use.
+type Reader struct {
+	r        *C.xicap_reader
+	Metadata Metadata
+	// From the trailer: zero in a cut-off capture.
+	Complete     bool
+	EndTimestamp uint64
+	PacketCount  uint64
+}
+
+// Open reads the header and blocks of the capture at path.
+func Open(path string) (*Reader, error) {
 	p := C.CString(path)
 	defer C.free(unsafe.Pointer(p))
-	var s C.xicap_summary
-	if err := check(C.xicap_read(p, &s)); err != nil {
-		return Summary{}, err
+	var r Reader
+	var i C.xicap_info
+	if err := check(C.xicap_reader_open(p, &r.r, &i)); err != nil {
+		return nil, err
 	}
-	defer C.xicap_free_summary(&s)
-
-	out := Summary{
-		Metadata: Metadata{
-			CaptureID:         *(*[16]byte)(unsafe.Pointer(&s.capture_id)),
-			PreviousCaptureID: *(*[16]byte)(unsafe.Pointer(&s.previous_capture_id)),
-			StartTimestamp:    uint64(s.start_timestamp),
-			Origin:            Origin(s.origin),
-			ServerKind:        ServerKind(s.server_kind),
-			CaptureAgent:      C.GoString(&s.capture_agent[0]),
-			ClientVersion:     C.GoString(&s.client_version[0]),
-			Character: Character{
-				ContentID:   uint32(s.content_id),
-				CharacterID: uint32(s.character_id),
-				Name:        C.GoString(&s.character_name[0]),
-				World:       C.GoString(&s.world_name[0]),
-			},
-			Policy: Policy{Name: C.GoString(&s.policy_name[0]), Version: uint32(s.policy_version), Rules: int(s.policy_rules)},
+	r.Metadata = Metadata{
+		CaptureID:         [16]byte(C.GoBytes(unsafe.Pointer(i.capture_id), 16)),
+		PreviousCaptureID: [16]byte(C.GoBytes(unsafe.Pointer(i.previous_capture_id), 16)),
+		StartTimestamp:    uint64(i.start_timestamp),
+		Origin:            Origin(i.origin),
+		ServerKind:        ServerKind(i.server_kind),
+		CaptureAgent:      C.GoString(i.capture_agent),
+		ClientVersion:     C.GoString(i.client_version),
+		Character: Character{
+			ContentID:   uint32(i.content_id),
+			CharacterID: uint32(i.character_id),
+			Name:        C.GoString(i.character_name),
+			World:       C.GoString(i.world_name),
 		},
-		Complete:      bool(s.complete),
-		EndTimestamp:  uint64(s.end_timestamp),
-		PacketCount:   uint64(s.packet_count),
-		LastTimestamp: uint64(s.last_timestamp),
-		PacketsRead:   uint64(s.packets_read),
 	}
-	if s.has_source {
-		out.Source = &Source{
-			Format:         C.GoString(&s.source_format[0]),
-			FormatVersion:  C.GoString(&s.source_format_version[0]),
-			SkippedRecords: uint32(s.skipped_records),
-			Metadata:       C.GoBytes(unsafe.Pointer(s.source_metadata), C.int(s.source_metadata_size)),
+	if i.has_source {
+		r.Metadata.Source = &Source{
+			Format:         C.GoString(i.source_format),
+			FormatVersion:  C.GoString(i.source_format_version),
+			SkippedRecords: uint32(i.skipped_records),
+			Metadata:       C.GoBytes(unsafe.Pointer(i.source_metadata), C.int(i.source_metadata_size)),
 		}
 	}
-	for c, used := range s.channels {
-		if used {
-			out.Channels = append(out.Channels, uint8(c))
-		}
+	r.Complete, r.EndTimestamp, r.PacketCount = bool(i.complete), uint64(i.end_timestamp), uint64(i.packet_count)
+	return &r, nil
+}
+
+// Next returns the next packet, or io.EOF after the last.
+func (r *Reader) Next() (Packet, error) {
+	var p C.xicap_packet
+	var more C.bool
+	if err := check(C.xicap_reader_next(r.r, &p, &more)); err != nil {
+		return Packet{}, err
 	}
-	for _, m := range unsafe.Slice(s.markers, s.marker_count) {
-		out.Markers = append(out.Markers, Marker{MarkerKind(m.kind), C.GoStringN(m.text, C.int(m.text_size)), uint64(m.packet), uint64(m.timestamp)})
+	if !more {
+		return Packet{}, io.EOF
+	}
+	out := Packet{
+		Timestamp: uint64(p.timestamp),
+		Flags:     uint16(p.flags),
+		Channel:   uint8(p.channel),
+		Opcode:    uint16(p.opcode),
+		Data:      C.GoBytes(unsafe.Pointer(p.data), C.int(p.size)),
+	}
+	for _, m := range unsafe.Slice(p.markers, p.marker_count) {
+		out.Markers = append(out.Markers, Marker{MarkerKind(m.kind), C.GoStringN(m.text, C.int(m.text_size))})
 	}
 	return out, nil
+}
+
+// Close frees the reader.
+func (r *Reader) Close() {
+	C.xicap_reader_close(r.r)
+	r.r = nil
 }
 
 // WriterInfo is what a new capture's header and blocks record.
@@ -181,12 +193,12 @@ type WriterInfo struct {
 	Origin        Origin
 	ServerKind    ServerKind
 	Source        *Source
-	KeepChat      bool // write no exclusion rules; by default xicap zeroes the text of chat
+	KeepChat      bool // by default xicap zeroes the text of chat
 	Archive       bool // smaller files, written more slowly
 }
 
-// Packet is one packet to write.
-type Packet struct {
+// OutPacket is one packet to write.
+type OutPacket struct {
 	Timestamp      uint64 // Unix ms
 	ClientToServer bool
 	Data           []byte
@@ -241,8 +253,8 @@ func Create(path string, info WriterInfo) (*Writer, error) {
 	return &w, nil
 }
 
-// Write adds one packet, after the exclusion policy.
-func (w *Writer) Write(p Packet) error {
+// Write adds one packet, with its chat text zeroed unless the writer keeps chat.
+func (w *Writer) Write(p OutPacket) error {
 	return check(C.xicap_writer_write(w.w, C.uint64_t(p.Timestamp), C.bool(p.ClientToServer), C.uint8_t(p.Channel), C.uint16_t(p.Opcode),
 		C.uint16_t(p.Provenance), (*C.uint8_t)(unsafe.SliceData(p.Data)), C.size_t(len(p.Data))))
 }

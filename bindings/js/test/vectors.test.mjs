@@ -40,7 +40,6 @@ for (const name of names) {
             await assert.rejects(async () => [...(await Reader.open(bytes))]);
             return;
         }
-        want.metadata.policy.rules = want.metadata.policy.rules.length;
 
         const r = await Reader.open(bytes);
         const packets = [...r];

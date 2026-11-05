@@ -49,30 +49,3 @@ TEST_CASE("transcode completes a cut-off capture")
     CHECK(test::readAll(dst) == test::readAll(src));
     CHECK(Reader(dst).complete());
 }
-
-TEST_CASE("continueFrom writes the frames past a byte offset as a capture that continues the source")
-{
-    const test::TempFile src;
-    const test::TempFile rest;
-    writeSample(src, false);
-    const auto all = test::readAll(src);
-
-    Reader     in(src);
-    Packet     p;
-    const auto held = [&]
-    {
-        for (int i{ 0 }; i < 1000; ++i)
-        {
-            in.next(p);
-        }
-
-        return in.bytesRead();
-    }();
-    const auto written = continueFrom(src, held, rest);
-    CHECK(written > 0);
-    CHECK(written < all.size());
-    const auto tail = test::readAll(rest);
-    CHECK(tail == std::vector(all.end() - static_cast<std::ptrdiff_t>(written), all.end()));
-    CHECK(Reader(rest).metadata().previousCaptureId == Reader(src).metadata().captureId);
-    CHECK(continueFrom(src, std::filesystem::file_size(src.path()), rest) == 0);
-}

@@ -112,7 +112,6 @@ continues, if it knows it.
 
 | Type | Name | Present | Payload |
 |-----:|------|---------|---------|
-| `1` | exclusion policy | always, exactly once | [Exclusion](#exclusion) |
 | `2` | source | at most once, in converted captures | [Source](#source) |
 
 Readers skip blocks of other types. A later version of this document may
@@ -229,8 +228,8 @@ since packet layouts change between client versions.
 | 2 | blocked by an addon |
 | 3 | modified by an addon |
 | 4 | first packet of its datagram |
-| 8 | excluded: a stub, see [Exclusion](#exclusion) |
-| 9 | redacted: byte ranges zeroed, see [Exclusion](#exclusion) |
+| 8 | excluded: a stub, see [Redaction](#redaction) |
+| 9 | redacted: chat text zeroed, see [Redaction](#redaction) |
 
 Writers write the other bits as zero; readers yield them as stored.
 
@@ -259,10 +258,10 @@ df 08 00 00 02 02 02 02 02 02 02 02 02 02 02 02   packet 2
 
 ## Channels
 
-| Channel | Name | Packet bytes | `opcode` | A stub keeps |
-|--------:|------|--------------|----------|--------------|
-| 0 | game | the FFXI packet, from its 4-byte header | the header's 9-bit id | the 4-byte header |
-| 1 | search | the plaintext request or reply, from its 4-byte size | byte `0x0B`, the request type, as the writer's caller gives it | not defined |
+| Channel | Name | Packet bytes | `opcode` |
+|--------:|------|--------------|----------|
+| 0 | game | the FFXI packet, from its 4-byte header | the header's 9-bit id |
+| 1 | search | the plaintext request or reply, from its 4-byte size | byte `0x0B`, the request type, as the writer's caller gives it |
 
 Other channels are reserved. A reader yields their packets with the channel's
 number.
@@ -283,49 +282,13 @@ Byte 1 holds bit 8 of `id` in its lowest bit and `size` in its high 7 bits:
 A writer refuses a game packet shorter than 4 bytes, and sets `opcode` to its
 `id`.
 
-## Exclusion
+## Redaction
 
-Every capture carries the exclusion policy its writer applied, in its policy
-block. The writer applies it to each packet before compressing it, so
-excluded bytes never reach the file. A policy with no rules says the writer
-kept everything, chat included.
-
-| Off | Size | Field |
-|----:|-----:|-------|
-| 0 | 32 | `name`: text |
-| 32 | 4 | `version` |
-| 36 | 2 | `ruleCount` |
-| 38 | | `ruleCount` rules, to the end of the payload |
-
-Each rule:
-
-| Off | Size | Field | Notes |
-|----:|-----:|-------|-------|
-| 0 | 1 | `channel` | |
-| 1 | 1 | `direction` | `0` to the client, `1` from the client, `2` both |
-| 2 | 1 | `action` | `1` stub, `2` zero byte ranges |
-| 3 | 2 | `opcode` | |
-| 5 | 2 | `rangeCount` | `0` for a stub |
-| 7 | | `rangeCount` ranges of `u32 offset, u32 length` | a length of `0xFFFFFFFF` runs to the packet's end |
-
-The first rule that matches a packet's channel, direction, and opcode applies.
-
-- **Stub:** the packet keeps its timestamp, channel, direction, provenance
-  flags, and opcode, sets the excluded flag, and keeps only what its channel's
-  row in [Channels](#channels) says a stub keeps. A writer refuses a stub rule
-  for a channel whose row does not say.
-- **Zero byte ranges:** the packet keeps its length, sets the redacted flag,
-  and has each range zeroed. A range that runs past the packet's end stops at
-  the end. On the game channel no range may start inside the 4-byte header; a
-  writer refuses such a rule.
-
-**Why** zero in place: a capture should still parse in ten years, with every
-field where the packet's layout puts it. Zeroing only the text keeps the
-length and every other field.
-
-The library's default policy, `xicap-default` version 2, zeroes the text
-players write to each other on the game channel, and nothing else, so each
-packet keeps its length and its other fields. Offsets count the 4-byte header.
+A writer zeroes the text players write to each other before it compresses the
+packet, so that text never reaches the file. It zeroes the bytes below in each
+game-channel packet with this opcode and direction, stopping at the packet's
+end, and sets the packet's redacted flag. The packet keeps its length and
+every other field. Offsets count the 4-byte header.
 
 | Opcode | Direction | Packet | Zeroed |
 |-------:|-----------|--------|--------|
@@ -336,7 +299,18 @@ packet keeps its length and its other fields. Offsets count the 4-byte header.
 | `0x0CC` | to the client | linkshell message board | `0x08`, 128 bytes (`sMessage`) |
 | `0x0E2` | from the client | linkshell message board post | `0x10`, 128 bytes (`sMessage`) |
 
-Opcodes and field names follow atom0s's XiPackets.
+Opcodes and field names follow atom0s's XiPackets. A writer told to keep chat
+zeroes nothing, so a packet in the table without the redacted flag holds its
+text as written. Changing the table needs a new format version.
+
+A packet with the excluded flag is a stub: it holds only its 4-byte game
+header, and keeps its timestamp, channel, direction, provenance flags, and
+opcode. Writers no longer write stubs; captures converted from older formats,
+which cut chat packets to their header, still hold them.
+
+**Why** zero in place: a capture should still parse in ten years, with every
+field where the packet's layout puts it. Zeroing only the text keeps the
+length and every other field.
 
 ## Trailer
 
@@ -358,9 +332,8 @@ A reader refuses the file, wherever it meets the cause, when:
 - the magic differs, `version` is not 5, or the header's CRC fails;
 - a block's `length` is over 16 MiB, the block runs past the end of the file,
   or its CRC fails;
-- there is no policy block, a second policy block, or a second source block;
-- a policy block's rules and ranges do not end exactly at the end of its
-  payload, or a source block's payload is under 36 bytes;
+- there is a second source block, or a source block's payload is under 36
+  bytes;
 - the file is complete and holds a bad frame;
 - its frames end at a valid trailer that is not the file's last 24 bytes, or
   the trailer's `packetCount` or `endTimestamp` differs from the packets read.
@@ -423,7 +396,7 @@ if it reads.
 - **Durability.** A writer hands each frame to the operating system as soon as
   it is written. After a write fails, it writes nothing more, trailer
   included, so the file reads as cut off before the failure.
-- **Empty captures** still get a header, blocks, and a trailer.
+- **Empty captures** still get a header, their blocks, and a trailer.
 - **Rewriting.** A program may rewrite a capture with other frames and
   compression. It keeps the header's fields, the blocks, and every packet and
   marker in order; the bytes depend on the compressor.
@@ -445,18 +418,18 @@ A refused file's JSON is `{"refused": true}`. Any other holds `refused`,
 `complete`, `endTimestamp` and `packetCount` from the trailer (both `0` in a
 cut-off file), `metadata`, and `packets`. Header text fields are JSON strings;
 capture ids, source metadata, packet bytes, and marker text are lowercase hex.
-A policy rule's ranges are `[offset, length]` pairs. Each packet lists
+Each packet lists
 `timestamp`, `flags`, `channel`, `opcode`, `data`, and `markers`, each marker
 with its `kind` and `text`.
 
 ## Worked example
 
 The conformance file `tests/vectors/5-example.xicap`, whole: a live capture of
-the three packets of [the example above](#example), with the default policy,
-one frame, and the trailer. Offsets are in hex.
+the three packets of [the example above](#example), with no blocks, one
+frame, and the trailer. Offsets are in hex.
 
 ```
-00000000  89 58 43 50 0d 0a 1a 0a 05 01 01 01 33 33 33 33  magic; version 5; origin 1 (live); serverKind 1 (retail); blockCount 1; captureId
+00000000  89 58 43 50 0d 0a 1a 0a 05 01 01 00 33 33 33 33  magic; version 5; origin 1 (live); serverKind 1 (retail); blockCount 0; captureId
 00000010  33 33 33 33 33 33 33 33 33 33 33 33 00 00 00 00  previousCaptureId (from 1c)
 00000020  00 00 00 00 00 00 00 00 00 00 00 00 00 a8 da 76  startTimestamp (from 2c)
 00000030  9b 01 00 00 78 69 63 61 70 20 74 65 73 74 73 00  captureAgent (from 34)
@@ -465,23 +438,15 @@ one frame, and the trailer. Offsets are in hex.
 00000060  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
 00000070  00 00 00 00 04 03 02 01 0d 0c 0b 0a 52 68 61 76  contentId (from 74); characterId; characterName
 00000080  79 6e 00 00 00 00 00 00 00 00 00 00 41 73 75 72  worldName (from 8c)
-00000090  61 00 00 00 00 00 00 00 00 00 00 00 bc a9 a7 b4  header crc (from 9c)
-000000a0  01 00 00 00 80 00 00 00 78 69 63 61 70 2d 64 65  block: type 1 (exclusion policy), length 128; name
-000000b0  66 61 75 6c 74 00 00 00 00 00 00 00 00 00 00 00
-000000c0  00 00 00 00 00 00 00 00 02 00 00 00 06 00 00 00  version 2 (from c8), ruleCount 6, first rule (from ce)
-000000d0  02 17 00 01 00 17 00 00 00 ff ff ff ff 00 01 02  game, to the client, zero ranges, 0x017, 1 range: 0x17 to the end
-000000e0  b5 00 01 00 06 00 00 00 ff ff ff ff 00 01 02 b6
-000000f0  00 01 00 15 00 00 00 ff ff ff ff 00 01 02 b7 00
-00000100  01 00 15 00 00 00 ff ff ff ff 00 00 02 cc 00 01
-00000110  00 08 00 00 00 80 00 00 00 00 01 02 e2 00 01 00
-00000120  10 00 00 00 80 00 00 00 70 24 c1 57 58 43 46 52  block crc (from 128); frame: magic XCFR (from 12c)
-00000130  3c 00 00 00 46 00 00 00 03 00 00 00 00 00 00 00  payloadSize 60, plainSize 70, packetCount 3, markerCount 0
-00000140  00 a8 da 76 9b 01 00 00 28 b5 2f fd 00 58 9c 01  baseTimestamp; payload (from 148): the plaintext above, compressed
-00000150  00 94 02 00 0a 0a 00 df 01 df 01 df 01 00 00 00
-00000160  02 02 02 30 df 08 00 df 08 00 00 01 df 08 00 00
-00000170  02 02 02 02 02 02 02 02 02 02 02 02 03 10 00 86
-00000180  76 eb 22 02 7c 89 a4 65 58 43 50 46 14 a8 da 76  frame crc (from 184); trailer: magic XCPF (from 188), endTimestamp
-00000190  9b 01 00 00 03 00 00 00 00 00 00 00 3e 01 fd c2  packetCount 3 (from 194), crc (from 19c)
+00000090  61 00 00 00 00 00 00 00 00 00 00 00 a1 52 e9 ec  header crc (from 9c)
+000000a0  58 43 46 52 3c 00 00 00 46 00 00 00 03 00 00 00  frame: magic XCFR, payloadSize 60, plainSize 70, packetCount 3
+000000b0  00 00 00 00 00 a8 da 76 9b 01 00 00 28 b5 2f fd  markerCount 0; baseTimestamp (from b4); payload (from bc): the plaintext above, compressed
+000000c0  00 58 9c 01 00 94 02 00 0a 0a 00 df 01 df 01 df
+000000d0  01 00 00 00 02 02 02 30 df 08 00 df 08 00 00 01
+000000e0  df 08 00 00 02 02 02 02 02 02 02 02 02 02 02 02
+000000f0  03 10 00 86 76 eb 22 02 7c 89 a4 65 58 43 50 46  frame crc (from f8); trailer: magic XCPF (from fc)
+00000100  14 a8 da 76 9b 01 00 00 03 00 00 00 00 00 00 00  endTimestamp; packetCount 3 (from 108)
+00000110  3e 01 fd c2                                      crc
 ```
 
 `tests/reference_reader.py --example FORMAT.md` checks that these bytes are the

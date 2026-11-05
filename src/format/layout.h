@@ -17,7 +17,6 @@ inline constexpr uint8_t                VERSION       = 5;
 inline constexpr uint32_t               FRAME_MAGIC   = 0x52464358; // "XCFR"
 inline constexpr uint32_t               TRAILER_MAGIC = 0x46504358; // "XCPF"
 
-inline constexpr uint32_t BLOCK_POLICY = 1;
 inline constexpr uint32_t BLOCK_SOURCE = 2;
 
 inline constexpr uint32_t MAX_BLOCK_SIZE   = 16 * 1024 * 1024;
@@ -73,25 +72,6 @@ struct BlockHeader
     uint32_t type;
     uint32_t length;
 };
-
-struct PolicyHeader
-{
-    Text<32> name;
-    uint32_t version;
-    uint16_t ruleCount;
-};
-static_assert(sizeof(PolicyHeader) == 38);
-
-// Followed by rangeCount ranges of u32 offset, u32 length.
-struct RuleHeader
-{
-    uint8_t  channel;
-    uint8_t  direction;
-    uint8_t  action;
-    uint16_t opcode;
-    uint16_t rangeCount;
-};
-static_assert(sizeof(RuleHeader) == 7);
 
 // Followed by the metadata, to the end of the payload.
 struct SourceHeader

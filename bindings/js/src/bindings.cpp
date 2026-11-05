@@ -49,10 +49,6 @@ auto metadata(const xicap::Metadata& m) -> em::val
     character.set("characterId", m.character.characterId);
     character.set("name", text(m.character.name));
     character.set("world", text(m.character.world));
-    auto policy = em::val::object();
-    policy.set("name", text(m.policy.name));
-    policy.set("version", m.policy.version);
-    policy.set("rules", m.policy.rules.size());
     auto source = em::val::null();
     if (m.source)
     {
@@ -72,7 +68,6 @@ auto metadata(const xicap::Metadata& m) -> em::val
     o.set("captureAgent", text(m.captureAgent));
     o.set("clientVersion", text(m.clientVersion));
     o.set("character", character);
-    o.set("policy", policy);
     o.set("source", source);
     return o;
 }

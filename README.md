@@ -3,13 +3,12 @@
 A file format and C++23 library for recording Final Fantasy XI network
 packets, with readers for Go, Python, and JavaScript.
 
-A capture holds one character's session: a header, its exclusion policy, and
-packets in frames. Each frame stores its packets in columns and continues one
+A capture holds one character's session: a header and packets in frames. Each frame stores its packets in columns and continues one
 zstd stream, so captures are small, and each frame can be read as soon as it
 is written: a capture can upload while it records, and a capture cut off by a
 crash reads up to its last whole frame. Every block and frame carries a CRC.
-The exclusion policy zeroes the text of chat before it reaches disk, keeping
-each packet's layout.
+Writers zero the text of chat before it reaches disk, keeping each packet's
+layout, unless told to keep chat.
 
 [FORMAT.md](FORMAT.md) specifies the format, with enough detail to write a
 reader from it alone.
@@ -19,13 +18,13 @@ reader from it alone.
 ```cpp
 #include <xicap/xicap.h>
 
-xicap::Metadata m;                  // xicap's default policy zeroes chat text
+xicap::Metadata m;
 m.captureAgent  = "MyRecorder 1.0";
 m.clientVersion = "30251101_2";
 m.serverKind    = xicap::ServerKind::Retail;
 m.character     = { .contentId = contentId, .characterId = id, .name = "Rhavyn", .world = "Asura" };
 
-xicap::Writer w("session.xicap", m);
+xicap::Writer w("session.xicap", m);   // zeroes chat text; pass xicap::Chat::Keep to keep it
 w.mark(xicap::MarkerKind::Login);
 w.write({ .timestamp = ms, .direction = xicap::PacketDirection::ServerToClient, .data = bytes });
 w.flush();                          // on a timer: what was written is on disk and readable
@@ -62,24 +61,26 @@ Projects that use CMake can add the library with `FetchContent` and link
 ```go
 import xicap "github.com/ffxi-dev/xicap/v7/bindings/go"
 
-s, err := xicap.Read("session.xicap")
-// s.Metadata, s.Complete, s.EndTimestamp, s.PacketCount, s.LastTimestamp, s.PacketsRead, s.Channels, s.Markers
+r, err := xicap.Open("session.xicap")   // r.Metadata, r.Complete, r.EndTimestamp, r.PacketCount
+defer r.Close()
+for {
+    p, err := r.Next()   // io.EOF after the last packet
+    ...                  // p.Timestamp, p.Flags, p.Channel, p.Opcode, p.Data, p.Markers
+}
 
 w, err := xicap.Create("session.xicap", xicap.WriterInfo{CaptureAgent: "MyRecorder 1.0", Character: c})
-w.Write(xicap.Packet{Timestamp: ms, Data: bytes})
+w.Write(xicap.OutPacket{Timestamp: ms, Data: bytes})
 w.Close()
 
 err = xicap.Transcode("upload.xicap", "archived.xicap")
 ```
 
 The package builds the C++ library with cgo, so it needs a C++23 compiler and
-libzstd (`apt install libzstd-dev`). Go reads a capture whole, into a summary
-without the packets.
+libzstd (`apt install libzstd-dev`).
 
 In every binding, `complete`, `endTimestamp`, and `packetCount` come from the
 trailer, so a reader knows them before reading a packet, and are 0 in a
-cut-off capture. Go also gives `LastTimestamp` and `PacketsRead`, what
-reading every packet found, which a cut-off capture has too.
+cut-off capture. For a cut-off capture, count the packets as you read them.
 
 ## Python
 

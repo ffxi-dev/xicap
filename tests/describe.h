@@ -27,18 +27,6 @@ auto hex(const Bytes& bytes) -> std::string
 
 inline auto describe(const xicap::Metadata& m) -> nlohmann::ordered_json
 {
-    auto rules = nlohmann::ordered_json::array();
-    for (const auto& r : m.policy.rules)
-    {
-        auto ranges = nlohmann::ordered_json::array();
-        for (const auto& range : r.ranges)
-        {
-            ranges.push_back({ range.offset, range.length });
-        }
-
-        rules.push_back({ { "channel", r.channel }, { "direction", r.direction }, { "action", r.action }, { "opcode", r.opcode }, { "ranges", ranges } });
-    }
-
     nlohmann::ordered_json source;
     if (m.source)
     {
@@ -54,7 +42,6 @@ inline auto describe(const xicap::Metadata& m) -> nlohmann::ordered_json
         { "captureAgent", m.captureAgent },
         { "clientVersion", m.clientVersion },
         { "character", { { "contentId", m.character.contentId }, { "characterId", m.character.characterId }, { "name", m.character.name }, { "world", m.character.world } } },
-        { "policy", { { "name", m.policy.name }, { "version", m.policy.version }, { "rules", rules } } },
         { "source", source },
     };
 }

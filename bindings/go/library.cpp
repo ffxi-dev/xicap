@@ -2,6 +2,7 @@
 #include "../../src/frame/decode.cpp"
 #include "../../src/frame/decoder.cpp"
 #include "../../src/frame/encode.cpp"
+#include "../../src/frame/encoder.cpp"
 #include "../../src/frame/frame.cpp"
 #include "../../src/io/reader.cpp"
 #include "../../src/io/stream_reader.cpp"
@@ -9,4 +10,4 @@
 #include "../../src/io/writer.cpp"
 #include "../../src/metadata/decode.cpp"
 #include "../../src/metadata/encode.cpp"
-#include "../../src/policy/policy.cpp"
+#include "../../src/redaction/redaction.cpp"

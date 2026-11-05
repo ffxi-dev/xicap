@@ -1,7 +1,7 @@
 #pragma once
 
+#include "enums/chat.h"
 #include "metadata.h"
-#include "policy.h"
 #include "types.h"
 
 #include <cstddef>
@@ -47,14 +47,14 @@ struct FramePolicy
 class Writer
 {
 public:
-    Writer(const std::filesystem::path& path, Metadata metadata, FramePolicy policy = FramePolicy::live());
+    Writer(const std::filesystem::path& path, Metadata metadata, FramePolicy policy = FramePolicy::live(), Chat chat = Chat::Redact);
     ~Writer();
     Writer(const Writer&)                    = delete;
     Writer(Writer&&)                         = delete;
     auto operator=(const Writer&) -> Writer& = delete;
     auto operator=(Writer&&) -> Writer&      = delete;
 
-    // Applies the exclusion policy, then adds the packet.
+    // Zeroes chat text unless the writer keeps chat, then adds the packet.
     auto write(const OutPacket& packet) -> void;
     // Adds a packet as a reader yielded it, flags and markers included, unchanged.
     auto copy(const Packet& packet) -> void;
