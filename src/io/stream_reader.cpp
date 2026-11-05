@@ -1,7 +1,7 @@
 #include "xicap/stream_reader.h"
-#include "crc32.h"
-#include "frame_decoder.h"
-#include "metadata_codec.h"
+#include "bytes/crc32.h"
+#include "frame/decoder.h"
+#include "metadata/codec.h"
 
 #include <algorithm>
 #include <optional>
@@ -24,19 +24,19 @@ struct StreamReader::State
     auto parse() -> void;
     auto parseFrame(std::span<const uint8_t> avail) -> bool;
 
-    Stage                                 stage{ Stage::Header };
-    std::vector<uint8_t>                  buffer;
-    size_t                                pos{};
-    uint64_t                              dropped{}; // bytes read and erased from the front of buffer
-    Metadata                              metadata;
-    uint8_t                               blocksLeft{};
-    bool                                  havePolicy{ false };
-    bool                                  haveSource{ false };
-    std::optional<internal::FrameDecoder> decoder;
-    internal::Frame                       frame;
-    size_t                                nextPacket{};
-    uint64_t                              packets{};
-    uint64_t                              lastTimestamp{};
+    Stage                         stage{ Stage::Header };
+    std::vector<uint8_t>          buffer;
+    size_t                        pos{};
+    uint64_t                      dropped{}; // bytes read and erased from the front of buffer
+    Metadata                      metadata;
+    uint8_t                       blocksLeft{};
+    bool                          havePolicy{ false };
+    bool                          haveSource{ false };
+    std::optional<frame::Decoder> decoder;
+    frame::Frame                  frame;
+    size_t                        nextPacket{};
+    uint64_t                      packets{};
+    uint64_t                      lastTimestamp{};
 };
 
 StreamReader::StreamReader()
@@ -122,7 +122,7 @@ auto StreamReader::State::parse() -> void
                     return;
                 }
 
-                blocksLeft = internal::readHeader(avail, metadata);
+                blocksLeft = metadata::readHeader(avail, metadata);
                 pos += sizeof(format::Header);
                 stage = Stage::Blocks;
                 break;
@@ -145,13 +145,13 @@ auto StreamReader::State::parse() -> void
                     return;
                 }
 
-                const auto size = internal::blockSize(avail);
+                const auto size = metadata::blockSize(avail);
                 if (avail.size() < size)
                 {
                     return;
                 }
 
-                const auto type = internal::readBlock(avail.first(static_cast<size_t>(size)), metadata);
+                const auto type = metadata::readBlock(avail.first(static_cast<size_t>(size)), metadata);
                 if ((type == format::BLOCK_POLICY && std::exchange(havePolicy, true)) || (type == format::BLOCK_SOURCE && std::exchange(haveSource, true)))
                 {
                     throw Error("xicap: a second exclusion policy or source block");
@@ -189,7 +189,7 @@ auto StreamReader::State::parseFrame(std::span<const uint8_t> avail) -> bool
         return false;
     }
 
-    const auto magic = internal::load<uint32_t>(avail);
+    const auto magic = bytes::load<uint32_t>(avail);
     const auto stop  = [this]
     {
         stage = Stage::Stopped;
@@ -204,12 +204,12 @@ auto StreamReader::State::parseFrame(std::span<const uint8_t> avail) -> bool
             return false;
         }
 
-        if (!internal::endsWithCrc(avail.first(sizeof(format::Trailer))))
+        if (!bytes::endsWithCrc(avail.first(sizeof(format::Trailer))))
         {
             return stop();
         }
 
-        const auto t = internal::load<format::Trailer>(avail);
+        const auto t = bytes::load<format::Trailer>(avail);
         if (t.packetCount != packets || t.endTimestamp != lastTimestamp)
         {
             throw Error("xicap: the trailer disagrees with the frames");
@@ -230,7 +230,7 @@ auto StreamReader::State::parseFrame(std::span<const uint8_t> avail) -> bool
         return false;
     }
 
-    const auto h = internal::load<format::FrameHeader>(avail);
+    const auto h = bytes::load<format::FrameHeader>(avail);
     if (h.payloadSize > format::MAX_PAYLOAD_SIZE)
     {
         return stop();
@@ -242,7 +242,7 @@ auto StreamReader::State::parseFrame(std::span<const uint8_t> avail) -> bool
         return false;
     }
 
-    if (!internal::endsWithCrc(avail.first(size)))
+    if (!bytes::endsWithCrc(avail.first(size)))
     {
         return stop();
     }

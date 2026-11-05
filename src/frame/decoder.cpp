@@ -1,11 +1,11 @@
-#include "frame_decoder.h"
+#include "frame/decoder.h"
 
 #include <format>
 
-namespace xicap::internal
+namespace xicap::frame
 {
 
-FrameDecoder::FrameDecoder()
+Decoder::Decoder()
 : dctx_(ZSTD_createDCtx())
 {
     if (!dctx_)
@@ -16,21 +16,21 @@ FrameDecoder::FrameDecoder()
     ZSTD_DCtx_setParameter(dctx_.get(), ZSTD_d_windowLogMax, format::MAX_WINDOW_LOG);
 }
 
-auto FrameDecoder::decode(const format::FrameHeader& header, std::span<const uint8_t> payload, Frame& out) -> void
+auto Decoder::decode(const format::FrameHeader& header, std::span<const uint8_t> payload, Frame& out) -> void
 {
     if (header.plainSize == 0 || header.plainSize > format::MAX_PLAIN_SIZE)
     {
-        badFrame(std::format("plain size {}", header.plainSize));
+        bad(std::format("plain size {}", header.plainSize));
     }
 
     if (header.packetCount == 0 || header.packetCount > format::MAX_PACKETS)
     {
-        badFrame(std::format("packet count {}", header.packetCount));
+        bad(std::format("packet count {}", header.packetCount));
     }
 
     if (header.baseTimestamp < lastTimestamp_)
     {
-        badFrame("it starts before the frame before it ends");
+        bad("it starts before the frame before it ends");
     }
 
     // One byte more than expected, to catch a payload that decodes to more.
@@ -44,7 +44,7 @@ auto FrameDecoder::decode(const format::FrameHeader& header, std::span<const uin
         const auto rc        = ZSTD_decompressStream(dctx_.get(), &buf, &in);
         if (ZSTD_isError(rc))
         {
-            badFrame(std::format("zstd: {}", ZSTD_getErrorName(rc)));
+            bad(std::format("zstd: {}", ZSTD_getErrorName(rc)));
         }
 
         if (in.pos == inBefore && buf.pos == outBefore)
@@ -55,11 +55,11 @@ auto FrameDecoder::decode(const format::FrameHeader& header, std::span<const uin
 
     if (in.pos != in.size || buf.pos != header.plainSize)
     {
-        badFrame("its payload does not decode to its plain size");
+        bad("its payload does not decode to its plain size");
     }
 
-    decodeColumns(std::span{ plain_ }.first(header.plainSize), header.packetCount, header.markerCount, header.baseTimestamp, out);
+    frame::decode(std::span{ plain_ }.first(header.plainSize), header.packetCount, header.markerCount, header.baseTimestamp, out);
     lastTimestamp_ = out.packets.back().timestamp;
 }
 
-} // namespace xicap::internal
+} // namespace xicap::frame

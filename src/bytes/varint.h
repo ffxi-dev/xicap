@@ -6,7 +6,7 @@
 #include <vector>
 
 // Unsigned LEB128 varints and 16-bit zigzag, as FORMAT.md's Conventions define them.
-namespace xicap::internal
+namespace xicap::bytes
 {
 
 inline auto putVarint(std::vector<uint8_t>& out, uint64_t value) -> void
@@ -49,4 +49,4 @@ inline auto putVarint(std::vector<uint8_t>& out, uint64_t value) -> void
     return static_cast<uint16_t>((z >> 1) ^ static_cast<uint16_t>(-(z & 1)));
 }
 
-} // namespace xicap::internal
+} // namespace xicap::bytes

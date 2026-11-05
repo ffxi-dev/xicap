@@ -1,16 +1,16 @@
-#include "columns.h"
-#include "format.h"
-#include "varint.h"
+#include "bytes/varint.h"
+#include "format/layout.h"
+#include "frame/frame.h"
 
 #include <algorithm>
 #include <array>
 #include <format>
 #include <string_view>
 
-namespace xicap::internal
+namespace xicap::frame
 {
 
-auto badFrame(std::string_view why) -> void
+auto bad(std::string_view why) -> void
 {
     throw Error(std::format("xicap: bad frame: {}", why));
 }
@@ -23,9 +23,9 @@ auto column(std::span<const uint8_t> plain, size_t& pos, unsigned bits, size_t c
     std::vector<uint32_t> values(count);
     for (auto& v : values)
     {
-        if (!getVarint(plain, pos, bits, v))
+        if (!bytes::getVarint(plain, pos, bits, v))
         {
-            badFrame("bad varint");
+            bad("bad varint");
         }
     }
 
@@ -40,20 +40,20 @@ auto readMarkers(std::span<const uint8_t> plain, size_t& pos, uint32_t count, ui
     for (auto& index : indexes)
     {
         uint32_t length = 0;
-        if (!getVarint(plain, pos, 32, index) || pos >= plain.size())
+        if (!bytes::getVarint(plain, pos, 32, index) || pos >= plain.size())
         {
-            badFrame("bad marker");
+            bad("bad marker");
         }
 
         const auto kind = static_cast<MarkerKind>(plain[pos++]);
-        if (!getVarint(plain, pos, 16, length) || length > plain.size() - pos)
+        if (!bytes::getVarint(plain, pos, 16, length) || length > plain.size() - pos)
         {
-            badFrame("bad marker");
+            bad("bad marker");
         }
 
         if (index >= packetCount || index < lastIndex)
         {
-            badFrame("marker out of place");
+            bad("marker out of place");
         }
 
         lastIndex       = index;
@@ -67,13 +67,13 @@ auto readMarkers(std::span<const uint8_t> plain, size_t& pos, uint32_t count, ui
 
 } // namespace
 
-auto decodeColumns(std::span<const uint8_t> plain, uint32_t packetCount, uint32_t markerCount, uint64_t baseTimestamp, Frame& out) -> void
+auto decode(std::span<const uint8_t> plain, uint32_t packetCount, uint32_t markerCount, uint64_t baseTimestamp, Frame& out) -> void
 {
     out.clear();
     // Each packet takes at least one byte in each of the first five columns, and each marker three.
     if (packetCount == 0 || uint64_t{ packetCount } * 5 + uint64_t{ markerCount } * 3 > plain.size())
     {
-        badFrame("packet and marker counts do not fit the plaintext");
+        bad("packet and marker counts do not fit the plaintext");
     }
 
     size_t     pos     = 0;
@@ -86,7 +86,7 @@ auto decodeColumns(std::span<const uint8_t> plain, uint32_t packetCount, uint32_
     const auto marked  = readMarkers(plain, pos, markerCount, packetCount, out.markers);
     if (delta[0] != 0)
     {
-        badFrame("the first packet's deltaMs is not 0");
+        bad("the first packet's deltaMs is not 0");
     }
 
     out.packets.reserve(packetCount);
@@ -95,7 +95,7 @@ auto decodeColumns(std::span<const uint8_t> plain, uint32_t packetCount, uint32_
     {
         if (timestamp + delta[i] < timestamp)
         {
-            badFrame("a timestamp past 2^64");
+            bad("a timestamp past 2^64");
         }
 
         timestamp += delta[i];
@@ -126,7 +126,7 @@ auto decodeColumns(std::span<const uint8_t> plain, uint32_t packetCount, uint32_
 
     if (at != plain.size())
     {
-        badFrame("group sizes do not add up");
+        bad("group sizes do not add up");
     }
 
     out.bytes.reserve(plain.size() - pos);
@@ -143,7 +143,7 @@ auto decodeColumns(std::span<const uint8_t> plain, uint32_t packetCount, uint32_
             {
                 if (lengths[i] == 0)
                 {
-                    badFrame("implied length off the game channel");
+                    bad("implied length off the game channel");
                 }
 
                 return size_t{ lengths[i] } - 1;
@@ -151,12 +151,12 @@ auto decodeColumns(std::span<const uint8_t> plain, uint32_t packetCount, uint32_
 
             if (left.size() < format::GAME_HEADER_SIZE)
             {
-                badFrame("game packet under 4 bytes");
+                bad("game packet under 4 bytes");
             }
 
             if (format::gameId(left) != p.opcode)
             {
-                badFrame("game packet opcode differs from its header");
+                bad("game packet opcode differs from its header");
             }
 
             if (lengths[i] == 0)
@@ -168,7 +168,7 @@ auto decodeColumns(std::span<const uint8_t> plain, uint32_t packetCount, uint32_
         }();
         if (length > left.size() || (isGame(p.channel) && length < format::GAME_HEADER_SIZE))
         {
-            badFrame("packet does not fit its group");
+            bad("packet does not fit its group");
         }
 
         p.offset = out.bytes.size();
@@ -178,7 +178,7 @@ auto decodeColumns(std::span<const uint8_t> plain, uint32_t packetCount, uint32_
         if (isGame(p.channel))
         {
             auto& last              = lastSync[p.flags & PacketFlag::ClientToServer];
-            last                    = static_cast<uint16_t>(last + unzigzag16(static_cast<uint16_t>(sync[game++])));
+            last                    = static_cast<uint16_t>(last + bytes::unzigzag16(static_cast<uint16_t>(sync[game++])));
             out.bytes[p.offset + 2] = static_cast<uint8_t>(last);
             out.bytes[p.offset + 3] = static_cast<uint8_t>(last >> 8);
         }
@@ -186,8 +186,8 @@ auto decodeColumns(std::span<const uint8_t> plain, uint32_t packetCount, uint32_
 
     if (cursor != end)
     {
-        badFrame("group bytes left over");
+        bad("group bytes left over");
     }
 }
 
-} // namespace xicap::internal
+} // namespace xicap::frame

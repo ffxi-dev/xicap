@@ -1,4 +1,4 @@
-#include "columns.h"
+#include "frame/frame.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -17,8 +17,8 @@ extern "C" auto LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) -> int
     const auto markers = static_cast<uint32_t>(data[2] | (data[3] << 8));
     try
     {
-        xicap::internal::Frame frame;
-        xicap::internal::decodeColumns({ data + 4, size - 4 }, packets, markers, 0, frame);
+        xicap::frame::Frame frame;
+        xicap::frame::decode({ data + 4, size - 4 }, packets, markers, 0, frame);
     }
     catch (const xicap::Error&)
     {

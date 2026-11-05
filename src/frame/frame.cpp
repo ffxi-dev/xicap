@@ -1,8 +1,8 @@
-#include "columns.h"
+#include "frame/frame.h"
 
 #include <algorithm>
 
-namespace xicap::internal
+namespace xicap::frame
 {
 
 auto Frame::add(const Packet& packet) -> void
@@ -47,4 +47,4 @@ auto Frame::packet(size_t i) const noexcept -> Packet
     };
 }
 
-} // namespace xicap::internal
+} // namespace xicap::frame

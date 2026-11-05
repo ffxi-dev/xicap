@@ -7,7 +7,7 @@
 #include <string_view>
 
 // Text fields: UTF-8, padded with zero bytes, always ending with one.
-namespace xicap::internal
+namespace xicap::bytes
 {
 
 template <size_t N>
@@ -31,4 +31,4 @@ auto fromField(const std::array<char, N>& field) -> std::string
     return { field.begin(), std::ranges::find(field, '\0') };
 }
 
-} // namespace xicap::internal
+} // namespace xicap::bytes

@@ -4,7 +4,7 @@
 #include <format>
 #include <random>
 
-namespace xicap::internal
+namespace xicap::io
 {
 
 // A file beside dst that becomes dst only once whole: a failed call leaves dst as it was.
@@ -44,4 +44,4 @@ private:
     std::filesystem::path path_;
 };
 
-} // namespace xicap::internal
+} // namespace xicap::io

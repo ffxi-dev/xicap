@@ -33,18 +33,18 @@ else()
 endif()
 
 add_library(xicap STATIC
-    src/decode_columns.cpp
-    src/decode_metadata.cpp
-    src/encode_columns.cpp
-    src/encode_metadata.cpp
-    src/frame.cpp
-    src/frame_decoder.cpp
-    src/policy.cpp
-    src/reader.cpp
-    src/stream_reader.cpp
-    src/transcode.cpp
-    src/writer.cpp)
-target_include_directories(xicap PUBLIC include)
+    src/frame/decode.cpp
+    src/frame/decoder.cpp
+    src/frame/encode.cpp
+    src/frame/frame.cpp
+    src/io/reader.cpp
+    src/io/stream_reader.cpp
+    src/io/transcode.cpp
+    src/io/writer.cpp
+    src/metadata/decode.cpp
+    src/metadata/encode.cpp
+    src/policy/policy.cpp)
+target_include_directories(xicap PUBLIC include PRIVATE src)
 target_compile_features(xicap PUBLIC cxx_std_23)
 target_link_libraries(xicap PRIVATE ${XICAP_ZSTD})
 

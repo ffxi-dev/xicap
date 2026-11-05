@@ -108,8 +108,8 @@ s.close();
 ## Contributing
 
 - A change to the format changes FORMAT.md, the vectors, and
-  `tests/spec_reader.py`, a reader written from FORMAT.md alone that CI runs
-  over the vectors. Regenerate the vectors with
+  `tests/reference_reader.py`, a reader written from FORMAT.md alone that CI
+  runs over the vectors. Regenerate the vectors with
   `build/tests/make_vectors tests/vectors`.
 - `tests/vectors/` holds captures with the reading each must give. The C++
   tests and each binding read all of them.

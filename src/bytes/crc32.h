@@ -1,13 +1,13 @@
 #pragma once
 
-#include "bytes.h"
+#include "bytes/bytes.h"
 
 #include <array>
 #include <cstdint>
 #include <span>
 #include <vector>
 
-namespace xicap::internal
+namespace xicap::bytes
 {
 
 // CRC-32/ISO-HDLC, as zlib computes it.
@@ -57,4 +57,4 @@ inline auto appendCrc(std::vector<uint8_t>& out, size_t from = 0) -> void
 #endif
 }
 
-} // namespace xicap::internal
+} // namespace xicap::bytes

@@ -10,7 +10,7 @@
 #include <vector>
 
 // A frame's plaintext: its packets in columns. See FORMAT.md, Frames.
-namespace xicap::internal
+namespace xicap::frame
 {
 
 struct FramePacket
@@ -39,12 +39,12 @@ struct Frame
 };
 
 // Timestamps must not go backwards or jump more than 2^32 - 1 ms, and game packets must hold their 4-byte header.
-[[nodiscard]] auto encodeColumns(const Frame& frame) -> std::vector<uint8_t>;
+[[nodiscard]] auto encode(const Frame& frame) -> std::vector<uint8_t>;
 
-[[noreturn]] auto badFrame(std::string_view why) -> void;
+[[noreturn]] auto bad(std::string_view why) -> void;
 
 // Throws Error for a bad plaintext.
-auto decodeColumns(std::span<const uint8_t> plain, uint32_t packetCount, uint32_t markerCount, uint64_t baseTimestamp, Frame& out) -> void;
+auto decode(std::span<const uint8_t> plain, uint32_t packetCount, uint32_t markerCount, uint64_t baseTimestamp, Frame& out) -> void;
 
 [[nodiscard]] inline auto isGame(uint8_t channel) noexcept -> bool
 {
@@ -70,4 +70,4 @@ inline auto assignGroups(std::span<const FramePacket> packets, std::vector<uint3
     return static_cast<uint32_t>(index.size());
 }
 
-} // namespace xicap::internal
+} // namespace xicap::frame

@@ -1,10 +1,10 @@
-#include "crc32.h"
-#include "metadata_codec.h"
-#include "text.h"
+#include "bytes/crc32.h"
+#include "bytes/text.h"
+#include "metadata/codec.h"
 
 #include <format>
 
-namespace xicap::internal
+namespace xicap::metadata
 {
 namespace
 {
@@ -19,14 +19,14 @@ auto take(std::span<const uint8_t> payload, size_t& pos) -> T
     }
 
     pos += sizeof(T);
-    return load<T>(payload, pos - sizeof(T));
+    return bytes::load<T>(payload, pos - sizeof(T));
 }
 
 auto readPolicy(std::span<const uint8_t> payload) -> ExclusionPolicy
 {
     size_t     pos    = 0;
     const auto header = take<format::PolicyHeader>(payload, pos);
-    auto       policy = ExclusionPolicy{ .name = fromField(header.name), .version = header.version, .rules = {} };
+    auto       policy = ExclusionPolicy{ .name = bytes::fromField(header.name), .version = header.version, .rules = {} };
     for (uint16_t i = 0; i < header.ruleCount; ++i)
     {
         const auto rule  = take<format::RuleHeader>(payload, pos);
@@ -58,11 +58,11 @@ auto readSource(std::span<const uint8_t> payload) -> Source
         throw Error("xicap: malformed source block");
     }
 
-    const auto header   = load<format::SourceHeader>(payload);
+    const auto header   = bytes::load<format::SourceHeader>(payload);
     const auto metadata = payload.subspan(sizeof(header));
     return {
-        .format         = fromField(header.format),
-        .formatVersion  = fromField(header.formatVersion),
+        .format         = bytes::fromField(header.format),
+        .formatVersion  = bytes::fromField(header.formatVersion),
         .skippedRecords = header.skippedRecords,
         .metadata       = { metadata.begin(), metadata.end() },
     };
@@ -72,7 +72,7 @@ auto readSource(std::span<const uint8_t> payload) -> Source
 
 auto readHeader(std::span<const uint8_t> bytes, Metadata& out) -> uint8_t
 {
-    const auto h = load<format::Header>(bytes);
+    const auto h = bytes::load<format::Header>(bytes);
     if (h.magic != format::MAGIC)
     {
         throw Error("xicap: not a capture");
@@ -83,7 +83,7 @@ auto readHeader(std::span<const uint8_t> bytes, Metadata& out) -> uint8_t
         throw Error(std::format("xicap: format {}; this library reads format {} only", h.version, format::VERSION));
     }
 
-    if (!endsWithCrc(bytes.first(sizeof(h))))
+    if (!bytes::endsWithCrc(bytes.first(sizeof(h))))
     {
         throw Error("xicap: header CRC mismatch");
     }
@@ -94,9 +94,9 @@ auto readHeader(std::span<const uint8_t> bytes, Metadata& out) -> uint8_t
         .startTimestamp    = h.startTimestamp,
         .origin            = h.origin,
         .network           = h.network,
-        .captureAgent      = fromField(h.captureAgent),
-        .clientVersion     = fromField(h.clientVersion),
-        .character         = { .contentId = h.contentId, .characterId = h.characterId, .name = fromField(h.characterName), .world = fromField(h.worldName) },
+        .captureAgent      = bytes::fromField(h.captureAgent),
+        .clientVersion     = bytes::fromField(h.clientVersion),
+        .character         = { .contentId = h.contentId, .characterId = h.characterId, .name = bytes::fromField(h.characterName), .world = bytes::fromField(h.worldName) },
         .policy            = {},
         .source            = {},
     };
@@ -105,7 +105,7 @@ auto readHeader(std::span<const uint8_t> bytes, Metadata& out) -> uint8_t
 
 auto blockSize(std::span<const uint8_t> first) -> uint64_t
 {
-    const auto h = load<format::BlockHeader>(first);
+    const auto h = bytes::load<format::BlockHeader>(first);
     if (h.length > format::MAX_BLOCK_SIZE)
     {
         throw Error("xicap: block over 16 MiB");
@@ -116,12 +116,12 @@ auto blockSize(std::span<const uint8_t> first) -> uint64_t
 
 auto readBlock(std::span<const uint8_t> block, Metadata& out) -> uint32_t
 {
-    if (!endsWithCrc(block))
+    if (!bytes::endsWithCrc(block))
     {
         throw Error("xicap: block CRC mismatch");
     }
 
-    const auto h       = load<format::BlockHeader>(block);
+    const auto h       = bytes::load<format::BlockHeader>(block);
     const auto payload = block.subspan(sizeof(h), h.length);
     switch (h.type)
     {
@@ -138,4 +138,4 @@ auto readBlock(std::span<const uint8_t> block, Metadata& out) -> uint32_t
     return h.type;
 }
 
-} // namespace xicap::internal
+} // namespace xicap::metadata

@@ -10,7 +10,7 @@
 
 static_assert(std::endian::native == std::endian::little, "the format's structs are read and written as they lie in memory");
 
-namespace xicap::internal
+namespace xicap::bytes
 {
 
 // The T at bytes[at]. The caller checks that it fits.
@@ -30,4 +30,4 @@ auto append(std::vector<uint8_t>& out, const T& value) -> void
     out.insert(out.end(), raw.begin(), raw.end());
 }
 
-} // namespace xicap::internal
+} // namespace xicap::bytes
