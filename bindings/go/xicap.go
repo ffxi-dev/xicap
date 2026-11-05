@@ -15,7 +15,7 @@ import (
 	"unsafe"
 )
 
-// HeaderSize is the length of a capture's header, the least CheckHeader needs.
+// HeaderSize is the length of a capture's header.
 const HeaderSize = 160
 
 type (
@@ -54,62 +54,68 @@ type Character struct {
 	World       string
 }
 
-// Source is what a converted capture records about what it was converted from.
+// Source is what a converted capture records about the file it came from.
 type Source struct {
-	Format        string
-	FormatVersion string
-	Skipped       uint32
-	Metadata      []byte // such as captain's manifest.txt
+	Format         string
+	FormatVersion  string
+	SkippedRecords uint32
+	Metadata       []byte // such as captain's manifest.txt
 }
 
-// Policy names the exclusion policy a capture was written with. A policy with no rules kept chat.
+// Policy names the exclusion policy a capture was written with. One with no rules kept chat.
 type Policy struct {
 	Name    string
 	Version uint32
 	Rules   int
 }
 
-// Marker is a note, login, or logout, with the packet it sits before.
-type Marker struct {
-	Kind      MarkerKind
-	Text      string
-	Packet    uint64 // that packet's index
-	Timestamp uint64 // that packet's time, Unix ms
-}
-
-// Summary is what Read learns from a capture's header, blocks, and every packet.
-type Summary struct {
+// Metadata is what a capture's header and blocks say about it.
+type Metadata struct {
 	CaptureID         [16]byte
 	PreviousCaptureID [16]byte
 	StartTimestamp    uint64 // Unix ms
-	EndTimestamp      uint64 // Unix ms of the last packet read
 	Origin            Origin
 	Network           Network
 	CaptureAgent      string
 	ClientVersion     string
 	Character         Character
 	Policy            Policy
-	Source            *Source // set on converted captures
-	Packets           uint64
-	Complete          bool    // a trailer ends the file
-	Channels          []uint8 // the channels the packets use
-	Markers           []Marker
+	Source            *Source
 }
 
-type errBuf [256]C.char
+// Marker is a note, login, or logout, with the packet it precedes.
+type Marker struct {
+	Kind      MarkerKind
+	Text      string
+	Packet    uint64
+	Timestamp uint64
+}
 
-func (e *errBuf) err() error { return errors.New(C.GoString(&e[0])) }
+// Summary is what Read learns from a capture. EndTimestamp and PacketCount come from the packets read, so a cut-off
+// capture has them too.
+type Summary struct {
+	Metadata
+	EndTimestamp uint64
+	PacketCount  uint64
+	Complete     bool    // a trailer ends the file
+	Channels     []uint8 // in order
+	Markers      []Marker
+}
+
+func check(err *C.char) error {
+	if err == nil {
+		return nil
+	}
+	defer C.free(unsafe.Pointer(err))
+	return errors.New(C.GoString(err))
+}
 
 // CheckHeader checks that b starts with a whole header this library reads.
 func CheckHeader(b []byte) error {
 	if len(b) < HeaderSize {
 		return errors.New("xicap: short header")
 	}
-	var e errBuf
-	if C.xicap_check_header((*C.uint8_t)(unsafe.SliceData(b)), C.size_t(len(b)), &e[0], C.size_t(len(e))) != 0 {
-		return e.err()
-	}
-	return nil
+	return check(C.xicap_check_header((*C.uint8_t)(unsafe.SliceData(b)), C.size_t(len(b))))
 }
 
 // Read reads the capture at path. A cut-off capture reads up to its last whole frame; a bad frame in a complete one
@@ -118,41 +124,47 @@ func Read(path string) (Summary, error) {
 	p := C.CString(path)
 	defer C.free(unsafe.Pointer(p))
 	var s C.xicap_summary
-	var e errBuf
-	if C.xicap_read(p, &s, &e[0], C.size_t(len(e))) != 0 {
-		return Summary{}, e.err()
+	if err := check(C.xicap_read(p, &s)); err != nil {
+		return Summary{}, err
 	}
 	defer C.xicap_free_summary(&s)
+
 	out := Summary{
-		CaptureID:         *(*[16]byte)(unsafe.Pointer(&s.capture_id[0])),
-		PreviousCaptureID: *(*[16]byte)(unsafe.Pointer(&s.previous_capture_id[0])),
-		StartTimestamp:    uint64(s.start_timestamp),
-		EndTimestamp:      uint64(s.end_timestamp),
-		Origin:            Origin(s.origin),
-		Network:           Network(s.network),
-		CaptureAgent:      C.GoString(&s.capture_agent[0]),
-		ClientVersion:     C.GoString(&s.client_version[0]),
-		Character: Character{
-			ContentID:   uint32(s.content_id),
-			CharacterID: uint32(s.character_id),
-			Name:        C.GoString(&s.character_name[0]),
-			World:       C.GoString(&s.world_name[0]),
+		Metadata: Metadata{
+			CaptureID:         *(*[16]byte)(unsafe.Pointer(&s.capture_id)),
+			PreviousCaptureID: *(*[16]byte)(unsafe.Pointer(&s.previous_capture_id)),
+			StartTimestamp:    uint64(s.start_timestamp),
+			Origin:            Origin(s.origin),
+			Network:           Network(s.network),
+			CaptureAgent:      C.GoString(&s.capture_agent[0]),
+			ClientVersion:     C.GoString(&s.client_version[0]),
+			Character: Character{
+				ContentID:   uint32(s.content_id),
+				CharacterID: uint32(s.character_id),
+				Name:        C.GoString(&s.character_name[0]),
+				World:       C.GoString(&s.world_name[0]),
+			},
+			Policy: Policy{Name: C.GoString(&s.policy_name[0]), Version: uint32(s.policy_version), Rules: int(s.policy_rules)},
 		},
-		Policy:   Policy{Name: C.GoString(&s.policy_name[0]), Version: uint32(s.policy_version), Rules: int(s.policy_rules)},
-		Packets:  uint64(s.packets),
-		Complete: s.complete != 0,
+		EndTimestamp: uint64(s.end_timestamp),
+		PacketCount:  uint64(s.packet_count),
+		Complete:     bool(s.complete),
 	}
-	if s.has_source != 0 {
-		out.Source = &Source{Format: C.GoString(&s.source_format[0]), FormatVersion: C.GoString(&s.source_format_version[0]), Skipped: uint32(s.skipped_records),
-			Metadata: C.GoBytes(unsafe.Pointer(s.source_metadata), C.int(s.source_metadata_size))}
+	if s.has_source {
+		out.Source = &Source{
+			Format:         C.GoString(&s.source_format[0]),
+			FormatVersion:  C.GoString(&s.source_format_version[0]),
+			SkippedRecords: uint32(s.skipped_records),
+			Metadata:       C.GoBytes(unsafe.Pointer(s.source_metadata), C.int(s.source_metadata_size)),
+		}
 	}
-	for c := range 256 {
-		if s.channels[c/8]&(1<<(c%8)) != 0 {
+	for c, used := range s.channels {
+		if used {
 			out.Channels = append(out.Channels, uint8(c))
 		}
 	}
-	for _, m := range unsafe.Slice(s.markers, int(s.marker_count)) {
-		out.Markers = append(out.Markers, Marker{Kind: MarkerKind(m.kind), Text: C.GoStringN(m.text, C.int(m.text_size)), Packet: uint64(m.packet), Timestamp: uint64(m.timestamp)})
+	for _, m := range unsafe.Slice(s.markers, s.marker_count) {
+		out.Markers = append(out.Markers, Marker{MarkerKind(m.kind), C.GoStringN(m.text, C.int(m.text_size)), uint64(m.packet), uint64(m.timestamp)})
 	}
 	return out, nil
 }
@@ -165,7 +177,7 @@ type WriterInfo struct {
 	Origin        Origin
 	Network       Network
 	Source        *Source
-	KeepChat      bool // write no exclusion rules; otherwise xicap's default policy zeroes the text of chat
+	KeepChat      bool // write no exclusion rules; by default xicap zeroes the text of chat
 	Archive       bool // smaller files, written more slowly
 }
 
@@ -175,7 +187,7 @@ type Packet struct {
 	ClientToServer bool
 	Data           []byte
 	Channel        uint8
-	Opcode         uint16 // off the game channel; game packets carry their own
+	Opcode         uint16 // off the game channel; a game packet's header holds its own
 	Provenance     uint16 // FlagInjected, FlagBlocked, FlagModified, FlagFirstInChunk
 }
 
@@ -184,75 +196,58 @@ type Writer struct{ w *C.xicap_writer }
 
 // Create starts a capture at path.
 func Create(path string, info WriterInfo) (*Writer, error) {
-	var free []unsafe.Pointer
+	var owned []unsafe.Pointer
 	defer func() {
-		for _, p := range free {
+		for _, p := range owned {
 			C.free(p)
 		}
 	}()
-	cstr := func(s string) *C.char {
+	str := func(s string) *C.char {
 		c := C.CString(s)
-		free = append(free, unsafe.Pointer(c))
+		owned = append(owned, unsafe.Pointer(c))
 		return c
 	}
 	ci := C.xicap_writer_info{
-		capture_agent:  cstr(info.CaptureAgent),
-		client_version: cstr(info.ClientVersion),
+		capture_agent:  str(info.CaptureAgent),
+		client_version: str(info.ClientVersion),
 		content_id:     C.uint32_t(info.Character.ContentID),
 		character_id:   C.uint32_t(info.Character.CharacterID),
-		character_name: cstr(info.Character.Name),
-		world_name:     cstr(info.Character.World),
+		character_name: str(info.Character.Name),
+		world_name:     str(info.Character.World),
 		origin:         C.uint8_t(info.Origin),
 		network:        C.uint8_t(info.Network),
-		keep_chat:      cbool(info.KeepChat),
-		archive:        cbool(info.Archive),
+		keep_chat:      C.bool(info.KeepChat),
+		archive:        C.bool(info.Archive),
 	}
 	if src := info.Source; src != nil {
-		ci.has_source = 1
-		ci.source_format = cstr(src.Format)
-		ci.source_format_version = cstr(src.FormatVersion)
-		ci.skipped_records = C.uint32_t(src.Skipped)
+		ci.has_source = true
+		ci.source_format = str(src.Format)
+		ci.source_format_version = str(src.FormatVersion)
+		ci.skipped_records = C.uint32_t(src.SkippedRecords)
 		if len(src.Metadata) > 0 {
 			m := C.CBytes(src.Metadata)
-			free = append(free, m)
+			owned = append(owned, m)
 			ci.source_metadata, ci.source_metadata_size = (*C.uint8_t)(m), C.size_t(len(src.Metadata))
 		}
 	}
-	p := cstr(path)
-	var e errBuf
-	w := C.xicap_writer_open(p, &ci, &e[0], C.size_t(len(e)))
-	if w == nil {
-		return nil, e.err()
+	var w Writer
+	if err := check(C.xicap_writer_open(str(path), &ci, &w.w)); err != nil {
+		return nil, err
 	}
-	return &Writer{w}, nil
-}
-
-func cbool(b bool) C.int {
-	if b {
-		return 1
-	}
-	return 0
+	return &w, nil
 }
 
 // Write adds one packet, after the exclusion policy.
 func (w *Writer) Write(p Packet) error {
-	var e errBuf
-	if C.xicap_writer_write(w.w, C.uint64_t(p.Timestamp), cbool(p.ClientToServer), C.uint8_t(p.Channel), C.uint16_t(p.Opcode), C.uint16_t(p.Provenance),
-		(*C.uint8_t)(unsafe.SliceData(p.Data)), C.size_t(len(p.Data)), &e[0], C.size_t(len(e))) != 0 {
-		return e.err()
-	}
-	return nil
+	return check(C.xicap_writer_write(w.w, C.uint64_t(p.Timestamp), C.bool(p.ClientToServer), C.uint8_t(p.Channel), C.uint16_t(p.Opcode),
+		C.uint16_t(p.Provenance), (*C.uint8_t)(unsafe.SliceData(p.Data)), C.size_t(len(p.Data))))
 }
 
 // Close writes the last frame and the trailer. The Writer cannot be used afterwards.
 func (w *Writer) Close() error {
-	var e errBuf
-	rc := C.xicap_writer_close(w.w, &e[0], C.size_t(len(e)))
+	err := check(C.xicap_writer_close(w.w))
 	w.w = nil
-	if rc != 0 {
-		return e.err()
-	}
-	return nil
+	return err
 }
 
 // Transcode rewrites src at dst at archive size, then reads dst back and compares it with src packet by packet. On any
@@ -261,9 +256,5 @@ func Transcode(src, dst string) error {
 	s, d := C.CString(src), C.CString(dst)
 	defer C.free(unsafe.Pointer(s))
 	defer C.free(unsafe.Pointer(d))
-	var e errBuf
-	if C.xicap_transcode(s, d, &e[0], C.size_t(len(e))) != 0 {
-		return e.err()
-	}
-	return nil
+	return check(C.xicap_transcode(s, d))
 }

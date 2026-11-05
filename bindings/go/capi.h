@@ -1,11 +1,10 @@
 #pragma once
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
-// The C interface cgo calls. Each call that can fail returns 0, or -1 with a message in err. xicap_check_header reads
-// the first 160 bytes, so it needs at least that many, and the strings in xicap_writer_info must not be null; the source
-// strings are read only when has_source is set.
+// What cgo calls. A function that can fail returns NULL, or an error message for the caller to free.
 #ifdef __cplusplus
 extern "C"
 {
@@ -16,16 +15,16 @@ extern "C"
         uint8_t  kind;
         char*    text;
         size_t   text_size;
-        uint64_t packet;    // the index of the packet it sits before
-        uint64_t timestamp; // that packet's
+        uint64_t packet;
+        uint64_t timestamp;
     } xicap_marker;
 
+    // Text arrays are as wide as the fields FORMAT.md gives them.
     typedef struct
     {
         uint8_t       capture_id[16];
         uint8_t       previous_capture_id[16];
         uint64_t      start_timestamp;
-        uint64_t      end_timestamp; // the last packet read
         uint8_t       origin;
         uint8_t       network;
         char          capture_agent[32];
@@ -37,15 +36,16 @@ extern "C"
         char          policy_name[32];
         uint32_t      policy_version;
         uint32_t      policy_rules;
-        int           has_source;
+        bool          has_source;
         char          source_format[16];
         char          source_format_version[16];
         uint32_t      skipped_records;
         uint8_t*      source_metadata;
         size_t        source_metadata_size;
-        uint64_t      packets;
-        int           complete;
-        uint8_t       channels[32]; // bit c of byte c/8: a packet on channel c
+        uint64_t      end_timestamp;
+        uint64_t      packet_count;
+        bool          complete;
+        bool          channels[256];
         xicap_marker* markers;
         size_t        marker_count;
     } xicap_summary;
@@ -60,28 +60,28 @@ extern "C"
         const char*    world_name;
         uint8_t        origin;
         uint8_t        network;
-        int            has_source;
+        bool           has_source;
         const char*    source_format;
         const char*    source_format_version;
         uint32_t       skipped_records;
         const uint8_t* source_metadata;
         size_t         source_metadata_size;
-        int            keep_chat; // no exclusion rules: chat stays
-        int            archive;   // the archive frame policy
+        bool           keep_chat;
+        bool           archive;
     } xicap_writer_info;
 
     typedef struct xicap_writer xicap_writer;
 
-    int  xicap_check_header(const uint8_t* data, size_t size, char* err, size_t errlen);
-    int  xicap_read(const char* path, xicap_summary* out, char* err, size_t errlen);
-    void xicap_free_summary(xicap_summary* summary);
+    char* xicap_check_header(const uint8_t* data, size_t size);
+    char* xicap_read(const char* path, xicap_summary* out);
+    void  xicap_free_summary(xicap_summary* summary);
 
-    xicap_writer* xicap_writer_open(const char* path, const xicap_writer_info* info, char* err, size_t errlen);
-    int           xicap_writer_write(xicap_writer* w, uint64_t timestamp, int client_to_server, uint8_t channel, uint16_t opcode, uint16_t provenance, const uint8_t* data, size_t size, char* err, size_t errlen);
-    // Frees the writer whether or not closing succeeds.
-    int xicap_writer_close(xicap_writer* w, char* err, size_t errlen);
+    char* xicap_writer_open(const char* path, const xicap_writer_info* info, xicap_writer** out);
+    char* xicap_writer_write(xicap_writer* w, uint64_t timestamp, bool client_to_server, uint8_t channel, uint16_t opcode, uint16_t provenance, const uint8_t* data, size_t size);
+    // Frees the writer, even when closing fails.
+    char* xicap_writer_close(xicap_writer* w);
 
-    int xicap_transcode(const char* src, const char* dst, char* err, size_t errlen);
+    char* xicap_transcode(const char* src, const char* dst);
 
 #ifdef __cplusplus
 }
