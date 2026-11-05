@@ -62,7 +62,7 @@ jobs:
       - working-directory: bindings/js
         run: npm ci && npm run build && npm test
 
-  spec-reader:
+  reference-reader:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -70,5 +70,5 @@ jobs:
         with:
           python-version: "3.13"
       - run: pip install zstandard==0.25.0
-      - run: python tests/spec_reader.py tests/vectors
-      - run: python tests/spec_reader.py --example FORMAT.md
+      - run: python tests/reference_reader.py tests/vectors
+      - run: python tests/reference_reader.py --example FORMAT.md

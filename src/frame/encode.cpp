@@ -1,11 +1,11 @@
-#include "columns.h"
-#include "format.h"
-#include "varint.h"
+#include "bytes/varint.h"
+#include "format/layout.h"
+#include "frame/frame.h"
 
 #include <array>
 #include <ranges>
 
-namespace xicap::internal
+namespace xicap::frame
 {
 namespace
 {
@@ -23,35 +23,35 @@ auto storedLength(std::span<const uint8_t> data, uint8_t channel) noexcept -> ui
 
 } // namespace
 
-auto encodeColumns(const Frame& frame) -> std::vector<uint8_t>
+auto encode(const Frame& frame) -> std::vector<uint8_t>
 {
     const auto&          packets = frame.packets;
     std::vector<uint8_t> out;
     auto                 previous = packets.front().timestamp;
     for (const auto& p : packets)
     {
-        putVarint(out, p.timestamp - previous);
+        bytes::putVarint(out, p.timestamp - previous);
         previous = p.timestamp;
     }
 
     for (const auto& p : packets)
     {
-        putVarint(out, p.flags);
+        bytes::putVarint(out, p.flags);
     }
 
     for (const auto& p : packets)
     {
-        putVarint(out, p.channel);
+        bytes::putVarint(out, p.channel);
     }
 
     for (const auto& p : packets)
     {
-        putVarint(out, p.opcode);
+        bytes::putVarint(out, p.opcode);
     }
 
     for (const auto& p : packets)
     {
-        putVarint(out, storedLength(frame.data(p), p.channel));
+        bytes::putVarint(out, storedLength(frame.data(p), p.channel));
     }
 
     std::array<uint16_t, 2> lastSync{};
@@ -61,8 +61,8 @@ auto encodeColumns(const Frame& frame) -> std::vector<uint8_t>
                                                       }))
     {
         auto&      last = lastSync[p.flags & PacketFlag::ClientToServer];
-        const auto sync = load<uint16_t>(frame.data(p), 2);
-        putVarint(out, zigzag16(static_cast<uint16_t>(sync - last)));
+        const auto sync = bytes::load<uint16_t>(frame.data(p), 2);
+        bytes::putVarint(out, bytes::zigzag16(static_cast<uint16_t>(sync - last)));
         last = sync;
     }
 
@@ -70,9 +70,9 @@ auto encodeColumns(const Frame& frame) -> std::vector<uint8_t>
     {
         for (const auto& m : std::span{ frame.markers }.subspan(packets[i].firstMarker, packets[i].markerCount))
         {
-            putVarint(out, i);
+            bytes::putVarint(out, i);
             out.push_back(static_cast<uint8_t>(m.kind));
-            putVarint(out, m.text.size());
+            bytes::putVarint(out, m.text.size());
             out.insert(out.end(), m.text.begin(), m.text.end());
         }
     }
@@ -92,7 +92,7 @@ auto encodeColumns(const Frame& frame) -> std::vector<uint8_t>
             size += packets[i].length;
         }
 
-        putVarint(out, size);
+        bytes::putVarint(out, size);
     }
 
     for (const auto& list : members)
@@ -113,4 +113,4 @@ auto encodeColumns(const Frame& frame) -> std::vector<uint8_t>
     return out;
 }
 
-} // namespace xicap::internal
+} // namespace xicap::frame

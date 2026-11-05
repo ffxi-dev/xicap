@@ -1,6 +1,6 @@
 #include "capi.h"
 
-#include "metadata_codec.h"
+#include "metadata/codec.h"
 #include "xicap/xicap.h"
 
 #include <algorithm>
@@ -102,7 +102,7 @@ extern "C"
         return guarded(err, errlen, [&]
                        {
                            xicap::Metadata m;
-                           xicap::internal::readHeader({ data, size }, m);
+                           xicap::metadata::readHeader({ data, size }, m);
                        });
     }
 

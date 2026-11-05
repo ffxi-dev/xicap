@@ -1,10 +1,10 @@
 // Writes the conformance vectors: tests/vectors/<name>.xicap and the reading each must give, <name>.json.
 // Usage: make_vectors <dir>
 
-#include "crc32.h"
+#include "bytes/crc32.h"
 #include "describe.h"
-#include "format.h"
-#include "metadata_codec.h"
+#include "format/layout.h"
+#include "metadata/codec.h"
 #include "support.h"
 
 #include <zstd.h>
@@ -32,7 +32,7 @@ auto put(Bytes& b, size_t at, const T& v) -> void
 
 auto fixCrc(Bytes& b, size_t from, size_t to) -> void
 {
-    put(b, to - 4, internal::crc32(std::span{ b }.subspan(from, to - 4 - from)));
+    put(b, to - 4, bytes::crc32(std::span{ b }.subspan(from, to - 4 - from)));
 }
 
 struct Layout
@@ -48,15 +48,15 @@ auto layout(const Bytes& b) -> Layout
     size_t at = sizeof(format::Header);
     for (int i = 0; i < b[11]; ++i)
     {
-        const auto size = size_t{ 12 } + internal::load<uint32_t>(std::span{ b }, at + 4);
+        const auto size = size_t{ 12 } + bytes::load<uint32_t>(std::span{ b }, at + 4);
         l.blocks.emplace_back(at, size);
         at += size;
     }
 
     l.blocksEnd = at;
-    while (at + 4 <= b.size() && internal::load<uint32_t>(std::span{ b }, at) == format::FRAME_MAGIC)
+    while (at + 4 <= b.size() && bytes::load<uint32_t>(std::span{ b }, at) == format::FRAME_MAGIC)
     {
-        const auto size = sizeof(format::FrameHeader) + internal::load<uint32_t>(std::span{ b }, at + 4) + 4;
+        const auto size = sizeof(format::FrameHeader) + bytes::load<uint32_t>(std::span{ b }, at + 4) + 4;
         l.frames.emplace_back(at, size);
         at += size;
     }
@@ -135,13 +135,13 @@ auto withPlaintext(const Bytes& plain, uint32_t packets) -> Bytes
 {
     auto packed = Bytes(ZSTD_compressBound(plain.size()));
     packed.resize(ZSTD_compress(packed.data(), packed.size(), plain.data(), plain.size(), 3));
-    auto       bytes = internal::encodeMetadata(test::metadata());
+    auto       bytes = metadata::encode(test::metadata());
     const auto start = bytes.size();
-    internal::append(bytes, format::FrameHeader{ .magic = format::FRAME_MAGIC, .payloadSize = static_cast<uint32_t>(packed.size()), .plainSize = static_cast<uint32_t>(plain.size()), .packetCount = packets, .markerCount = 0, .baseTimestamp = T0 });
+    bytes::append(bytes, format::FrameHeader{ .magic = format::FRAME_MAGIC, .payloadSize = static_cast<uint32_t>(packed.size()), .plainSize = static_cast<uint32_t>(plain.size()), .packetCount = packets, .markerCount = 0, .baseTimestamp = T0 });
     bytes.insert(bytes.end(), packed.begin(), packed.end());
-    internal::appendCrc(bytes, start);
+    bytes::appendCrc(bytes, start);
     const auto trailer = bytes.size();
-    internal::append(bytes, format::Trailer{ .magic = format::TRAILER_MAGIC, .endTimestamp = T0, .packetCount = packets, .crc = 0 });
+    bytes::append(bytes, format::Trailer{ .magic = format::TRAILER_MAGIC, .endTimestamp = T0, .packetCount = packets, .crc = 0 });
     fixCrc(bytes, trailer, bytes.size());
     return bytes;
 }
@@ -191,9 +191,9 @@ auto main(int argc, char** argv) -> int
         auto       b  = packets;
         const auto at = layout(b).blocksEnd;
         Bytes      block;
-        internal::append(block, format::BlockHeader{ .type = 0x100, .length = 3 });
+        bytes::append(block, format::BlockHeader{ .type = 0x100, .length = 3 });
         block.insert(block.end(), { 'a', 'b', 'c' });
-        internal::appendCrc(block);
+        bytes::appendCrc(block);
         b.insert(b.begin() + static_cast<std::ptrdiff_t>(at), block.begin(), block.end());
         b[11]++;
         fixCrc(b, 0, sizeof(format::Header));
@@ -210,7 +210,7 @@ auto main(int argc, char** argv) -> int
         // A second trailer, whose packet count is wrong, after the right one.
         auto b = packets;
         b.insert(b.end(), packets.end() - sizeof(format::Trailer), packets.end());
-        put(b, b.size() - 12, internal::load<uint64_t>(std::span{ b }, b.size() - 12) + 1);
+        put(b, b.size() - 12, bytes::load<uint64_t>(std::span{ b }, b.size() - 12) + 1);
         fixCrc(b, b.size() - sizeof(format::Trailer), b.size());
         writeVector(dir, "5-trailer-twice", b);
     }
@@ -245,7 +245,7 @@ auto main(int argc, char** argv) -> int
 
     {
         auto b = packets;
-        put(b, trailer + 12, internal::load<uint64_t>(std::span{ b }, trailer + 12) + 1);
+        put(b, trailer + 12, bytes::load<uint64_t>(std::span{ b }, trailer + 12) + 1);
         fixCrc(b, trailer, b.size());
         writeVector(dir, "5-trailer-disagrees", b);
     }

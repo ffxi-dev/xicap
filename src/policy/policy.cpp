@@ -1,6 +1,6 @@
-#include "columns.h"
-#include "format.h"
-#include "policy_check.h"
+#include "format/layout.h"
+#include "frame/frame.h"
+#include "policy/check.h"
 
 #include <algorithm>
 #include <format>
@@ -27,7 +27,7 @@ auto ruleFor(const ExclusionPolicy& policy, uint8_t channel, PacketDirection dir
 
 auto checkRule(const ExclusionRule& rule) -> void
 {
-    if (rule.action == ExclusionAction::Stub && (!internal::isGame(rule.channel) || !rule.ranges.empty()))
+    if (rule.action == ExclusionAction::Stub && (!frame::isGame(rule.channel) || !rule.ranges.empty()))
     {
         throw Error("xicap: a stub rule is for the game channel and has no byte ranges");
     }
@@ -43,10 +43,10 @@ auto checkRule(const ExclusionRule& rule) -> void
     }
 
     // The header holds the opcode and size a reader checks.
-    if (internal::isGame(rule.channel) && std::ranges::any_of(rule.ranges, [](const ByteRange& r)
-                                                              {
-                                                                  return r.offset < format::GAME_HEADER_SIZE;
-                                                              }))
+    if (frame::isGame(rule.channel) && std::ranges::any_of(rule.ranges, [](const ByteRange& r)
+                                                           {
+                                                               return r.offset < format::GAME_HEADER_SIZE;
+                                                           }))
     {
         throw Error(std::format("xicap: a range for game opcode {:#05x} starts inside the 4-byte header", rule.opcode));
     }
@@ -54,10 +54,10 @@ auto checkRule(const ExclusionRule& rule) -> void
 
 } // namespace
 
-namespace internal
+namespace policy
 {
 
-auto checkPolicy(const ExclusionPolicy& policy) -> void
+auto check(const ExclusionPolicy& policy) -> void
 {
     if (policy.rules.size() > UINT16_MAX)
     {
@@ -77,7 +77,7 @@ auto checkPolicy(const ExclusionPolicy& policy) -> void
     }
 }
 
-} // namespace internal
+} // namespace policy
 
 auto defaultExclusionPolicy() -> const ExclusionPolicy&
 {
@@ -109,7 +109,7 @@ auto applyPolicy(const ExclusionPolicy& policy, const OutPacket& packet) -> Stor
         .flags  = static_cast<uint16_t>((packet.provenance & PacketFlag::Provenance) | static_cast<uint16_t>(packet.direction)),
         .data   = { packet.data.begin(), packet.data.end() },
     };
-    if (internal::isGame(packet.channel))
+    if (frame::isGame(packet.channel))
     {
         if (packet.data.size() < format::GAME_HEADER_SIZE)
         {

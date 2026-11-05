@@ -1,7 +1,7 @@
 """A reader written from FORMAT.md alone, to show the document is enough to read every capture.
 
-    python spec_reader.py <vectors dir>      reads each vector and compares with its JSON
-    python spec_reader.py --example FORMAT.md checks the worked example against its vector
+    python reference_reader.py <vectors dir>      reads each vector and compares with its JSON
+    python reference_reader.py --example FORMAT.md checks the worked example against its vector
 
 Needs the zstandard package. For tests only: it is slow and not a binding.
 """

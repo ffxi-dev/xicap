@@ -1,9 +1,9 @@
 #include "xicap/writer.h"
-#include "columns.h"
-#include "crc32.h"
-#include "format.h"
-#include "metadata_codec.h"
-#include "policy_check.h"
+#include "bytes/crc32.h"
+#include "format/layout.h"
+#include "frame/frame.h"
+#include "metadata/codec.h"
+#include "policy/check.h"
 
 #include <algorithm>
 #include <format>
@@ -59,7 +59,7 @@ struct Writer::State
     bool                                 closed{ false };
     bool                                 failed{ false }; // a write failed: nothing more may follow
 
-    internal::Frame     frame;
+    frame::Frame        frame;
     size_t              frameSize{}; // plaintext, at most
     std::vector<Marker> pendingMarkers;
     size_t              pendingMarkerSize{};
@@ -71,7 +71,7 @@ Writer::Writer(const std::filesystem::path& path, Metadata metadata, FramePolicy
 : state_(std::make_unique<State>())
 {
     auto& s = *state_;
-    internal::checkPolicy(metadata.policy);
+    policy::check(metadata.policy);
     s.metadata                = std::move(metadata);
     s.metadata.startTimestamp = 0;
     if (s.metadata.captureId == CaptureId{})
@@ -125,7 +125,7 @@ auto Writer::write(const OutPacket& packet) -> void
 auto Writer::copy(const Packet& packet) -> void
 {
     state_->usable();
-    if (internal::isGame(packet.channel) && (packet.data.size() < format::GAME_HEADER_SIZE || format::gameId(packet.data) != packet.opcode))
+    if (frame::isGame(packet.channel) && (packet.data.size() < format::GAME_HEADER_SIZE || format::gameId(packet.data) != packet.opcode))
     {
         throw Error("xicap: a game packet is at least 4 bytes and its header holds its opcode");
     }
@@ -168,9 +168,9 @@ auto Writer::close() -> void
     s.endFrame();
     s.start();
     std::vector<uint8_t> trailer;
-    internal::append(trailer, format::Trailer{ .magic = format::TRAILER_MAGIC, .endTimestamp = s.lastTimestamp, .packetCount = s.packets, .crc = 0 });
+    bytes::append(trailer, format::Trailer{ .magic = format::TRAILER_MAGIC, .endTimestamp = s.lastTimestamp, .packetCount = s.packets, .crc = 0 });
     trailer.resize(trailer.size() - sizeof(uint32_t));
-    internal::appendCrc(trailer);
+    bytes::appendCrc(trailer);
     s.emit(trailer);
     s.closed = true;
     s.file.close();
@@ -194,7 +194,7 @@ auto Writer::State::start() -> void
 {
     if (!started)
     {
-        emit(internal::encodeMetadata(metadata));
+        emit(metadata::encode(metadata));
         started = true;
     }
 }
@@ -254,7 +254,7 @@ auto Writer::State::endFrame() -> void
 auto Writer::State::writeFrame() -> void
 {
     start();
-    const auto           plain = internal::encodeColumns(frame);
+    const auto           plain = frame::encode(frame);
     std::vector<uint8_t> payload(ZSTD_compressBound(plain.size()));
     auto                 in  = ZSTD_inBuffer{ plain.data(), plain.size(), 0 };
     auto                 buf = ZSTD_outBuffer{ payload.data(), payload.size(), 0 };
@@ -279,16 +279,16 @@ auto Writer::State::writeFrame() -> void
 
     payload.resize(buf.pos);
     std::vector<uint8_t> out;
-    internal::append(out, format::FrameHeader{
-                              .magic         = format::FRAME_MAGIC,
-                              .payloadSize   = static_cast<uint32_t>(payload.size()),
-                              .plainSize     = static_cast<uint32_t>(plain.size()),
-                              .packetCount   = static_cast<uint32_t>(frame.packets.size()),
-                              .markerCount   = static_cast<uint32_t>(frame.markers.size()),
-                              .baseTimestamp = frame.packets.front().timestamp,
-                          });
+    bytes::append(out, format::FrameHeader{
+                           .magic         = format::FRAME_MAGIC,
+                           .payloadSize   = static_cast<uint32_t>(payload.size()),
+                           .plainSize     = static_cast<uint32_t>(plain.size()),
+                           .packetCount   = static_cast<uint32_t>(frame.packets.size()),
+                           .markerCount   = static_cast<uint32_t>(frame.markers.size()),
+                           .baseTimestamp = frame.packets.front().timestamp,
+                       });
     out.insert(out.end(), payload.begin(), payload.end());
-    internal::appendCrc(out);
+    bytes::appendCrc(out);
     emit(out);
     frame.clear();
     frameSize = 0;

@@ -1,7 +1,7 @@
 #pragma once
 
-#include "columns.h"
-#include "format.h"
+#include "format/layout.h"
+#include "frame/frame.h"
 
 #include <cstdint>
 #include <memory>
@@ -9,14 +9,14 @@
 #include <vector>
 #include <zstd.h>
 
-namespace xicap::internal
+namespace xicap::frame
 {
 
 // Decodes frames in file order: their payloads are one zstd stream.
-class FrameDecoder
+class Decoder
 {
 public:
-    FrameDecoder();
+    Decoder();
 
     // Throws Error for a bad frame. Its CRC is already checked.
     auto decode(const format::FrameHeader& header, std::span<const uint8_t> payload, Frame& out) -> void;
@@ -35,4 +35,4 @@ private:
     uint64_t                         lastTimestamp_{};
 };
 
-} // namespace xicap::internal
+} // namespace xicap::frame

@@ -1,6 +1,6 @@
 #include "xicap/reader.h"
-#include "crc32.h"
-#include "format.h"
+#include "bytes/crc32.h"
+#include "format/layout.h"
 
 #include <array>
 #include <format>
@@ -24,8 +24,8 @@ Reader::Reader(const std::filesystem::path& path)
         std::array<uint8_t, sizeof(format::Trailer)> raw{};
         file_.seekg(static_cast<std::streamoff>(size - raw.size()));
         file_.read(reinterpret_cast<char*>(raw.data()), raw.size());
-        const auto t = internal::load<format::Trailer>(std::span{ raw });
-        complete_    = file_ && t.magic == format::TRAILER_MAGIC && internal::endsWithCrc(raw);
+        const auto t = bytes::load<format::Trailer>(std::span{ raw });
+        complete_    = file_ && t.magic == format::TRAILER_MAGIC && bytes::endsWithCrc(raw);
         if (complete_)
         {
             endTimestamp_ = t.endTimestamp;

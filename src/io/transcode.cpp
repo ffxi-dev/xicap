@@ -1,5 +1,5 @@
 #include "xicap/transcode.h"
-#include "staged.h"
+#include "io/staged.h"
 #include "xicap/reader.h"
 
 #include <algorithm>
@@ -49,7 +49,7 @@ auto compare(const std::filesystem::path& src, const std::filesystem::path& dst)
 
 auto transcode(const std::filesystem::path& src, const std::filesystem::path& dst, FramePolicy policy) -> void
 {
-    const internal::Staged tmp(dst);
+    const io::Staged tmp(dst);
     {
         Reader in(src);
         Writer out(tmp.path(), in.metadata(), policy);
@@ -72,10 +72,10 @@ auto continueFrom(const std::filesystem::path& source, uint64_t fromByte, const 
     auto   metadata            = in.metadata();
     metadata.previousCaptureId = metadata.captureId;
     metadata.captureId         = {};
-    const internal::Staged tmp(out);
-    std::optional<Writer>  writer;
-    uint64_t               packets = 0;
-    Packet                 p;
+    const io::Staged      tmp(out);
+    std::optional<Writer> writer;
+    uint64_t              packets = 0;
+    Packet                p;
     while (in.next(p))
     {
         if (in.bytesRead() <= fromByte)

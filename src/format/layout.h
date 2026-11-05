@@ -1,6 +1,6 @@
 #pragma once
 
-#include "bytes.h"
+#include "bytes/bytes.h"
 #include "xicap/types.h"
 
 #include <array>
@@ -32,14 +32,14 @@ inline constexpr size_t GAME_HEADER_SIZE = 4;
 template <typename Byte>
 [[nodiscard]] auto gameId(std::span<Byte> packet) noexcept -> uint16_t
 {
-    return internal::load<uint16_t>(packet) & 0x1FFU;
+    return bytes::load<uint16_t>(packet) & 0x1FFU;
 }
 
 // The packet length the header's size gives.
 template <typename Byte>
 [[nodiscard]] auto gameLength(std::span<Byte> packet) noexcept -> size_t
 {
-    return static_cast<size_t>(internal::load<uint16_t>(packet) >> 9U) * 4;
+    return static_cast<size_t>(bytes::load<uint16_t>(packet) >> 9U) * 4;
 }
 
 template <size_t N>

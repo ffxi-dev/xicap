@@ -438,8 +438,8 @@ the decoded packets, not by keeping a signature valid.
 
 `tests/vectors/` holds test files, each with a JSON file of its expected
 reading. The C++ library and every binding read all of them in CI, and
-`tests/spec_reader.py`, a reader written from this document alone, reads them
-too.
+`tests/reference_reader.py`, a reader written from this document alone, reads
+them too.
 
 A refused file's JSON is `{"refused": true}`. Any other holds `refused`,
 `complete`, `endTimestamp` and `packetCount` from the trailer (both `0` in a
@@ -484,7 +484,7 @@ one frame, and the trailer. Offsets are in hex.
 00000190  9b 01 00 00 03 00 00 00 00 00 00 00 3e 01 fd c2  packetCount 3 (from 194), crc (from 19c)
 ```
 
-`tests/spec_reader.py --example FORMAT.md` checks that these bytes are the
+`tests/reference_reader.py --example FORMAT.md` checks that these bytes are the
 conformance file and that it reads them.
 
 ## Versioning
