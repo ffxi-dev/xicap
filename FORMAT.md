@@ -3,6 +3,9 @@
 Format 5. This document is normative: a reader built from it alone, with the
 references below, must read every capture the library writes.
 
+Paragraphs that start with **Why** give the reason for a choice. They are not
+rules.
+
 **Status: draft.** Until the format is declared stable, a change may break
 compatibility.
 
@@ -57,6 +60,10 @@ bytes are a valid trailer is **complete**. A file without one is **cut off**:
 the recorder crashed, or is still recording. A trailer whose CRC fails is not a
 valid trailer, so a file that ends with one is cut off.
 
+**Why** append only: a recorder uploads a file while it grows, and a game
+client can be killed at any moment. Either way, the bytes on hand already read
+as a capture.
+
 ## Header
 
 A writer writes the header, with every field final, along with the first
@@ -86,6 +93,9 @@ The magic follows PNG's:
 89 58 43 50 0D 0A 1A 0A
     X  C  P \r \n ^Z \n
 ```
+
+**Why** PNG's pattern: a transfer that rewrites line ends, strips the high bit,
+or stops at `^Z` breaks the magic, so the damage shows at the first bytes.
 
 A capture holds one character's session. A recorder that starts a capture after
 a login, or after a crash, sets `previousCaptureId` to the capture it
@@ -141,6 +151,18 @@ bytes with no later input. So a frame decodes as soon as it is written, but
 only after the frames before it. A writer flushes the stream at the end of
 each frame; it need not end the zstd frame.
 
+**Why** one stream: zstd's window then spans frames, which makes files
+smaller, and a frame still decodes as soon as it is written. The cost is that a
+reader cannot seek inside a file or read past damage: one bad byte loses the
+rest of the file. A reader that needs to seek can build its own index, and an
+archive keeps a hash and a backup of each file. A dictionary was tried and
+dropped: one trained on real captures held player names verbatim, and level 12
+without one was already smaller than with it.
+
+**Why** a CRC per frame: zstd's own checksum sits at the end of a zstd frame,
+which a file still recording never reaches. The CRC checks each frame as it
+arrives.
+
 ### Plaintext
 
 A frame's decoded payload, its plaintext, holds its packets in columns. In
@@ -190,6 +212,13 @@ groups from sections 2 to 4, read section 8, and check that the group sizes add
 up to the bytes left. Then, packet by packet, take the next bytes from the
 packet's group: for a game-channel packet, its 4-byte header first, which gives
 `size` when `length` is 0, then the rest, then put back its sync.
+
+**Why** columns: zstd finds more to reuse when like bytes sit together. A
+14-hour capture at level 19 took 10.73 MB with each packet's fields and bytes
+in a row, 9.96 MB with the fields in columns and the bytes in groups, and 8.50
+MB once the sync counters moved to their own column. Coding entity updates as
+deltas gained nothing. Columns for the fields of single opcodes were left out,
+since packet layouts change between client versions.
 
 #### Packet flags
 
@@ -290,6 +319,10 @@ The first rule that matches a packet's channel, direction, and opcode applies.
   the end. On the game channel no range may start inside the 4-byte header; a
   writer refuses such a rule.
 
+**Why** zero in place: a capture should still parse in ten years, with every
+field where the packet's layout puts it. Zeroing only the text keeps the
+length and every other field.
+
 The library's default policy, `xicap-default` version 2, zeroes the text
 players write to each other on the game channel, and nothing else, so each
 packet keeps its length and its other fields. Offsets count the 4-byte header.
@@ -315,7 +348,7 @@ Opcodes and field names follow atom0s's XiPackets.
 | 20 | 4 | `crc` | CRC-32 of trailer bytes `0..20` |
 
 The last 24 bytes of a complete file are its trailer, so a reader can learn
-the end time from them alone.
+the end time from them alone, and check that it read every packet.
 
 ## Reading
 
@@ -380,6 +413,13 @@ if it reads.
   | match table (`hashLog`) | 2^19 | the level's own |
   | frame ends | 5 s, 1,000 packets, 64 KiB of plaintext, host flush | 1 MiB of plaintext |
 
+  **Why** two settings: a recorder runs inside a 32-bit game, where level 7
+  with a 2^19 match table needs about 5.5 MB of memory; level 12 needs about
+  40 MB and level 19 about 81 MB. An archive rewrites each capture once, at
+  level 19. xz would make archived files about 12% smaller, but it would mean a
+  second decoder in every reader for ten years, and it decodes about seven
+  times slower.
+
 - **Durability.** A writer hands each frame to the operating system as soon as
   it is written. After a write fails, it writes nothing more, trailer
   included, so the file reads as cut off before the failure.
@@ -387,6 +427,12 @@ if it reads.
 - **Rewriting.** A program may rewrite a capture with other frames and
   compression. It keeps the header's fields, the blocks, and every packet and
   marker in order; the bytes depend on the compressor.
+
+**Why** no signatures: format 4 signed packets with a key on the recorder's
+PC. The person recording controls that key, so a signature cannot show that a
+capture is real play, only which key signed it. An archive already knows who
+uploaded each file and can keep its SHA-256. A rewrite is checked by comparing
+the decoded packets, not by keeping a signature valid.
 
 ## Conformance
 
