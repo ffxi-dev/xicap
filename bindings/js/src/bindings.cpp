@@ -42,7 +42,7 @@ auto text(const std::string_view s) -> em::val
     return decoder.call<em::val>("decode", em::val(em::typed_memory_view(s.size(), reinterpret_cast<const uint8_t*>(s.data()))));
 }
 
-auto metadata(const xicap::Metadata& m) -> em::val
+auto toJs(const xicap::Metadata& m) -> em::val
 {
     auto character = em::val::object();
     character.set("contentId", m.character.contentId);
@@ -72,7 +72,7 @@ auto metadata(const xicap::Metadata& m) -> em::val
     return o;
 }
 
-auto packet(const xicap::Packet& p) -> em::val
+auto toJs(const xicap::Packet& p) -> em::val
 {
     auto markers = em::val::array();
     for (const auto& m : p.markers)
@@ -106,7 +106,7 @@ public:
 
     auto metadata() const -> em::val
     {
-        return ::metadata(reader_->metadata());
+        return toJs(reader_->metadata());
     }
 
     auto complete() const -> bool
@@ -134,7 +134,7 @@ public:
                              return em::val::undefined();
                          }
 
-                         return packet(p);
+                         return toJs(p);
                      });
     }
 
@@ -155,7 +155,7 @@ public:
                          xicap::Packet p;
                          while (reader_.next(p))
                          {
-                             out.call<void>("push", packet(p));
+                             out.call<void>("push", toJs(p));
                          }
 
                          return out;
@@ -164,7 +164,7 @@ public:
 
     auto metadata() const -> em::val
     {
-        return ::metadata(reader_.metadata());
+        return toJs(reader_.metadata());
     }
 
     auto ready() const -> bool
