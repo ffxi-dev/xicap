@@ -120,7 +120,7 @@ TEST_CASE("a writer refuses metadata and frame policies outside the format, befo
 {
     const test::TempFile file;
     auto                 m = test::metadata();
-    m.source               = Source{ .format = "captain", .formatVersion = "1", .skippedRecords = 0, .metadata = std::vector<uint8_t>(16 * 1024 * 1024) };
+    m.source               = Source{ .format = "captain", .formatVersion = "1", .skippedRecords = 0, .metadata = std::vector<uint8_t>(size_t{ 16 } * 1024 * 1024) };
     CHECK_THROWS_AS(Writer(file, m), Error);
     m.source.reset();
     m.blocks = std::vector<Block>(256, Block{ .type = 0x8001, .payload = {} });
