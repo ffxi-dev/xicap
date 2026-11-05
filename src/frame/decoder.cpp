@@ -16,7 +16,7 @@ Decoder::Decoder()
     ZSTD_DCtx_setParameter(dctx_.get(), ZSTD_d_windowLogMax, format::MAX_WINDOW_LOG);
 }
 
-auto Decoder::decode(const format::FrameHeader& header, std::span<const uint8_t> payload, Frame& out) -> void
+auto Decoder::decode(const format::FrameHeader& header, const std::span<const uint8_t> payload, Frame& out) -> void
 {
     if (header.plainSize == 0 || header.plainSize > format::MAX_PLAIN_SIZE)
     {
@@ -35,8 +35,8 @@ auto Decoder::decode(const format::FrameHeader& header, std::span<const uint8_t>
 
     // One byte more than expected, to catch a payload that decodes to more.
     plain_.resize(size_t{ header.plainSize } + 1);
-    auto in  = ZSTD_inBuffer{ payload.data(), payload.size(), 0 };
-    auto buf = ZSTD_outBuffer{ plain_.data(), plain_.size(), 0 };
+    auto in  = ZSTD_inBuffer{ .src = payload.data(), .size = payload.size(), .pos = 0 };
+    auto buf = ZSTD_outBuffer{ .dst = plain_.data(), .size = plain_.size(), .pos = 0 };
     while (buf.pos < buf.size)
     {
         const auto inBefore  = in.pos;

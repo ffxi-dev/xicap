@@ -55,7 +55,7 @@ extern "C"
     {
         return guarded([&]
                        {
-                           auto* const r = new xicap_reader{ xicap::Reader(path), {}, {} };
+                           auto* const r = new xicap_reader{ .reader = xicap::Reader(path) };
                            const auto& m = r->reader.metadata();
                            const auto* s = m.source ? &*m.source : nullptr;
                            *info         = {
@@ -98,7 +98,7 @@ extern "C"
                            r->markers.clear();
                            for (const auto& m : p.markers)
                            {
-                               r->markers.push_back({ static_cast<uint8_t>(m.kind), m.text.data(), m.text.size() });
+                               r->markers.push_back({ .kind = static_cast<uint8_t>(m.kind), .text = m.text.data(), .text_size = m.text.size() });
                            }
 
                            *out = {

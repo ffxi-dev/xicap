@@ -7,7 +7,7 @@ using namespace xicap;
 namespace
 {
 
-auto writeSample(const std::filesystem::path& path, bool close) -> void
+auto writeSample(const std::filesystem::path& path, const bool close) -> void
 {
     Writer w(path, test::metadata());
     for (uint16_t i{ 0 }; i < 2000; ++i)

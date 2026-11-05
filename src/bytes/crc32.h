@@ -40,7 +40,7 @@ inline constexpr auto CRC32_TABLE = []
 }
 
 // Appends the CRC of out from byte `from` on.
-inline auto appendCrc(std::vector<uint8_t>& out, size_t from = 0) -> void
+inline auto appendCrc(std::vector<uint8_t>& out, const size_t from = 0) -> void
 {
     append(out, crc32(std::span{ out }.subspan(from)));
 }

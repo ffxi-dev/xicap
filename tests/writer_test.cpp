@@ -25,7 +25,7 @@ TEST_CASE("a capture reads back as written")
         w.close();
     }
 
-    Reader r(file);
+    const Reader r(file);
     CHECK(r.complete());
     CHECK(r.packetCount() == 3);
     CHECK(r.endTimestamp() == 1020);
@@ -48,7 +48,7 @@ TEST_CASE("an empty capture has a header, its blocks, and a trailer")
 {
     const test::TempFile file;
     Writer(file, test::metadata()).close();
-    Reader r(file);
+    const Reader r(file);
     CHECK(r.complete());
     CHECK(r.metadata().startTimestamp == 0);
     CHECK(test::readAll(file).empty());

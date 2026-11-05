@@ -9,7 +9,7 @@ namespace xicap::metadata
 namespace
 {
 
-auto readSource(std::span<const uint8_t> payload) -> Source
+auto readSource(const std::span<const uint8_t> payload) -> Source
 {
     if (payload.size() < sizeof(format::SourceHeader))
     {
@@ -28,7 +28,7 @@ auto readSource(std::span<const uint8_t> payload) -> Source
 
 } // namespace
 
-auto readHeader(std::span<const uint8_t> bytes, Metadata& out) -> uint8_t
+auto readHeader(const std::span<const uint8_t> bytes, Metadata& out) -> uint8_t
 {
     const auto h = bytes::load<format::Header>(bytes);
     if (h.magic != format::MAGIC)
@@ -60,7 +60,7 @@ auto readHeader(std::span<const uint8_t> bytes, Metadata& out) -> uint8_t
     return h.blockCount;
 }
 
-auto blockSize(std::span<const uint8_t> first) -> uint64_t
+auto blockSize(const std::span<const uint8_t> first) -> uint64_t
 {
     const auto h = bytes::load<format::BlockHeader>(first);
     if (h.length > format::MAX_BLOCK_SIZE)
@@ -71,7 +71,7 @@ auto blockSize(std::span<const uint8_t> first) -> uint64_t
     return sizeof(h) + uint64_t{ h.length } + sizeof(uint32_t);
 }
 
-auto readBlock(std::span<const uint8_t> block, Metadata& out) -> uint32_t
+auto readBlock(const std::span<const uint8_t> block, Metadata& out) -> uint32_t
 {
     if (!bytes::endsWithCrc(block))
     {

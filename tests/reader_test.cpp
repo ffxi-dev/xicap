@@ -14,7 +14,7 @@ auto writeSample(const std::filesystem::path& path) -> void
     Writer w(path, test::metadata(), policy);
     for (uint16_t i{ 0 }; i < 10; ++i)
     {
-        w.write(test::out(i * 10, test::gamePacket(0x00D, 24, i, static_cast<uint8_t>(i))));
+        w.write(test::out(uint64_t{ 10 } * i, test::gamePacket(0x00D, 24, i, static_cast<uint8_t>(i))));
     }
 
     w.close();

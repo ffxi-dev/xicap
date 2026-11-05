@@ -15,7 +15,7 @@ namespace test
 {
 
 // A game packet: id, size in words from its length, sync, then bytes of fill.
-inline auto gamePacket(uint16_t id, size_t length, uint16_t sync, uint8_t fill = 0) -> std::vector<std::byte>
+inline auto gamePacket(const uint16_t id, const size_t length, const uint16_t sync, const uint8_t fill = 0) -> std::vector<std::byte>
 {
     std::vector<std::byte> p(length, std::byte{ fill });
     const auto             word = static_cast<uint16_t>((id & 0x1FF) | ((length / 4) << 9));
@@ -26,7 +26,7 @@ inline auto gamePacket(uint16_t id, size_t length, uint16_t sync, uint8_t fill =
     return p;
 }
 
-inline auto out(uint64_t timestamp, const std::vector<std::byte>& data, xicap::PacketDirection direction = xicap::PacketDirection::ServerToClient) -> xicap::OutPacket
+inline auto out(const uint64_t timestamp, const std::vector<std::byte>& data, const xicap::PacketDirection direction = xicap::PacketDirection::ServerToClient) -> xicap::OutPacket
 {
     return { .timestamp = timestamp, .direction = direction, .data = data };
 }

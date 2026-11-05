@@ -16,7 +16,7 @@ namespace xicap::bytes
 // The T at bytes[at]. The caller checks that it fits.
 template <typename T, typename Byte, size_t N>
     requires(sizeof(Byte) == 1)
-[[nodiscard]] auto load(std::span<Byte, N> bytes, size_t at = 0) noexcept -> T
+[[nodiscard]] auto load(std::span<Byte, N> bytes, const size_t at = 0) noexcept -> T
 {
     std::array<std::byte, sizeof(T)> raw{};
     std::ranges::copy(std::as_bytes(bytes).subspan(at, sizeof(T)), raw.begin());

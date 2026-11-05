@@ -6,7 +6,7 @@
 
 // The plaintext decoder behind zstd and the frame CRC, which random input rarely gets past. The first 4 bytes give
 // the packet and marker counts.
-extern "C" auto LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) -> int
+extern "C" auto LLVMFuzzerTestOneInput(const uint8_t* data, const size_t size) -> int
 {
     if (size < 4)
     {

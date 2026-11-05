@@ -6,7 +6,7 @@
 #include <span>
 
 // Feeds the input in two pushes, split by its first byte, so partial frames are exercised too.
-extern "C" auto LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) -> int
+extern "C" auto LLVMFuzzerTestOneInput(const uint8_t* data, const size_t size) -> int
 {
     if (size == 0)
     {

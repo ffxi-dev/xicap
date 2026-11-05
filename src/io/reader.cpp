@@ -10,7 +10,7 @@ namespace xicap
 
 Reader::Reader(const std::filesystem::path& path)
 : file_(path, std::ios::binary)
-, chunk_(64 * 1024)
+, chunk_(size_t{ 64 } * 1024)
 {
     if (!file_)
     {

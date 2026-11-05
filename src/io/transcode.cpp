@@ -1,5 +1,4 @@
 #include "xicap/transcode.h"
-#include "io/staged.h"
 #include "xicap/reader.h"
 
 #include <algorithm>
@@ -46,23 +45,30 @@ auto compare(const std::filesystem::path& src, const std::filesystem::path& dst)
 
 } // namespace
 
-auto transcode(const std::filesystem::path& src, const std::filesystem::path& dst, FramePolicy policy) -> void
+auto transcode(const std::filesystem::path& src, const std::filesystem::path& dst, const FramePolicy policy) -> void
 {
-    const io::Staged tmp(dst);
+    try
     {
-        Reader in(src);
-        Writer out(tmp.path(), in.metadata(), policy);
-        Packet p;
-        while (in.next(p))
         {
-            out.copy(p);
+            Reader in(src);
+            Writer out(dst, in.metadata(), policy);
+            Packet p;
+            while (in.next(p))
+            {
+                out.copy(p);
+            }
+
+            out.close();
         }
 
-        out.close();
+        compare(src, dst);
     }
-
-    compare(src, tmp.path());
-    tmp.publish();
+    catch (...)
+    {
+        std::error_code ec;
+        std::filesystem::remove(dst, ec);
+        throw;
+    }
 }
 
 } // namespace xicap

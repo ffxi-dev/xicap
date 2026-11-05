@@ -11,7 +11,7 @@ namespace
 {
 
 // A game packet whose header's size gives its length stores its length as 0.
-auto storedLength(std::span<const uint8_t> data, uint8_t channel) noexcept -> uint64_t
+auto storedLength(const std::span<const uint8_t> data, const uint8_t channel) noexcept -> uint64_t
 {
     if (isGame(channel) && format::gameLength(data) == data.size())
     {
