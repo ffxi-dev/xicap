@@ -5,7 +5,7 @@
 namespace xicap
 {
 
-enum class Network : uint8_t
+enum class ServerKind : uint8_t
 {
     Unknown = 0,
     Retail  = 1,

@@ -50,7 +50,7 @@ inline auto describe(const xicap::Metadata& m) -> nlohmann::ordered_json
         { "previousCaptureId", hex(m.previousCaptureId) },
         { "startTimestamp", m.startTimestamp },
         { "origin", m.origin },
-        { "network", m.network },
+        { "serverKind", m.serverKind },
         { "captureAgent", m.captureAgent },
         { "clientVersion", m.clientVersion },
         { "character", { { "contentId", m.character.contentId }, { "characterId", m.character.characterId }, { "name", m.character.name }, { "world", m.character.world } } },

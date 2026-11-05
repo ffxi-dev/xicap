@@ -68,7 +68,7 @@ auto metadata(const xicap::Metadata& m) -> em::val
     o.set("previousCaptureId", bytes(m.previousCaptureId));
     o.set("startTimestamp", static_cast<double>(m.startTimestamp));
     o.set("origin", static_cast<int>(m.origin));
-    o.set("network", static_cast<int>(m.network));
+    o.set("serverKind", static_cast<int>(m.serverKind));
     o.set("captureAgent", text(m.captureAgent));
     o.set("clientVersion", text(m.clientVersion));
     o.set("character", character);

@@ -52,7 +52,7 @@ struct Header
     std::array<uint8_t, 8> magic;
     uint8_t                version;
     Origin                 origin;
-    Network                network;
+    ServerKind             serverKind;
     uint8_t                blockCount;
     CaptureId              captureId;
     CaptureId              previousCaptureId;

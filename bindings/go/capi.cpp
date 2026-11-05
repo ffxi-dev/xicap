@@ -55,7 +55,7 @@ auto summarize(const char* path, xicap_summary& s) -> void
     std::ranges::copy(m.previousCaptureId, s.previous_capture_id);
     s.start_timestamp = m.startTimestamp;
     s.origin          = static_cast<uint8_t>(m.origin);
-    s.network         = static_cast<uint8_t>(m.network);
+    s.server_kind     = static_cast<uint8_t>(m.serverKind);
     copyText(s.capture_agent, m.captureAgent);
     copyText(s.client_version, m.clientVersion);
     s.content_id   = m.character.contentId;
@@ -145,7 +145,7 @@ extern "C"
                        {
                            auto m = xicap::Metadata{
                                .origin        = static_cast<xicap::Origin>(info->origin),
-                               .network       = static_cast<xicap::Network>(info->network),
+                               .serverKind    = static_cast<xicap::ServerKind>(info->server_kind),
                                .captureAgent  = info->capture_agent,
                                .clientVersion = info->client_version,
                                .character     = { .contentId = info->content_id, .characterId = info->character_id, .name = info->character_name, .world = info->world_name },

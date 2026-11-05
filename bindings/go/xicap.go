@@ -20,7 +20,7 @@ const HeaderSize = 160
 
 type (
 	Origin     uint8
-	Network    uint8
+	ServerKind uint8
 	MarkerKind uint8
 )
 
@@ -30,9 +30,9 @@ const (
 	OriginLive      Origin = 1
 	OriginConverted Origin = 2
 
-	NetworkUnknown Network = 0
-	NetworkRetail  Network = 1
-	NetworkPrivate Network = 2
+	ServerKindUnknown ServerKind = 0
+	ServerKindRetail  ServerKind = 1
+	ServerKindPrivate ServerKind = 2
 
 	MarkerNote   MarkerKind = 0
 	MarkerLogin  MarkerKind = 1
@@ -75,7 +75,7 @@ type Metadata struct {
 	PreviousCaptureID [16]byte
 	StartTimestamp    uint64 // Unix ms
 	Origin            Origin
-	Network           Network
+	ServerKind        ServerKind
 	CaptureAgent      string
 	ClientVersion     string
 	Character         Character
@@ -137,7 +137,7 @@ func Read(path string) (Summary, error) {
 			PreviousCaptureID: *(*[16]byte)(unsafe.Pointer(&s.previous_capture_id)),
 			StartTimestamp:    uint64(s.start_timestamp),
 			Origin:            Origin(s.origin),
-			Network:           Network(s.network),
+			ServerKind:        ServerKind(s.server_kind),
 			CaptureAgent:      C.GoString(&s.capture_agent[0]),
 			ClientVersion:     C.GoString(&s.client_version[0]),
 			Character: Character{
@@ -179,7 +179,7 @@ type WriterInfo struct {
 	ClientVersion string
 	Character     Character
 	Origin        Origin
-	Network       Network
+	ServerKind    ServerKind
 	Source        *Source
 	KeepChat      bool // write no exclusion rules; by default xicap zeroes the text of chat
 	Archive       bool // smaller files, written more slowly
@@ -219,7 +219,7 @@ func Create(path string, info WriterInfo) (*Writer, error) {
 		character_name: str(info.Character.Name),
 		world_name:     str(info.Character.World),
 		origin:         C.uint8_t(info.Origin),
-		network:        C.uint8_t(info.Network),
+		server_kind:    C.uint8_t(info.ServerKind),
 		keep_chat:      C.bool(info.KeepChat),
 		archive:        C.bool(info.Archive),
 	}

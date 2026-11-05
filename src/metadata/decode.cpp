@@ -93,7 +93,7 @@ auto readHeader(std::span<const uint8_t> bytes, Metadata& out) -> uint8_t
         .previousCaptureId = h.previousCaptureId,
         .startTimestamp    = h.startTimestamp,
         .origin            = h.origin,
-        .network           = h.network,
+        .serverKind        = h.serverKind,
         .captureAgent      = bytes::fromField(h.captureAgent),
         .clientVersion     = bytes::fromField(h.clientVersion),
         .character         = { .contentId = h.contentId, .characterId = h.characterId, .name = bytes::fromField(h.characterName), .world = bytes::fromField(h.worldName) },

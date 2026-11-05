@@ -2,7 +2,7 @@
 import createXicap from "../dist/xicap.js";
 
 export const Origin = { Unknown: 0, Live: 1, Converted: 2 } as const;
-export const Network = { Unknown: 0, Retail: 1, Private: 2 } as const;
+export const ServerKind = { Unknown: 0, Retail: 1, Private: 2 } as const;
 export const MarkerKind = { Note: 0, Login: 1, Logout: 2 } as const;
 export const PacketFlag = {
     ClientToServer: 0x0001,
@@ -19,7 +19,7 @@ export interface Metadata {
     previousCaptureId: Uint8Array;
     startTimestamp: number;
     origin: number;
-    network: number;
+    serverKind: number;
     captureAgent: string;
     clientVersion: string;
     character: { contentId: number; characterId: number; name: string; world: string };

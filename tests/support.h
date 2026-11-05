@@ -35,7 +35,7 @@ inline auto metadata() -> xicap::Metadata
 {
     return {
         .captureId     = { 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33 },
-        .network       = xicap::Network::Retail,
+        .serverKind    = xicap::ServerKind::Retail,
         .captureAgent  = "xicap tests",
         .clientVersion = "30251101_2",
         .character     = { .contentId = 0x01020304, .characterId = 0x0A0B0C0D, .name = "Rhavyn", .world = "Asura" },

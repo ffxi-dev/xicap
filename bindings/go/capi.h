@@ -26,7 +26,7 @@ extern "C"
         uint8_t       previous_capture_id[16];
         uint64_t      start_timestamp;
         uint8_t       origin;
-        uint8_t       network;
+        uint8_t       server_kind;
         char          capture_agent[32];
         char          client_version[32];
         uint32_t      content_id;
@@ -61,7 +61,7 @@ extern "C"
         const char*    character_name;
         const char*    world_name;
         uint8_t        origin;
-        uint8_t        network;
+        uint8_t        server_kind;
         bool           has_source;
         const char*    source_format;
         const char*    source_format_version;

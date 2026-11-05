@@ -8,7 +8,7 @@
     "previousCaptureId": "00000000000000000000000000000000",
     "startTimestamp": 0,
     "origin": 1,
-    "network": 1,
+    "serverKind": 1,
     "captureAgent": "xicap tests",
     "clientVersion": "30251101_2",
     "character": {

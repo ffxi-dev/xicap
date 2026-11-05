@@ -21,7 +21,7 @@ def describe(r, packets):
             "previousCaptureId": m.previous_capture_id.hex(),
             "startTimestamp": m.start_timestamp,
             "origin": int(m.origin),
-            "network": int(m.network),
+            "serverKind": int(m.server_kind),
             "captureAgent": m.capture_agent,
             "clientVersion": m.client_version,
             "character": {"contentId": c.content_id, "characterId": c.character_id, "name": c.name, "world": c.world},

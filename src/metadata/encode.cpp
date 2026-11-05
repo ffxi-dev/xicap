@@ -53,7 +53,7 @@ auto encode(const Metadata& m) -> std::vector<uint8_t>
         .magic             = format::MAGIC,
         .version           = format::VERSION,
         .origin            = m.origin,
-        .network           = m.network,
+        .serverKind        = m.serverKind,
         .blockCount        = static_cast<uint8_t>(1 + static_cast<int>(m.source.has_value())),
         .captureId         = m.captureId,
         .previousCaptureId = m.previousCaptureId,

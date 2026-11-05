@@ -17,7 +17,7 @@ struct Metadata
     CaptureId             previousCaptureId{};
     uint64_t              startTimestamp{}; // a writer takes it from the first packet
     Origin                origin{ Origin::Live };
-    Network               network{ Network::Unknown };
+    ServerKind            serverKind{ ServerKind::Unknown };
     std::string           captureAgent;
     std::string           clientVersion;
     Character             character;

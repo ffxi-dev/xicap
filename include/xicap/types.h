@@ -2,10 +2,10 @@
 
 #include "enums/channel.h"
 #include "enums/marker_kind.h"
-#include "enums/network.h"
 #include "enums/origin.h"
 #include "enums/packet_direction.h"
 #include "enums/packet_flag.h"
+#include "enums/server_kind.h"
 
 #include <array>
 #include <cstddef>

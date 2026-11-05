@@ -22,7 +22,7 @@ reader from it alone.
 xicap::Metadata m;                  // xicap's default policy zeroes chat text
 m.captureAgent  = "MyRecorder 1.0";
 m.clientVersion = "30251101_2";
-m.network       = xicap::Network::Retail;
+m.serverKind    = xicap::ServerKind::Retail;
 m.character     = { .contentId = contentId, .characterId = id, .name = "Rhavyn", .world = "Asura" };
 
 xicap::Writer w("session.xicap", m);

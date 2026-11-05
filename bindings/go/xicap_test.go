@@ -32,7 +32,7 @@ type vector struct {
 		CaptureID, PreviousCaptureID hexBytes
 		StartTimestamp               uint64
 		Origin                       Origin
-		Network                      Network
+		ServerKind                   ServerKind
 		CaptureAgent, ClientVersion  string
 		Character                    Character
 		Policy                       struct {
@@ -65,7 +65,7 @@ func (v vector) summary() Summary {
 			PreviousCaptureID: [16]byte(m.PreviousCaptureID),
 			StartTimestamp:    m.StartTimestamp,
 			Origin:            m.Origin,
-			Network:           m.Network,
+			ServerKind:        m.ServerKind,
 			CaptureAgent:      m.CaptureAgent,
 			ClientVersion:     m.ClientVersion,
 			Character:         m.Character,
@@ -128,7 +128,7 @@ func TestWriteThenRead(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "c.xicap")
 	w, err := Create(path, WriterInfo{
 		CaptureAgent: "mogsafe", ClientVersion: "1.0", Character: Character{CharacterID: 7, Name: "Rhavyn"},
-		Origin: OriginConverted, Network: NetworkPrivate, KeepChat: true, Archive: true,
+		Origin: OriginConverted, ServerKind: ServerKindPrivate, KeepChat: true, Archive: true,
 		Source: &Source{Format: "captain", FormatVersion: "1.4", SkippedRecords: 2, Metadata: []byte("manifest")},
 	})
 	if err != nil {

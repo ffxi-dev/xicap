@@ -74,7 +74,7 @@ frame, or when it closes a capture that holds no packet.
 | 0 | 8 | `magic` | `89 58 43 50 0D 0A 1A 0A`, see below |
 | 8 | 1 | `version` | `5` |
 | 9 | 1 | `origin` | `0` unknown, `1` recorded live, `2` converted from another format |
-| 10 | 1 | `network` | `0` unknown, `1` retail, `2` private server |
+| 10 | 1 | `serverKind` | `0` unknown, `1` retail, `2` private server |
 | 11 | 1 | `blockCount` | blocks after the header |
 | 12 | 16 | `captureId` | 16 random bytes |
 | 28 | 16 | `previousCaptureId` | the capture this one continues, or all zero |
@@ -456,7 +456,7 @@ the three packets of [the example above](#example), with the default policy,
 one frame, and the trailer. Offsets are in hex.
 
 ```
-00000000  89 58 43 50 0d 0a 1a 0a 05 01 01 01 33 33 33 33  magic; version 5; origin 1 (live); network 1 (retail); blockCount 1; captureId
+00000000  89 58 43 50 0d 0a 1a 0a 05 01 01 01 33 33 33 33  magic; version 5; origin 1 (live); serverKind 1 (retail); blockCount 1; captureId
 00000010  33 33 33 33 33 33 33 33 33 33 33 33 00 00 00 00  previousCaptureId (from 1c)
 00000020  00 00 00 00 00 00 00 00 00 00 00 00 00 a8 da 76  startTimestamp (from 2c)
 00000030  9b 01 00 00 78 69 63 61 70 20 74 65 73 74 73 00  captureAgent (from 34)

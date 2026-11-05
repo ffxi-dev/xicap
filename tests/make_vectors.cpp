@@ -174,7 +174,7 @@ auto main(int argc, char** argv) -> int
 
     auto converted         = test::metadata();
     converted.origin       = Origin::Converted;
-    converted.network      = Network::Private;
+    converted.serverKind   = ServerKind::Private;
     converted.captureAgent = "mogsafe";
     converted.policy       = {};
     converted.source       = Source{ .format = "captain", .formatVersion = "1.4.2", .skippedRecords = 2, .metadata = { 'v', '=', '1', '\n' } };
