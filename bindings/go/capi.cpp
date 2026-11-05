@@ -38,9 +38,10 @@ auto copyText(char (&dst)[N], const std::string& src) -> void
 }
 
 // A copy the C side owns and frees.
-auto copyOut(const std::ranges::contiguous_range auto& src)
+template <std::ranges::contiguous_range R>
+auto copyOut(const R& src) -> std::ranges::range_value_t<R>*
 {
-    using T   = std::ranges::range_value_t<decltype(src)>;
+    using T   = std::ranges::range_value_t<R>;
     auto* out = static_cast<T*>(std::malloc(std::ranges::size(src) * sizeof(T)));
     std::ranges::copy(src, out);
     return out;
@@ -103,7 +104,7 @@ struct xicap_writer
 
 extern "C"
 {
-    char* xicap_check_header(const uint8_t* data, size_t size)
+    auto xicap_check_header(const uint8_t* data, size_t size) -> char*
     {
         return guarded([&]
                        {
@@ -112,7 +113,7 @@ extern "C"
                        });
     }
 
-    char* xicap_read(const char* path, xicap_summary* out)
+    auto xicap_read(const char* path, xicap_summary* out) -> char*
     {
         *out            = {};
         auto* const err = guarded([&]
@@ -127,7 +128,7 @@ extern "C"
         return err;
     }
 
-    void xicap_free_summary(xicap_summary* s)
+    auto xicap_free_summary(xicap_summary* s) -> void
     {
         for (const auto& m : std::span{ s->markers, s->marker_count })
         {
@@ -138,7 +139,7 @@ extern "C"
         std::free(s->source_metadata);
     }
 
-    char* xicap_writer_open(const char* path, const xicap_writer_info* info, xicap_writer** out)
+    auto xicap_writer_open(const char* path, const xicap_writer_info* info, xicap_writer** out) -> char*
     {
         return guarded([&]
                        {
@@ -169,7 +170,7 @@ extern "C"
                        });
     }
 
-    char* xicap_writer_write(xicap_writer* w, uint64_t timestamp, bool client_to_server, uint8_t channel, uint16_t opcode, uint16_t provenance, const uint8_t* data, size_t size)
+    auto xicap_writer_write(xicap_writer* w, uint64_t timestamp, bool client_to_server, uint8_t channel, uint16_t opcode, uint16_t provenance, const uint8_t* data, size_t size) -> char*
     {
         return guarded([&]
                        {
@@ -184,7 +185,7 @@ extern "C"
                        });
     }
 
-    char* xicap_writer_close(xicap_writer* w)
+    auto xicap_writer_close(xicap_writer* w) -> char*
     {
         auto* const err = guarded([&]
                                   {
@@ -194,7 +195,7 @@ extern "C"
         return err;
     }
 
-    char* xicap_transcode(const char* src, const char* dst)
+    auto xicap_transcode(const char* src, const char* dst) -> char*
     {
         return guarded([&]
                        {

@@ -14,7 +14,7 @@ namespace
 
 // FORMAT.md lets a reader replace bytes that are not UTF-8 with U+FFFD, where pybind11 would raise.
 template <typename T>
-auto text(std::string T::* field)
+auto text(std::string T::* field) -> py::cpp_function
 {
     return [field](const T& o)
     {
@@ -24,7 +24,7 @@ auto text(std::string T::* field)
 }
 
 template <typename T, typename Bytes>
-auto bytes(Bytes T::* field)
+auto bytes(Bytes T::* field) -> py::cpp_function
 {
     return [field](const T& o)
     {
