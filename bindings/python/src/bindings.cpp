@@ -1,31 +1,48 @@
 #include <xicap/reader.h>
 
 #include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
 #include <pybind11/stl/filesystem.h>
 
-#include <filesystem>
-#include <string_view>
+#include <string>
+#include <vector>
 
 namespace py = pybind11;
 
 namespace
 {
 
-// Text is UTF-8 as stored; a byte that does not start a character reads as U+FFFD rather than failing.
-auto str(std::string_view text) -> py::str
+// FORMAT.md lets a reader replace bytes that are not UTF-8 with U+FFFD, where pybind11 would raise.
+template <typename T>
+auto text(std::string T::* field)
 {
-    return py::reinterpret_steal<py::str>(PyUnicode_DecodeUTF8(text.data(), static_cast<Py_ssize_t>(text.size()), "replace"));
+    return [field](const T& o)
+    {
+        const auto& s = o.*field;
+        return py::reinterpret_steal<py::str>(PyUnicode_DecodeUTF8(s.data(), static_cast<Py_ssize_t>(s.size()), "replace"));
+    };
 }
 
-// A packet with its own copy of the bytes, since the reader's copy lasts only until the next packet.
+template <typename T, typename Bytes>
+auto bytes(Bytes T::* field)
+{
+    return [field](const T& o)
+    {
+        const auto& b = o.*field;
+        return py::bytes(reinterpret_cast<const char*>(b.data()), b.size());
+    };
+}
+
+// The reader's packet lasts only until its next one, so Python gets a copy.
 struct Packet
 {
-    uint64_t               timestamp{};
-    uint16_t               flags{};
-    uint8_t                channel{};
-    uint16_t               opcode{};
-    xicap::PacketDirection direction{};
-    py::bytes              data;
+    uint64_t                   timestamp{};
+    uint16_t                   flags{};
+    uint8_t                    channel{};
+    uint16_t                   opcode{};
+    xicap::PacketDirection     direction{};
+    py::bytes                  data;
+    std::vector<xicap::Marker> markers;
 };
 
 } // namespace
@@ -36,20 +53,57 @@ PYBIND11_MODULE(xicap, m)
 
     py::register_exception<xicap::Error>(m, "Error");
 
+    py::enum_<xicap::Origin>(m, "Origin")
+        .value("Unknown", xicap::Origin::Unknown)
+        .value("Live", xicap::Origin::Live)
+        .value("Converted", xicap::Origin::Converted);
     py::enum_<xicap::Network>(m, "Network")
         .value("Unknown", xicap::Network::Unknown)
         .value("Retail", xicap::Network::Retail)
         .value("Private", xicap::Network::Private);
+    py::enum_<xicap::MarkerKind>(m, "MarkerKind")
+        .value("Note", xicap::MarkerKind::Note)
+        .value("Login", xicap::MarkerKind::Login)
+        .value("Logout", xicap::MarkerKind::Logout);
     py::enum_<xicap::PacketDirection>(m, "Direction")
         .value("ServerToClient", xicap::PacketDirection::ServerToClient)
         .value("ClientToServer", xicap::PacketDirection::ClientToServer);
 
     py::class_<xicap::Character>(m, "Character")
+        .def_readonly("content_id", &xicap::Character::contentId)
         .def_readonly("character_id", &xicap::Character::characterId)
-        .def_property_readonly("name", [](const xicap::Character& c)
+        .def_property_readonly("name", text(&xicap::Character::name))
+        .def_property_readonly("world", text(&xicap::Character::world));
+
+    py::class_<xicap::ExclusionPolicy>(m, "Policy")
+        .def_property_readonly("name", text(&xicap::ExclusionPolicy::name))
+        .def_readonly("version", &xicap::ExclusionPolicy::version)
+        .def_property_readonly("rules", [](const xicap::ExclusionPolicy& p)
                                {
-                                   return str(c.name);
+                                   return p.rules.size();
                                });
+
+    py::class_<xicap::Source>(m, "Source")
+        .def_property_readonly("format", text(&xicap::Source::format))
+        .def_property_readonly("format_version", text(&xicap::Source::formatVersion))
+        .def_readonly("skipped_records", &xicap::Source::skippedRecords)
+        .def_property_readonly("metadata", bytes(&xicap::Source::metadata));
+
+    py::class_<xicap::Metadata>(m, "Metadata")
+        .def_property_readonly("capture_id", bytes(&xicap::Metadata::captureId))
+        .def_property_readonly("previous_capture_id", bytes(&xicap::Metadata::previousCaptureId))
+        .def_readonly("start_timestamp", &xicap::Metadata::startTimestamp)
+        .def_readonly("origin", &xicap::Metadata::origin)
+        .def_readonly("network", &xicap::Metadata::network)
+        .def_property_readonly("capture_agent", text(&xicap::Metadata::captureAgent))
+        .def_property_readonly("client_version", text(&xicap::Metadata::clientVersion))
+        .def_readonly("character", &xicap::Metadata::character)
+        .def_readonly("policy", &xicap::Metadata::policy)
+        .def_readonly("source", &xicap::Metadata::source);
+
+    py::class_<xicap::Marker>(m, "Marker")
+        .def_readonly("kind", &xicap::Marker::kind)
+        .def_property_readonly("text", text(&xicap::Marker::text));
 
     py::class_<Packet>(m, "Packet")
         .def_readonly("timestamp", &Packet::timestamp)
@@ -57,26 +111,13 @@ PYBIND11_MODULE(xicap, m)
         .def_readonly("channel", &Packet::channel)
         .def_readonly("opcode", &Packet::opcode)
         .def_readonly("direction", &Packet::direction)
-        .def_readonly("data", &Packet::data);
+        .def_readonly("data", &Packet::data)
+        .def_readonly("markers", &Packet::markers);
 
     py::class_<xicap::Reader>(m, "Reader")
         .def(py::init<std::filesystem::path>(), py::arg("path"))
-        .def_property_readonly("start_timestamp", [](const xicap::Reader& r)
-                               {
-                                   return r.metadata().startTimestamp;
-                               })
-        .def_property_readonly("network", [](const xicap::Reader& r)
-                               {
-                                   return r.metadata().network;
-                               })
-        .def_property_readonly("client_version", [](const xicap::Reader& r)
-                               {
-                                   return str(r.metadata().clientVersion);
-                               })
-        .def_property_readonly("character", [](const xicap::Reader& r)
-                               {
-                                   return r.metadata().character;
-                               })
+        .def_property_readonly("metadata", &xicap::Reader::metadata)
+        .def_property_readonly("complete", &xicap::Reader::complete)
         .def_property_readonly("end_timestamp", &xicap::Reader::endTimestamp)
         .def_property_readonly("packet_count", &xicap::Reader::packetCount)
         .def("__iter__", [](py::object self)
@@ -98,6 +139,7 @@ PYBIND11_MODULE(xicap, m)
                      .opcode    = p.opcode,
                      .direction = p.direction(),
                      .data      = { reinterpret_cast<const char*>(p.data.data()), p.data.size() },
+                     .markers   = { p.markers.begin(), p.markers.end() },
                  };
              });
 }
