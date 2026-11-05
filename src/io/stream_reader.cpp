@@ -4,7 +4,6 @@
 #include "metadata/codec.h"
 
 #include <algorithm>
-#include <optional>
 #include <utility>
 
 namespace xicap
@@ -12,7 +11,7 @@ namespace xicap
 
 struct StreamReader::State
 {
-    enum class Stage
+    enum class Stage : uint8_t
     {
         Header,
         Blocks,
@@ -24,18 +23,19 @@ struct StreamReader::State
     auto parse() -> void;
     auto parseFrame(std::span<const uint8_t> avail) -> bool;
 
-    Stage                         stage{ Stage::Header };
-    std::vector<uint8_t>          buffer;
-    size_t                        pos{};
-    uint64_t                      dropped{}; // bytes read and erased from the front of buffer
-    Metadata                      metadata;
-    uint8_t                       blocksLeft{};
-    bool                          haveSource{ false };
-    std::optional<frame::Decoder> decoder;
-    frame::Frame                  frame;
-    size_t                        nextPacket{};
-    uint64_t                      packets{};
-    uint64_t                      lastTimestamp{};
+    Stage                stage{ Stage::Header };
+    std::vector<uint8_t> buffer;
+    size_t               pos{};
+    uint64_t             dropped{}; // bytes read and erased from the front of buffer
+    Metadata             metadata;
+    uint8_t              blocksLeft{};
+    bool                 haveSource{ false };
+    frame::Decoder       decoder;
+    bool                 ready{ false };
+    frame::Frame         frame;
+    size_t               nextPacket{};
+    uint64_t             packets{};
+    uint64_t             lastTimestamp{};
 };
 
 StreamReader::StreamReader()
@@ -47,7 +47,7 @@ StreamReader::~StreamReader() = default;
 
 auto StreamReader::ready() const noexcept -> bool
 {
-    return state_->decoder.has_value();
+    return state_->ready;
 }
 
 auto StreamReader::complete() const noexcept -> bool
@@ -70,7 +70,7 @@ auto StreamReader::bytesRead() const noexcept -> uint64_t
     return state_->dropped + state_->pos;
 }
 
-auto StreamReader::push(std::span<const std::byte> bytes) -> void
+auto StreamReader::push(const std::span<const std::byte> bytes) -> void
 {
     auto& s = *state_;
     if (s.stage == State::Stage::Stopped || bytes.empty())
@@ -129,7 +129,7 @@ auto StreamReader::State::parse() -> void
             {
                 if (blocksLeft == 0)
                 {
-                    decoder.emplace();
+                    ready = true;
                     stage = Stage::Frames;
                     break;
                 }
@@ -176,7 +176,7 @@ auto StreamReader::State::parse() -> void
 }
 
 // Reads the frame or trailer at the start of avail. False when it needs more bytes or stops.
-auto StreamReader::State::parseFrame(std::span<const uint8_t> avail) -> bool
+auto StreamReader::State::parseFrame(const std::span<const uint8_t> avail) -> bool
 {
     if (avail.size() < sizeof(uint32_t))
     {
@@ -243,7 +243,7 @@ auto StreamReader::State::parseFrame(std::span<const uint8_t> avail) -> bool
 
     try
     {
-        decoder->decode(h, avail.subspan(sizeof(h), h.payloadSize), frame);
+        decoder.decode(h, avail.subspan(sizeof(h), h.payloadSize), frame);
     }
     catch (const Error&)
     {

@@ -7,7 +7,7 @@ namespace xicap::metadata
 namespace
 {
 
-auto appendBlock(std::vector<uint8_t>& out, uint32_t type, const std::vector<uint8_t>& payload) -> void
+auto appendBlock(std::vector<uint8_t>& out, const uint32_t type, const std::vector<uint8_t>& payload) -> void
 {
     const auto start = out.size();
     bytes::append(out, format::BlockHeader{ .type = type, .length = static_cast<uint32_t>(payload.size()) });

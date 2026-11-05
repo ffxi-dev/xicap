@@ -38,8 +38,8 @@ TEST_CASE("columns keep markers, groups, and lengths the header does not give")
     const auto   a     = test::gamePacket(0x00D, 10, 5, 7); // 10 bytes: the header's size says 8
     const auto   b     = std::vector<std::byte>(3, std::byte{ 9 });
     const auto   c     = test::gamePacket(0x015, 8, 1, 3);
-    const auto   login = std::vector<Marker>{ { MarkerKind::Login, "" } };
-    const auto   notes = std::vector<Marker>{ { MarkerKind::Note, "x" }, { static_cast<MarkerKind>(9), "y" } };
+    const auto   login = std::vector<Marker>{ { .kind = MarkerKind::Login, .text = "" } };
+    const auto   notes = std::vector<Marker>{ { .kind = MarkerKind::Note, .text = "x" }, { .kind = static_cast<MarkerKind>(9), .text = "y" } };
     frame::Frame written;
     written.add({ .timestamp = 1, .flags = 0, .channel = 0, .opcode = 0x00D, .data = a, .markers = login });
     written.add({ .timestamp = 1, .flags = 0x8020, .channel = 7, .opcode = 0x1234, .data = b, .markers = {} });

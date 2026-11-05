@@ -8,7 +8,6 @@
 
 #include <algorithm>
 #include <fstream>
-#include <optional>
 #include <random>
 
 namespace xicap
@@ -32,10 +31,24 @@ auto randomCaptureId() -> CaptureId
     return id;
 }
 
+auto clamped(FramePolicy policy) -> FramePolicy
+{
+    policy.maxFrameSize       = std::min<size_t>(policy.maxFrameSize, format::MAX_PLAIN_SIZE);
+    policy.maxPacketsPerFrame = std::clamp<uint32_t>(policy.maxPacketsPerFrame, 1, format::MAX_PACKETS);
+    return policy;
+}
+
 } // namespace
 
 struct Writer::State
 {
+    State(const FramePolicy policy, const Chat chat)
+    : policy{ policy }
+    , chat{ chat }
+    , encoder{ policy }
+    {
+    }
+
     auto usable() const -> void;
     auto start() -> void;
     auto add(Packet packet) -> void;
@@ -43,14 +56,14 @@ struct Writer::State
     auto writeFrame() -> void;
     auto emit(std::span<const uint8_t> bytes) -> void;
 
-    std::ofstream                 file;
-    Metadata                      metadata;
-    FramePolicy                   policy;
-    Chat                          chat{};
-    std::optional<frame::Encoder> encoder;
-    bool                          started{ false };
-    bool                          closed{ false };
-    bool                          failed{ false }; // a write failed: nothing more may follow
+    std::ofstream  file;
+    Metadata       metadata;
+    FramePolicy    policy;
+    Chat           chat;
+    frame::Encoder encoder;
+    bool           started{ false };
+    bool           closed{ false };
+    bool           failed{ false }; // a write failed: nothing more may follow
 
     frame::Frame        frame;
     size_t              frameSize{}; // plaintext, at most
@@ -60,8 +73,8 @@ struct Writer::State
     uint64_t            packets{};
 };
 
-Writer::Writer(const std::filesystem::path& path, Metadata metadata, FramePolicy policy, const Chat chat)
-: state_(std::make_unique<State>())
+Writer::Writer(const std::filesystem::path& path, Metadata metadata, const FramePolicy policy, const Chat chat)
+: state_(std::make_unique<State>(clamped(policy), chat))
 {
     auto& s                   = *state_;
     s.metadata                = std::move(metadata);
@@ -71,11 +84,6 @@ Writer::Writer(const std::filesystem::path& path, Metadata metadata, FramePolicy
         s.metadata.captureId = randomCaptureId();
     }
 
-    policy.maxFrameSize       = std::min<size_t>(policy.maxFrameSize, format::MAX_PLAIN_SIZE);
-    policy.maxPacketsPerFrame = std::clamp<uint32_t>(policy.maxPacketsPerFrame, 1, format::MAX_PACKETS);
-    s.policy                  = policy;
-    s.chat                    = chat;
-    s.encoder.emplace(policy);
     s.file.open(path, std::ios::binary | std::ios::trunc);
     if (!s.file)
     {
@@ -89,7 +97,7 @@ Writer::~Writer()
     {
         close();
     }
-    catch (const std::exception&)
+    catch (const std::exception&) // NOLINT(bugprone-empty-catch)
     {
         // The file stays cut off: readers read it up to its last whole frame.
     }
@@ -123,7 +131,7 @@ auto Writer::copy(const Packet& packet) -> void
     state_->add(packet);
 }
 
-auto Writer::mark(MarkerKind kind, std::string_view text) -> void
+auto Writer::mark(const MarkerKind kind, const std::string_view text) -> void
 {
     auto& s = *state_;
     s.usable();
@@ -132,7 +140,7 @@ auto Writer::mark(MarkerKind kind, std::string_view text) -> void
         throw Error("xicap: marker text over 65,535 bytes");
     }
 
-    s.pendingMarkers.push_back({ kind, std::string(text) });
+    s.pendingMarkers.push_back({ .kind = kind, .text = std::string(text) });
     s.pendingMarkerSize += MARKER_OVERHEAD + text.size();
 }
 
@@ -240,7 +248,7 @@ auto Writer::State::writeFrame() -> void
 {
     start();
     const auto           plain   = frame::encode(frame);
-    const auto           payload = encoder->compress(plain);
+    const auto           payload = encoder.compress(plain);
     std::vector<uint8_t> out;
     bytes::append(out, format::FrameHeader{
                            .magic         = format::FRAME_MAGIC,
@@ -257,7 +265,7 @@ auto Writer::State::writeFrame() -> void
     frameSize = 0;
 }
 
-auto Writer::State::emit(std::span<const uint8_t> bytes) -> void
+auto Writer::State::emit(const std::span<const uint8_t> bytes) -> void
 {
     file.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
     file.flush();

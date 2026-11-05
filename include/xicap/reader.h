@@ -91,7 +91,7 @@ public:
         return Iterator(*this);
     }
 
-    auto end() const noexcept -> std::default_sentinel_t
+    [[nodiscard]] auto end() const noexcept -> std::default_sentinel_t
     {
         return {};
     }

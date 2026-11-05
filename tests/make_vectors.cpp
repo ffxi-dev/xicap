@@ -25,12 +25,12 @@ constexpr uint64_t T0 = 1'767'225'600'000; // 2026-01-01T00:00:00Z
 
 // Overwrites the bytes at `at` with v.
 template <typename T>
-auto put(Bytes& b, size_t at, const T& v) -> void
+auto put(Bytes& b, const size_t at, const T& v) -> void
 {
     std::ranges::copy(std::bit_cast<std::array<uint8_t, sizeof(T)>>(v), b.begin() + static_cast<std::ptrdiff_t>(at));
 }
 
-auto fixCrc(Bytes& b, size_t from, size_t to) -> void
+auto fixCrc(Bytes& b, const size_t from, const size_t to) -> void
 {
     put(b, to - 4, bytes::crc32(std::span{ b }.subspan(from, to - 4 - from)));
 }
@@ -46,7 +46,7 @@ auto layout(const Bytes& b) -> Layout
 {
     Layout l;
     size_t at{ sizeof(format::Header) };
-    for (int i{ 0 }; i < b[11]; ++i)
+    for (size_t i{ 0 }; i < b[11]; ++i)
     {
         const auto size = size_t{ 12 } + bytes::load<uint32_t>(std::span{ b }, at + 4);
         l.blocks.emplace_back(at, size);
@@ -71,7 +71,7 @@ auto writeVector(const std::filesystem::path& dir, const std::string& name, cons
     std::ofstream(dir / (name + ".json"), std::ios::binary) << test::describe(path).dump(2) << '\n';
 }
 
-auto capture(const std::filesystem::path& dir, const Metadata& m, FramePolicy policy, const std::function<void(Writer&)>& body) -> Bytes
+auto capture(const std::filesystem::path& dir, const Metadata& m, const FramePolicy policy, const std::function<void(Writer&)>& body) -> Bytes
 {
     const auto path = dir / "tmp.xicap";
     {
@@ -89,7 +89,7 @@ auto example(Writer& w) -> void
 {
     for (uint16_t i{ 0 }; i < 3; ++i)
     {
-        w.write(test::out(T0 + i * 10, test::gamePacket(0x0DF, 16, i + 1, static_cast<uint8_t>(i))));
+        w.write(test::out(T0 + uint64_t{ 10 } * i, test::gamePacket(0x0DF, 16, i + 1, static_cast<uint8_t>(i))));
     }
 }
 
@@ -121,7 +121,7 @@ auto mixed(Writer& w) -> void
 }
 
 // One frame whose plaintext is given, then a trailer.
-auto withPlaintext(const Bytes& plain, uint32_t packets) -> Bytes
+auto withPlaintext(const Bytes& plain, const uint32_t packets) -> Bytes
 {
     auto packed = Bytes(ZSTD_compressBound(plain.size()));
     packed.resize(ZSTD_compress(packed.data(), packed.size(), plain.data(), plain.size(), 3));

@@ -25,6 +25,17 @@ jobs:
       - run: cmake --build build --config Release --parallel
       - run: ctest --test-dir build -C Release --output-on-failure
 
+  tidy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install clang-tidy==22.1.8
+      - run: cmake -S . -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DXICAP_BUILD_TESTS=ON
+      - run: git ls-files 'src/*.cpp' 'tests/*.cpp' ':!tests/fuzz' | xargs -P 4 -n 4 clang-tidy -p build --quiet
+
   go:
     runs-on: ubuntu-latest
     steps:

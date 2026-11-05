@@ -2,10 +2,7 @@
 
 #include <cstdint>
 
-namespace xicap
-{
-
-namespace PacketFlag
+namespace xicap::PacketFlag
 {
 inline constexpr uint16_t ClientToServer = 0x0001;
 inline constexpr uint16_t Injected       = 0x0002;
@@ -15,6 +12,4 @@ inline constexpr uint16_t FirstInChunk   = 0x0010;
 inline constexpr uint16_t Provenance     = Injected | Blocked | Modified | FirstInChunk;
 inline constexpr uint16_t Excluded       = 0x0100;
 inline constexpr uint16_t Redacted       = 0x0200;
-} // namespace PacketFlag
-
-} // namespace xicap
+} // namespace xicap::PacketFlag

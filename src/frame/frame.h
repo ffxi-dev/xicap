@@ -58,7 +58,7 @@ auto decode(std::span<const uint8_t> plain, uint32_t packetCount, uint32_t marke
 }
 
 // Each packet's group, numbered in order of the groups' first packets; returns how many groups there are.
-inline auto assignGroups(std::span<const FramePacket> packets, std::vector<uint32_t>& group) -> uint32_t
+inline auto assignGroups(const std::span<const FramePacket> packets, std::vector<uint32_t>& group) -> uint32_t
 {
     std::unordered_map<uint32_t, uint32_t> index;
     group.resize(packets.size());

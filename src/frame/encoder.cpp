@@ -23,8 +23,8 @@ Encoder::Encoder(const FramePolicy& policy)
 auto Encoder::compress(const std::span<const uint8_t> plain) -> std::vector<uint8_t>
 {
     std::vector<uint8_t> payload(ZSTD_compressBound(plain.size()));
-    auto                 in  = ZSTD_inBuffer{ plain.data(), plain.size(), 0 };
-    auto                 out = ZSTD_outBuffer{ payload.data(), payload.size(), 0 };
+    auto                 in  = ZSTD_inBuffer{ .src = plain.data(), .size = plain.size(), .pos = 0 };
+    auto                 out = ZSTD_outBuffer{ .dst = payload.data(), .size = payload.size(), .pos = 0 };
     while (true)
     {
         const auto rc = ZSTD_compressStream2(cctx_.get(), &out, &in, ZSTD_e_flush);

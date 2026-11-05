@@ -34,7 +34,7 @@ auto Frame::data(const FramePacket& packet) const noexcept -> std::span<const ui
     return std::span{ bytes }.subspan(packet.offset, packet.length);
 }
 
-auto Frame::packet(size_t i) const noexcept -> Packet
+auto Frame::packet(const size_t i) const noexcept -> Packet
 {
     const auto& p = packets[i];
     return {

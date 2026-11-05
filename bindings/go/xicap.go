@@ -267,7 +267,7 @@ func (w *Writer) Close() error {
 }
 
 // Transcode rewrites src at dst at archive size, then reads dst back and compares it with src packet by packet. On any
-// difference it returns an error and leaves dst as it was.
+// difference it returns an error, and on any failure there is no file at dst.
 func Transcode(src, dst string) error {
 	s, d := C.CString(src), C.CString(dst)
 	defer C.free(unsafe.Pointer(s))

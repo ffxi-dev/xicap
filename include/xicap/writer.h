@@ -16,7 +16,7 @@ namespace xicap
 // How a writer frames and compresses packets. See FORMAT.md, Writer rules.
 struct FramePolicy
 {
-    size_t   maxFrameSize{ 64 * 1024 }; // plaintext bytes, at most 16 MiB
+    size_t   maxFrameSize{ size_t{ 64 } * 1024 }; // plaintext bytes, at most 16 MiB
     uint32_t maxPacketsPerFrame{ 1000 };
     uint64_t maxFrameTimeMs{ 5000 };
     int      compressionLevel{ 7 };
@@ -33,7 +33,7 @@ struct FramePolicy
     static auto archive() -> FramePolicy
     {
         return {
-            .maxFrameSize       = 1024 * 1024,
+            .maxFrameSize       = size_t{ 1024 } * 1024,
             .maxPacketsPerFrame = UINT32_MAX,
             .maxFrameTimeMs     = UINT64_MAX,
             .compressionLevel   = 19,

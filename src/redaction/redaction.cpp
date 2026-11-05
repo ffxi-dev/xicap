@@ -22,12 +22,12 @@ constexpr auto TO_END = SIZE_MAX;
 
 // After atom0s's XiPackets. Offsets count the 4-byte header.
 constexpr auto CHAT_TEXT = std::array{
-    ChatText{ PacketDirection::ServerToClient, 0x017, 0x17, TO_END }, // chat
-    ChatText{ PacketDirection::ClientToServer, 0x0B5, 0x06, TO_END }, // chat
-    ChatText{ PacketDirection::ClientToServer, 0x0B6, 0x15, TO_END }, // tell
-    ChatText{ PacketDirection::ClientToServer, 0x0B7, 0x15, TO_END }, // Assist Channel
-    ChatText{ PacketDirection::ServerToClient, 0x0CC, 0x08, 128 },    // linkshell message board
-    ChatText{ PacketDirection::ClientToServer, 0x0E2, 0x10, 128 },    // linkshell message board post
+    ChatText{ .direction = PacketDirection::ServerToClient, .opcode = 0x017, .offset = 0x17, .length = TO_END }, // chat
+    ChatText{ .direction = PacketDirection::ClientToServer, .opcode = 0x0B5, .offset = 0x06, .length = TO_END }, // chat
+    ChatText{ .direction = PacketDirection::ClientToServer, .opcode = 0x0B6, .offset = 0x15, .length = TO_END }, // tell
+    ChatText{ .direction = PacketDirection::ClientToServer, .opcode = 0x0B7, .offset = 0x15, .length = TO_END }, // Assist Channel
+    ChatText{ .direction = PacketDirection::ServerToClient, .opcode = 0x0CC, .offset = 0x08, .length = 128 },    // linkshell message board
+    ChatText{ .direction = PacketDirection::ClientToServer, .opcode = 0x0E2, .offset = 0x10, .length = 128 },    // linkshell message board post
 };
 
 } // namespace

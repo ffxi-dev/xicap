@@ -10,7 +10,7 @@
 namespace xicap::frame
 {
 
-auto bad(std::string_view why) -> void
+auto bad(const std::string_view why) -> void
 {
     throw Error(std::format("xicap: bad frame: {}", why));
 }
@@ -18,7 +18,7 @@ auto bad(std::string_view why) -> void
 namespace
 {
 
-auto column(std::span<const uint8_t> plain, size_t& pos, unsigned bits, size_t count) -> std::vector<uint32_t>
+auto column(const std::span<const uint8_t> plain, size_t& pos, const unsigned bits, const size_t count) -> std::vector<uint32_t>
 {
     std::vector<uint32_t> values(count);
     for (auto& v : values)
@@ -33,7 +33,7 @@ auto column(std::span<const uint8_t> plain, size_t& pos, unsigned bits, size_t c
 }
 
 // Reads the markers into out and returns the packet index of each.
-auto readMarkers(std::span<const uint8_t> plain, size_t& pos, uint32_t count, uint32_t packetCount, std::vector<Marker>& out) -> std::vector<uint32_t>
+auto readMarkers(const std::span<const uint8_t> plain, size_t& pos, const uint32_t count, const uint32_t packetCount, std::vector<Marker>& out) -> std::vector<uint32_t>
 {
     std::vector<uint32_t> indexes(count);
     uint32_t              lastIndex{ 0 };
@@ -58,7 +58,7 @@ auto readMarkers(std::span<const uint8_t> plain, size_t& pos, uint32_t count, ui
 
         lastIndex       = index;
         const auto text = plain.subspan(pos, length);
-        out.push_back({ kind, std::string(text.begin(), text.end()) });
+        out.push_back({ .kind = kind, .text = std::string(text.begin(), text.end()) });
         pos += length;
     }
 
@@ -67,7 +67,7 @@ auto readMarkers(std::span<const uint8_t> plain, size_t& pos, uint32_t count, ui
 
 } // namespace
 
-auto decode(std::span<const uint8_t> plain, uint32_t packetCount, uint32_t markerCount, uint64_t baseTimestamp, Frame& out) -> void
+auto decode(const std::span<const uint8_t> plain, const uint32_t packetCount, const uint32_t markerCount, const uint64_t baseTimestamp, Frame& out) -> void
 {
     out.clear();
     // Each packet takes at least one byte in each of the first five columns, and each marker three.
