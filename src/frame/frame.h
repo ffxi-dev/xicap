@@ -6,7 +6,6 @@
 #include <cstdint>
 #include <span>
 #include <string_view>
-#include <unordered_map>
 #include <vector>
 
 // A frame's plaintext: its packets in columns. See FORMAT.md, Frames.
@@ -46,28 +45,12 @@ struct Frame
 // Throws Error for a bad plaintext.
 auto decode(std::span<const uint8_t> plain, uint32_t packetCount, uint32_t markerCount, uint64_t baseTimestamp, Frame& out) -> void;
 
-[[nodiscard]] inline auto isGame(uint8_t channel) noexcept -> bool
+[[nodiscard]] inline auto isGame(const uint8_t channel) noexcept -> bool
 {
     return channel == static_cast<uint8_t>(Channel::Game);
 }
 
-// Packets that share a channel, direction, and opcode are stored together.
-[[nodiscard]] inline auto groupKey(const FramePacket& p) noexcept -> uint32_t
-{
-    return (uint32_t{ p.channel } << 17) | (static_cast<uint32_t>(p.flags & PacketFlag::ClientToServer) << 16) | p.opcode;
-}
-
 // Each packet's group, numbered in order of the groups' first packets; returns how many groups there are.
-inline auto assignGroups(const std::span<const FramePacket> packets, std::vector<uint32_t>& group) -> uint32_t
-{
-    std::unordered_map<uint32_t, uint32_t> index;
-    group.resize(packets.size());
-    for (size_t i{ 0 }; i < packets.size(); ++i)
-    {
-        group[i] = index.try_emplace(groupKey(packets[i]), static_cast<uint32_t>(index.size())).first->second;
-    }
-
-    return static_cast<uint32_t>(index.size());
-}
+auto assignGroups(std::span<const FramePacket> packets, std::vector<uint32_t>& group) -> uint32_t;
 
 } // namespace xicap::frame

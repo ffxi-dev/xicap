@@ -10,7 +10,6 @@ namespace xicap::frame
 namespace
 {
 
-// A game packet whose header's size gives its length stores its length as 0.
 auto storedLength(const std::span<const uint8_t> data, const uint8_t channel) noexcept -> uint64_t
 {
     if (isGame(channel) && format::gameLength(data) == data.size())

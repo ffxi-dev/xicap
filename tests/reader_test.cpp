@@ -31,7 +31,7 @@ TEST_CASE("a cut-off file reads up to its last whole frame, wherever it was cut"
 
     const test::TempFile cut;
     Writer(cut, test::metadata()).close();
-    const auto blocksEnd = std::filesystem::file_size(cut.path()) - 24;
+    const auto blocksEnd = std::filesystem::file_size(cut) - 24;
     size_t     previous{ 0 };
     for (auto size = blocksEnd; size < bytes.size(); ++size)
     {

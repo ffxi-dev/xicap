@@ -13,8 +13,8 @@ extern "C"
 
     typedef struct
     {
-        const uint8_t* capture_id;
-        const uint8_t* previous_capture_id;
+        uint8_t        capture_id[16];
+        uint8_t        previous_capture_id[16];
         uint64_t       start_timestamp;
         uint8_t        origin;
         uint8_t        server_kind;
@@ -30,6 +30,11 @@ extern "C"
         uint32_t       skipped_records;
         const uint8_t* source_metadata;
         size_t         source_metadata_size;
+    } xicap_metadata;
+
+    typedef struct
+    {
+        xicap_metadata metadata;
         bool           complete;
         uint64_t       end_timestamp;
         uint64_t       packet_count;
@@ -54,26 +59,6 @@ extern "C"
         size_t              marker_count;
     } xicap_packet;
 
-    typedef struct
-    {
-        const char*    capture_agent;
-        const char*    client_version;
-        uint32_t       content_id;
-        uint32_t       character_id;
-        const char*    character_name;
-        const char*    world_name;
-        uint8_t        origin;
-        uint8_t        server_kind;
-        bool           has_source;
-        const char*    source_format;
-        const char*    source_format_version;
-        uint32_t       skipped_records;
-        const uint8_t* source_metadata;
-        size_t         source_metadata_size;
-        bool           keep_chat;
-        bool           archive;
-    } xicap_writer_info;
-
     typedef struct xicap_reader xicap_reader;
     typedef struct xicap_writer xicap_writer;
 
@@ -84,7 +69,7 @@ extern "C"
     char* xicap_reader_next(xicap_reader* r, xicap_packet* out, bool* more);
     void  xicap_reader_close(xicap_reader* r);
 
-    char* xicap_writer_open(const char* path, const xicap_writer_info* info, xicap_writer** out);
+    char* xicap_writer_open(const char* path, const xicap_metadata* metadata, bool keep_chat, bool archive, xicap_writer** out);
     char* xicap_writer_write(xicap_writer* w, uint64_t timestamp, bool client_to_server, uint8_t channel, uint16_t opcode, uint16_t provenance, const uint8_t* data, size_t size);
     // Frees the writer, even when closing fails.
     char* xicap_writer_close(xicap_writer* w);

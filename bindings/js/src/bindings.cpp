@@ -35,7 +35,7 @@ auto bytes(const Bytes& b) -> em::val
     return em::val(em::typed_memory_view(b.size(), reinterpret_cast<const uint8_t*>(b.data()))).call<em::val>("slice");
 }
 
-// A JS string cannot hold bytes that are not UTF-8, so TextDecoder replaces them with U+FFFD, as FORMAT.md allows.
+// Replace malformed UTF-8 with U+FFFD.
 auto text(const std::string_view s) -> em::val
 {
     static const auto decoder = em::val::global("TextDecoder").new_();

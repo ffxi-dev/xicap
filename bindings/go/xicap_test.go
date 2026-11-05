@@ -45,7 +45,7 @@ type vector struct {
 	Packets []struct {
 		Timestamp uint64
 		Flags     uint16
-		Channel   uint8
+		Channel   Channel
 		Opcode    uint16
 		Data      hexBytes
 		Markers   []struct {
@@ -55,7 +55,6 @@ type vector struct {
 	}
 }
 
-// capture is what a Reader makes of a file: its metadata, trailer, and every packet.
 type capture struct {
 	Metadata     Metadata
 	Complete     bool
@@ -147,11 +146,11 @@ func TestVectors(t *testing.T) {
 
 func TestWriteThenRead(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "c.xicap")
-	w, err := Create(path, WriterInfo{
-		CaptureAgent: "mogsafe", ClientVersion: "1.0", Character: Character{CharacterID: 7, Name: "Rhavyn"},
-		Origin: OriginConverted, ServerKind: ServerKindPrivate, KeepChat: true, Archive: true,
+	w, err := Create(path, Metadata{
+		PreviousCaptureID: [16]byte{9}, CaptureAgent: "mogsafe", ClientVersion: "1.0", Character: Character{CharacterID: 7, Name: "Rhavyn"},
+		Origin: OriginConverted, ServerKind: ServerKindPrivate,
 		Source: &Source{Format: "captain", FormatVersion: "1.4", SkippedRecords: 2, Metadata: []byte("manifest")},
-	})
+	}, WriterOptions{KeepChat: true, Archive: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +179,7 @@ func TestWriteThenRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !c.Complete || c.PacketCount != 5 || len(c.Packets) != 5 || c.Metadata.Source.Format != "captain" || string(c.Metadata.Source.Metadata) != "manifest" ||
-		c.Metadata.StartTimestamp != 1000 || c.EndTimestamp != 1003 || c.Packets[0].Data[30] != 'x' || c.Packets[0].Flags&FlagRedacted != 0 {
+		c.Metadata.PreviousCaptureID != [16]byte{9} || c.Metadata.CaptureID == [16]byte{} || c.Metadata.StartTimestamp != 1000 || c.EndTimestamp != 1003 || c.Packets[0].Data[30] != 'x' || c.Packets[0].Flags&FlagRedacted != 0 {
 		t.Errorf("%+v", c)
 	}
 

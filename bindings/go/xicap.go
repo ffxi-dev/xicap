@@ -23,6 +23,7 @@ type (
 	Origin     uint8
 	ServerKind uint8
 	MarkerKind uint8
+	Channel    uint8
 )
 
 // See FORMAT.md.
@@ -39,15 +40,16 @@ const (
 	MarkerLogin  MarkerKind = 1
 	MarkerLogout MarkerKind = 2
 
-	ChannelGame   uint8 = 0
-	ChannelSearch uint8 = 1
+	ChannelGame   Channel = 0
+	ChannelSearch Channel = 1
 
-	FlagInjected     uint16 = 0x0002
-	FlagBlocked      uint16 = 0x0004
-	FlagModified     uint16 = 0x0008
-	FlagFirstInChunk uint16 = 0x0010
-	FlagExcluded     uint16 = 0x0100
-	FlagRedacted     uint16 = 0x0200
+	FlagClientToServer  uint16 = 0x0001
+	FlagInjected        uint16 = 0x0002
+	FlagBlocked         uint16 = 0x0004
+	FlagModified        uint16 = 0x0008
+	FlagFirstInDatagram uint16 = 0x0010
+	FlagExcluded        uint16 = 0x0100
+	FlagRedacted        uint16 = 0x0200
 )
 
 type Character struct {
@@ -57,7 +59,6 @@ type Character struct {
 	World       string
 }
 
-// Source is what a converted capture records about the file it came from.
 type Source struct {
 	Format         string
 	FormatVersion  string
@@ -65,7 +66,6 @@ type Source struct {
 	Metadata       []byte // such as captain's manifest.txt
 }
 
-// Metadata is what a capture's header and blocks say about it.
 type Metadata struct {
 	CaptureID         [16]byte
 	PreviousCaptureID [16]byte
@@ -83,14 +83,41 @@ type Marker struct {
 	Text string
 }
 
-// Packet is a packet as a reader yields it.
 type Packet struct {
 	Timestamp uint64 // Unix ms
 	Flags     uint16
-	Channel   uint8
+	Channel   Channel
 	Opcode    uint16
 	Data      []byte
 	Markers   []Marker // the markers just before this packet
+}
+
+func fromC(c *C.xicap_metadata) Metadata {
+	m := Metadata{
+		StartTimestamp: uint64(c.start_timestamp),
+		Origin:         Origin(c.origin),
+		ServerKind:     ServerKind(c.server_kind),
+		CaptureAgent:   C.GoString(c.capture_agent),
+		ClientVersion:  C.GoString(c.client_version),
+		Character: Character{
+			ContentID:   uint32(c.content_id),
+			CharacterID: uint32(c.character_id),
+			Name:        C.GoString(c.character_name),
+			World:       C.GoString(c.world_name),
+		},
+	}
+	for i := range 16 {
+		m.CaptureID[i], m.PreviousCaptureID[i] = byte(c.capture_id[i]), byte(c.previous_capture_id[i])
+	}
+	if c.has_source {
+		m.Source = &Source{
+			Format:         C.GoString(c.source_format),
+			FormatVersion:  C.GoString(c.source_format_version),
+			SkippedRecords: uint32(c.skipped_records),
+			Metadata:       C.GoBytes(unsafe.Pointer(c.source_metadata), C.int(c.source_metadata_size)),
+		}
+	}
+	return m
 }
 
 func check(err *C.char) error {
@@ -129,29 +156,7 @@ func Open(path string) (*Reader, error) {
 	if err := check(C.xicap_reader_open(p, &r.r, &i)); err != nil {
 		return nil, err
 	}
-	r.Metadata = Metadata{
-		CaptureID:         [16]byte(C.GoBytes(unsafe.Pointer(i.capture_id), 16)),
-		PreviousCaptureID: [16]byte(C.GoBytes(unsafe.Pointer(i.previous_capture_id), 16)),
-		StartTimestamp:    uint64(i.start_timestamp),
-		Origin:            Origin(i.origin),
-		ServerKind:        ServerKind(i.server_kind),
-		CaptureAgent:      C.GoString(i.capture_agent),
-		ClientVersion:     C.GoString(i.client_version),
-		Character: Character{
-			ContentID:   uint32(i.content_id),
-			CharacterID: uint32(i.character_id),
-			Name:        C.GoString(i.character_name),
-			World:       C.GoString(i.world_name),
-		},
-	}
-	if i.has_source {
-		r.Metadata.Source = &Source{
-			Format:         C.GoString(i.source_format),
-			FormatVersion:  C.GoString(i.source_format_version),
-			SkippedRecords: uint32(i.skipped_records),
-			Metadata:       C.GoBytes(unsafe.Pointer(i.source_metadata), C.int(i.source_metadata_size)),
-		}
-	}
+	r.Metadata = fromC(&i.metadata)
 	r.Complete, r.EndTimestamp, r.PacketCount = bool(i.complete), uint64(i.end_timestamp), uint64(i.packet_count)
 	return &r, nil
 }
@@ -169,7 +174,7 @@ func (r *Reader) Next() (Packet, error) {
 	out := Packet{
 		Timestamp: uint64(p.timestamp),
 		Flags:     uint16(p.flags),
-		Channel:   uint8(p.channel),
+		Channel:   Channel(p.channel),
 		Opcode:    uint16(p.opcode),
 		Data:      C.GoBytes(unsafe.Pointer(p.data), C.int(p.size)),
 	}
@@ -185,33 +190,25 @@ func (r *Reader) Close() {
 	r.r = nil
 }
 
-// WriterInfo is what a new capture's header and blocks record.
-type WriterInfo struct {
-	CaptureAgent  string
-	ClientVersion string
-	Character     Character
-	Origin        Origin
-	ServerKind    ServerKind
-	Source        *Source
-	KeepChat      bool // by default xicap zeroes the text of chat
-	Archive       bool // smaller files, written more slowly
+type WriterOptions struct {
+	KeepChat bool // by default xicap zeroes the text of chat
+	Archive  bool // smaller files, written more slowly
 }
 
-// OutPacket is one packet to write.
 type OutPacket struct {
 	Timestamp      uint64 // Unix ms
 	ClientToServer bool
 	Data           []byte
-	Channel        uint8
+	Channel        Channel
 	Opcode         uint16 // off the game channel; a game packet's header holds its own
-	Provenance     uint16 // FlagInjected, FlagBlocked, FlagModified, FlagFirstInChunk
+	Provenance     uint16 // FlagInjected, FlagBlocked, FlagModified, FlagFirstInDatagram
 }
 
 // Writer writes a capture. It is not safe for concurrent use.
 type Writer struct{ w *C.xicap_writer }
 
-// Create starts a capture at path.
-func Create(path string, info WriterInfo) (*Writer, error) {
+// Create starts a capture at path. A zero CaptureID gets a random one.
+func Create(path string, m Metadata, opt WriterOptions) (*Writer, error) {
 	var owned []unsafe.Pointer
 	defer func() {
 		for _, p := range owned {
@@ -223,31 +220,33 @@ func Create(path string, info WriterInfo) (*Writer, error) {
 		owned = append(owned, unsafe.Pointer(c))
 		return c
 	}
-	ci := C.xicap_writer_info{
-		capture_agent:  str(info.CaptureAgent),
-		client_version: str(info.ClientVersion),
-		content_id:     C.uint32_t(info.Character.ContentID),
-		character_id:   C.uint32_t(info.Character.CharacterID),
-		character_name: str(info.Character.Name),
-		world_name:     str(info.Character.World),
-		origin:         C.uint8_t(info.Origin),
-		server_kind:    C.uint8_t(info.ServerKind),
-		keep_chat:      C.bool(info.KeepChat),
-		archive:        C.bool(info.Archive),
+	cm := C.xicap_metadata{
+		start_timestamp: C.uint64_t(m.StartTimestamp),
+		origin:          C.uint8_t(m.Origin),
+		server_kind:     C.uint8_t(m.ServerKind),
+		capture_agent:   str(m.CaptureAgent),
+		client_version:  str(m.ClientVersion),
+		content_id:      C.uint32_t(m.Character.ContentID),
+		character_id:    C.uint32_t(m.Character.CharacterID),
+		character_name:  str(m.Character.Name),
+		world_name:      str(m.Character.World),
 	}
-	if src := info.Source; src != nil {
-		ci.has_source = true
-		ci.source_format = str(src.Format)
-		ci.source_format_version = str(src.FormatVersion)
-		ci.skipped_records = C.uint32_t(src.SkippedRecords)
+	for i := range 16 {
+		cm.capture_id[i], cm.previous_capture_id[i] = C.uint8_t(m.CaptureID[i]), C.uint8_t(m.PreviousCaptureID[i])
+	}
+	if src := m.Source; src != nil {
+		cm.has_source = true
+		cm.source_format = str(src.Format)
+		cm.source_format_version = str(src.FormatVersion)
+		cm.skipped_records = C.uint32_t(src.SkippedRecords)
 		if len(src.Metadata) > 0 {
-			m := C.CBytes(src.Metadata)
-			owned = append(owned, m)
-			ci.source_metadata, ci.source_metadata_size = (*C.uint8_t)(m), C.size_t(len(src.Metadata))
+			b := C.CBytes(src.Metadata)
+			owned = append(owned, b)
+			cm.source_metadata, cm.source_metadata_size = (*C.uint8_t)(b), C.size_t(len(src.Metadata))
 		}
 	}
 	var w Writer
-	if err := check(C.xicap_writer_open(str(path), &ci, &w.w)); err != nil {
+	if err := check(C.xicap_writer_open(str(path), &cm, C.bool(opt.KeepChat), C.bool(opt.Archive), &w.w)); err != nil {
 		return nil, err
 	}
 	return &w, nil
@@ -267,7 +266,8 @@ func (w *Writer) Close() error {
 }
 
 // Transcode rewrites src at dst at archive size, then reads dst back and compares it with src packet by packet. On any
-// difference it returns an error, and on any failure there is no file at dst.
+// difference it returns an error. src and dst must be different files; an existing dst is overwritten, and removed if
+// the rewrite then fails.
 func Transcode(src, dst string) error {
 	s, d := C.CString(src), C.CString(dst)
 	defer C.free(unsafe.Pointer(s))

@@ -9,7 +9,6 @@
 #include <span>
 #include <string>
 
-// What a reader makes of a capture, as the JSON beside each vector holds it. See FORMAT.md, Conformance.
 namespace test
 {
 

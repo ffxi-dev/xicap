@@ -4,12 +4,13 @@ import createXicap from "../dist/xicap.js";
 export const Origin = { Unknown: 0, Live: 1, Converted: 2 } as const;
 export const ServerKind = { Unknown: 0, Retail: 1, Private: 2 } as const;
 export const MarkerKind = { Note: 0, Login: 1, Logout: 2 } as const;
+export const Channel = { Game: 0, Search: 1 } as const;
 export const PacketFlag = {
     ClientToServer: 0x0001,
     Injected: 0x0002,
     Blocked: 0x0004,
     Modified: 0x0008,
-    FirstInChunk: 0x0010,
+    FirstInDatagram: 0x0010,
     Excluded: 0x0100,
     Redacted: 0x0200,
 } as const;
@@ -49,7 +50,7 @@ const load = () => (module ??= createXicap(options));
 export class Reader {
     static async open(bytes: ArrayBuffer | Uint8Array): Promise<Reader> {
         const m = await load();
-        // Nothing awaits between writing and unlinking, so one path serves every reader, and an open file outlives its name.
+        // The synchronous open/unlink sequence lets each reader retain its own MEMFS file.
         const path = "/capture.xicap";
         m.FS.writeFile(path, bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes));
         try {

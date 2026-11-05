@@ -12,7 +12,7 @@ namespace py = pybind11;
 namespace
 {
 
-// FORMAT.md lets a reader replace bytes that are not UTF-8 with U+FFFD, where pybind11 would raise.
+// Replace malformed UTF-8 with U+FFFD.
 template <typename T>
 auto text(std::string T::* const field) -> py::cpp_function
 {
@@ -40,7 +40,6 @@ struct Packet
     uint16_t                   flags{};
     uint8_t                    channel{};
     uint16_t                   opcode{};
-    xicap::PacketDirection     direction{};
     py::bytes                  data;
     std::vector<xicap::Marker> markers;
 };
@@ -65,9 +64,10 @@ PYBIND11_MODULE(xicap, m)
         .value("Note", xicap::MarkerKind::Note)
         .value("Login", xicap::MarkerKind::Login)
         .value("Logout", xicap::MarkerKind::Logout);
-    py::enum_<xicap::PacketDirection>(m, "Direction")
-        .value("ServerToClient", xicap::PacketDirection::ServerToClient)
-        .value("ClientToServer", xicap::PacketDirection::ClientToServer);
+    py::enum_<xicap::Channel>(m, "Channel")
+        .value("Game", xicap::Channel::Game)
+        .value("Search", xicap::Channel::Search);
+    m.attr("PacketFlag") = py::module_::import("enum").attr("IntFlag")("PacketFlag", py::dict(py::arg("ClientToServer") = xicap::PacketFlag::ClientToServer, py::arg("Injected") = xicap::PacketFlag::Injected, py::arg("Blocked") = xicap::PacketFlag::Blocked, py::arg("Modified") = xicap::PacketFlag::Modified, py::arg("FirstInDatagram") = xicap::PacketFlag::FirstInDatagram, py::arg("Excluded") = xicap::PacketFlag::Excluded, py::arg("Redacted") = xicap::PacketFlag::Redacted));
 
     py::class_<xicap::Character>(m, "Character")
         .def_readonly("content_id", &xicap::Character::contentId)
@@ -101,7 +101,6 @@ PYBIND11_MODULE(xicap, m)
         .def_readonly("flags", &Packet::flags)
         .def_readonly("channel", &Packet::channel)
         .def_readonly("opcode", &Packet::opcode)
-        .def_readonly("direction", &Packet::direction)
         .def_readonly("data", &Packet::data)
         .def_readonly("markers", &Packet::markers);
 
@@ -128,7 +127,6 @@ PYBIND11_MODULE(xicap, m)
                      .flags     = p.flags,
                      .channel   = p.channel,
                      .opcode    = p.opcode,
-                     .direction = p.direction(),
                      .data      = { reinterpret_cast<const char*>(p.data.data()), p.data.size() },
                      .markers   = { p.markers.begin(), p.markers.end() },
                  };

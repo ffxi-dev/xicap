@@ -29,20 +29,17 @@ inline constexpr int      MAX_WINDOW_LOG   = 23;
 inline constexpr size_t GAME_HEADER_SIZE = 4;
 
 template <typename Byte>
-[[nodiscard]] auto gameId(std::span<Byte> packet) noexcept -> uint16_t
+[[nodiscard]] auto gameId(const std::span<Byte> packet) noexcept -> uint16_t
 {
     return bytes::load<uint16_t>(packet) & 0x1FFU;
 }
 
 // The packet length the header's size gives.
 template <typename Byte>
-[[nodiscard]] auto gameLength(std::span<Byte> packet) noexcept -> size_t
+[[nodiscard]] auto gameLength(const std::span<Byte> packet) noexcept -> size_t
 {
     return static_cast<size_t>(bytes::load<uint16_t>(packet) >> 9U) * 4;
 }
-
-template <size_t N>
-using Text = std::array<char, N>;
 
 #pragma pack(push, 1)
 
@@ -56,12 +53,12 @@ struct Header
     CaptureId              captureId;
     CaptureId              previousCaptureId;
     uint64_t               startTimestamp;
-    Text<32>               captureAgent;
-    Text<32>               clientVersion;
+    std::array<char, 32>   captureAgent;
+    std::array<char, 32>   clientVersion;
     uint32_t               contentId;
     uint32_t               characterId;
-    Text<16>               characterName;
-    Text<16>               worldName;
+    std::array<char, 16>   characterName;
+    std::array<char, 16>   worldName;
     uint32_t               crc;
 };
 static_assert(sizeof(Header) == 160);
@@ -76,9 +73,9 @@ struct BlockHeader
 // Followed by the metadata, to the end of the payload.
 struct SourceHeader
 {
-    Text<16> format;
-    Text<16> formatVersion;
-    uint32_t skippedRecords;
+    std::array<char, 16> format;
+    std::array<char, 16> formatVersion;
+    uint32_t             skippedRecords;
 };
 static_assert(sizeof(SourceHeader) == 36);
 

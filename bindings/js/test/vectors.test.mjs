@@ -8,7 +8,6 @@ const dir = new URL("../../../tests/vectors/", import.meta.url);
 const names = (await readdir(dir)).filter((n) => n.endsWith(".json")).map((n) => n.slice(0, -5));
 const hex = (bytes) => Buffer.from(bytes).toString("hex");
 
-// The reading the C++ tests describe, from what this binding gives.
 function describe(r, packets) {
     const m = r.metadata;
     return {

@@ -109,11 +109,6 @@ public:
     auto operator=(const TempFile&) -> TempFile& = delete;
     auto operator=(TempFile&&) -> TempFile&      = delete;
 
-    [[nodiscard]] auto path() const noexcept -> const std::filesystem::path&
-    {
-        return path_;
-    }
-
     operator const std::filesystem::path&() const noexcept
     {
         return path_;

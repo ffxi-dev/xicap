@@ -28,7 +28,7 @@ inline constexpr auto CRC32_TABLE = []
     return table;
 }();
 
-[[nodiscard]] inline auto crc32(std::span<const uint8_t> data) noexcept -> uint32_t
+[[nodiscard]] inline auto crc32(const std::span<const uint8_t> data) noexcept -> uint32_t
 {
     auto state = uint32_t{ 0xFFFFFFFF };
     for (const auto b : data)
@@ -47,7 +47,7 @@ inline auto appendCrc(std::vector<uint8_t>& out, const size_t from = 0) -> void
 
 // The last 4 bytes are the CRC of the rest. Fuzzing builds skip the check, so mutated input reaches the decoders behind
 // it.
-[[nodiscard]] inline auto endsWithCrc(std::span<const uint8_t> bytes) noexcept -> bool
+[[nodiscard]] inline auto endsWithCrc(const std::span<const uint8_t> bytes) noexcept -> bool
 {
 #ifdef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
     return true;
