@@ -1,5 +1,7 @@
 #pragma once
 
+#include "enums/exclusion_action.h"
+#include "enums/exclusion_direction.h"
 #include "types.h"
 
 #include <cstdint>
@@ -8,19 +10,6 @@
 
 namespace xicap
 {
-
-enum class ExclusionDirection : uint8_t
-{
-    ServerToClient = 0,
-    ClientToServer = 1,
-    Both           = 2,
-};
-
-enum class ExclusionAction : uint8_t
-{
-    Stub      = 1,
-    ZeroRange = 2,
-};
 
 inline constexpr uint32_t TO_END = 0xFFFFFFFF;
 
