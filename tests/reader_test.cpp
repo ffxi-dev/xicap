@@ -12,7 +12,7 @@ auto writeSample(const std::filesystem::path& path) -> void
     auto policy               = FramePolicy::live();
     policy.maxPacketsPerFrame = 3;
     Writer w(path, test::metadata(), policy);
-    for (uint16_t i = 0; i < 10; ++i)
+    for (uint16_t i{ 0 }; i < 10; ++i)
     {
         w.write(test::out(i * 10, test::gamePacket(0x00D, 24, i, static_cast<uint8_t>(i))));
     }
@@ -32,7 +32,7 @@ TEST_CASE("a cut-off file reads up to its last whole frame, wherever it was cut"
     const test::TempFile cut;
     Writer(cut, test::metadata()).close();
     const auto blocksEnd = std::filesystem::file_size(cut.path()) - 24;
-    size_t     previous  = 0;
+    size_t     previous{ 0 };
     for (auto size = blocksEnd; size < bytes.size(); ++size)
     {
         test::save(cut, { bytes.begin(), bytes.begin() + static_cast<std::ptrdiff_t>(size) });

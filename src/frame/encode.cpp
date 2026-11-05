@@ -66,7 +66,7 @@ auto encode(const Frame& frame) -> std::vector<uint8_t>
         last = sync;
     }
 
-    for (size_t i = 0; i < packets.size(); ++i)
+    for (size_t i{ 0 }; i < packets.size(); ++i)
     {
         for (const auto& m : std::span{ frame.markers }.subspan(packets[i].firstMarker, packets[i].markerCount))
         {
@@ -79,14 +79,14 @@ auto encode(const Frame& frame) -> std::vector<uint8_t>
 
     std::vector<uint32_t>            group;
     std::vector<std::vector<size_t>> members(assignGroups(packets, group));
-    for (size_t i = 0; i < packets.size(); ++i)
+    for (size_t i{ 0 }; i < packets.size(); ++i)
     {
         members[group[i]].push_back(i);
     }
 
     for (const auto& list : members)
     {
-        uint64_t size = 0;
+        uint64_t size{ 0 };
         for (const auto i : list)
         {
             size += packets[i].length;

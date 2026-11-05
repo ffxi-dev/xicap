@@ -16,12 +16,12 @@ namespace xicap
 // How a writer frames and compresses packets. See FORMAT.md, Writer rules.
 struct FramePolicy
 {
-    size_t   maxFrameSize       = 64 * 1024; // plaintext bytes, at most 16 MiB
-    uint32_t maxPacketsPerFrame = 1000;
-    uint64_t maxFrameTimeMs     = 5000;
-    int      compressionLevel   = 7;
-    int      windowLog          = 21; // at most 23
-    int      hashLog            = 19; // 0 for the level's own; sets most of the compressor's memory
+    size_t   maxFrameSize{ 64 * 1024 }; // plaintext bytes, at most 16 MiB
+    uint32_t maxPacketsPerFrame{ 1000 };
+    uint64_t maxFrameTimeMs{ 5000 };
+    int      compressionLevel{ 7 };
+    int      windowLog{ 21 }; // at most 23
+    int      hashLog{ 19 };   // 0 for the level's own; sets most of the compressor's memory
 
     // What a recorder writes: about 5.5 MB of compressor.
     static auto live() -> FramePolicy

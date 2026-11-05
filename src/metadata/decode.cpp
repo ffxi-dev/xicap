@@ -24,10 +24,10 @@ auto take(std::span<const uint8_t> payload, size_t& pos) -> T
 
 auto readPolicy(std::span<const uint8_t> payload) -> ExclusionPolicy
 {
-    size_t     pos    = 0;
+    size_t     pos{ 0 };
     const auto header = take<format::PolicyHeader>(payload, pos);
     auto       policy = ExclusionPolicy{ .name = bytes::fromField(header.name), .version = header.version, .rules = {} };
-    for (uint16_t i = 0; i < header.ruleCount; ++i)
+    for (uint16_t i{ 0 }; i < header.ruleCount; ++i)
     {
         const auto rule  = take<format::RuleHeader>(payload, pos);
         auto&      added = policy.rules.emplace_back(ExclusionRule{
@@ -37,7 +37,7 @@ auto readPolicy(std::span<const uint8_t> payload) -> ExclusionPolicy
             .opcode    = rule.opcode,
             .ranges    = {},
         });
-        for (uint16_t r = 0; r < rule.rangeCount; ++r)
+        for (uint16_t r{ 0 }; r < rule.rangeCount; ++r)
         {
             added.ranges.push_back(take<ByteRange>(payload, pos));
         }

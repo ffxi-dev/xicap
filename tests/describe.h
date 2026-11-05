@@ -39,7 +39,7 @@ inline auto describe(const xicap::Metadata& m) -> nlohmann::ordered_json
         rules.push_back({ { "channel", r.channel }, { "direction", r.direction }, { "action", r.action }, { "opcode", r.opcode }, { "ranges", ranges } });
     }
 
-    nlohmann::ordered_json source = nullptr;
+    nlohmann::ordered_json source;
     if (m.source)
     {
         source = { { "format", m.source->format }, { "formatVersion", m.source->formatVersion }, { "skippedRecords", m.source->skippedRecords }, { "metadata", hex(m.source->metadata) } };

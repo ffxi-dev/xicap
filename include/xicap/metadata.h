@@ -16,12 +16,12 @@ struct Metadata
     CaptureId             captureId{}; // all zero: a writer picks a random one
     CaptureId             previousCaptureId{};
     uint64_t              startTimestamp{}; // a writer takes it from the first packet
-    Origin                origin  = Origin::Live;
-    Network               network = Network::Unknown;
+    Origin                origin{ Origin::Live };
+    Network               network{ Network::Unknown };
     std::string           captureAgent;
     std::string           clientVersion;
     Character             character;
-    ExclusionPolicy       policy = defaultExclusionPolicy();
+    ExclusionPolicy       policy{ defaultExclusionPolicy() };
     std::optional<Source> source;
 
     auto operator==(const Metadata&) const -> bool = default;

@@ -6,7 +6,7 @@
 
 TEST_CASE("every vector reads as its JSON says")
 {
-    int count = 0;
+    int count{ 0 };
     for (const auto& entry : std::filesystem::directory_iterator(VECTORS_DIR))
     {
         if (entry.path().extension() != ".xicap")

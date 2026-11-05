@@ -29,7 +29,7 @@ auto compare(const std::filesystem::path& src, const std::filesystem::path& dst)
 
     Packet pa;
     Packet pb;
-    for (uint64_t i = 0;; ++i)
+    for (uint64_t i{ 0 };; ++i)
     {
         const auto na = a.next(pa);
         const auto nb = b.next(pb);
@@ -74,7 +74,7 @@ auto continueFrom(const std::filesystem::path& source, uint64_t fromByte, const 
     metadata.captureId         = {};
     const io::Staged      tmp(out);
     std::optional<Writer> writer;
-    uint64_t              packets = 0;
+    uint64_t              packets{ 0 };
     Packet                p;
     while (in.next(p))
     {

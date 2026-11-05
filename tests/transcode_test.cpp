@@ -10,7 +10,7 @@ namespace
 auto writeSample(const std::filesystem::path& path, bool close) -> void
 {
     Writer w(path, test::metadata());
-    for (uint16_t i = 0; i < 2000; ++i)
+    for (uint16_t i{ 0 }; i < 2000; ++i)
     {
         if (i % 100 == 0)
         {
@@ -61,7 +61,7 @@ TEST_CASE("continueFrom writes the frames past a byte offset as a capture that c
     Packet     p;
     const auto held = [&]
     {
-        for (int i = 0; i < 1000; ++i)
+        for (int i{ 0 }; i < 1000; ++i)
         {
             in.next(p);
         }

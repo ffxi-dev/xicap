@@ -75,7 +75,7 @@ TEST_CASE("frames end at the policy's limits, and each is readable once flushed"
     policy.maxPacketsPerFrame   = 2;
     Writer     w(file, test::metadata(), policy);
     const auto p = test::gamePacket(0x00D, 8, 0);
-    for (uint64_t t = 0; t < 5; ++t)
+    for (uint64_t t{ 0 }; t < 5; ++t)
     {
         w.write(test::out(t, p));
     }
