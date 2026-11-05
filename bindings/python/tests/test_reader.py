@@ -5,7 +5,7 @@ import pytest
 
 import xicap
 
-VECTORS = sorted((Path(__file__).parents[2] / "tests" / "vectors").glob("*.json"))
+VECTORS = sorted((Path(__file__).parents[3] / "tests" / "vectors").glob("*.json"))
 
 
 def test_there_are_vectors():

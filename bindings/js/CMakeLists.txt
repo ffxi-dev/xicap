@@ -5,7 +5,7 @@ if(NOT EMSCRIPTEN)
     message(FATAL_ERROR "Configure with emcmake.")
 endif()
 
-add_subdirectory(.. xicap)
+add_subdirectory(../.. xicap)
 target_compile_options(xicap PUBLIC -fwasm-exceptions)
 
 add_executable(xicap_wasm src/bindings.cpp)

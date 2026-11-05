@@ -95,7 +95,7 @@ func (v vector) want(t *testing.T) Summary {
 }
 
 func TestVectors(t *testing.T) {
-	names, _ := filepath.Glob("../tests/vectors/*.json")
+	names, _ := filepath.Glob("../../tests/vectors/*.json")
 	if len(names) < 15 {
 		t.Fatalf("found %d vectors", len(names))
 	}

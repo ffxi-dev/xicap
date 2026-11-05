@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cpp:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+          - { os: windows-latest, args: -A x64 }
+          - { os: windows-latest, args: -A Win32 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DXICAP_BUILD_TESTS=ON ${{ matrix.args }}
+      - run: cmake --build build --config Release --parallel
+      - run: ctest --test-dir build -C Release --output-on-failure
+
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - run: sudo apt-get install -y -q libzstd-dev
+      - run: go vet ./...
+      - run: go test ./...
+
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: seanmiddleditch/gha-setup-ninja@v5
+      - run: pip install "./bindings/python[test]"
+      - run: python -m pytest bindings/python/tests
+
+  js:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: seanmiddleditch/gha-setup-ninja@v5
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: "5.0.7"
+      - working-directory: bindings/js
+        run: npm ci && npm run build && npm test
+
+  spec-reader:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install zstandard==0.25.0
+      - run: python tests/spec_reader.py tests/vectors
+      - run: python tests/spec_reader.py --example FORMAT.md

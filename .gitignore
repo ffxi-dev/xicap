@@ -2,7 +2,7 @@ build*/
 cmake-build-*/
 .idea/
 .vscode/
-js/dist/
+bindings/js/dist/
 node_modules/
 __pycache__/
 .pytest_cache/
