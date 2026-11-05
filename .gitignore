@@ -1,0 +1,9 @@
+build*/
+cmake-build-*/
+.idea/
+.vscode/
+js/dist/
+node_modules/
+__pycache__/
+.pytest_cache/
+.claude/

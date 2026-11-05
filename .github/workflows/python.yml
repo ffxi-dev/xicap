@@ -1,0 +1,34 @@
+name: Python
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  binding:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: seanmiddleditch/gha-setup-ninja@v5
+      - run: pip install "./python[test]"
+      - run: python -m pytest python/tests
+
+  spec-reader:
+    # A reader written from FORMAT.md alone must read every vector as its JSON says.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install zstandard==0.25.0
+      - run: python tests/spec_reader.py tests/vectors
+      - run: python tests/spec_reader.py --example FORMAT.md

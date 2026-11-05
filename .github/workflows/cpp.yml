@@ -1,0 +1,27 @@
+name: C++
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+          # Memoria, an Ashita plugin, links xicap into a 32-bit DLL, so Windows builds both widths.
+          - { os: windows-latest, arch: x64 }
+          - { os: windows-latest, arch: Win32 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DXICAP_BUILD_TESTS=ON ${{ matrix.arch && format('-A {0}', matrix.arch) || '' }}
+      - run: cmake --build build --config Release --parallel --target xicap_tests make_vectors
+      - run: ctest --test-dir build -C Release --output-on-failure
