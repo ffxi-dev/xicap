@@ -3,6 +3,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 
 using namespace xicap;
@@ -19,13 +20,13 @@ struct Row
 };
 
 // FORMAT.md's Redaction table.
-constexpr Row ROWS[] = {
-    { .direction = PacketDirection::ServerToClient, .opcode = 0x017, .offset = 0x17, .length = 0 },
-    { .direction = PacketDirection::ClientToServer, .opcode = 0x0B5, .offset = 0x06, .length = 0 },
-    { .direction = PacketDirection::ClientToServer, .opcode = 0x0B6, .offset = 0x15, .length = 0 },
-    { .direction = PacketDirection::ClientToServer, .opcode = 0x0B7, .offset = 0x15, .length = 0 },
-    { .direction = PacketDirection::ServerToClient, .opcode = 0x0CC, .offset = 0x08, .length = 128 },
-    { .direction = PacketDirection::ClientToServer, .opcode = 0x0E2, .offset = 0x10, .length = 128 },
+constexpr auto ROWS = std::array{
+    Row{ .direction = PacketDirection::ServerToClient, .opcode = 0x017, .offset = 0x17, .length = 0 },
+    Row{ .direction = PacketDirection::ClientToServer, .opcode = 0x0B5, .offset = 0x06, .length = 0 },
+    Row{ .direction = PacketDirection::ClientToServer, .opcode = 0x0B6, .offset = 0x15, .length = 0 },
+    Row{ .direction = PacketDirection::ClientToServer, .opcode = 0x0B7, .offset = 0x15, .length = 0 },
+    Row{ .direction = PacketDirection::ServerToClient, .opcode = 0x0CC, .offset = 0x08, .length = 128 },
+    Row{ .direction = PacketDirection::ClientToServer, .opcode = 0x0E2, .offset = 0x10, .length = 128 },
 };
 
 auto zero(const std::span<const uint8_t> bytes) -> bool

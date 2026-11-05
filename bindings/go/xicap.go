@@ -13,6 +13,7 @@ import "C"
 import (
 	"errors"
 	"io"
+	"runtime"
 	"unsafe"
 )
 
@@ -265,6 +266,11 @@ func Create(path string, m Metadata, opt WriterOptions) (*Writer, error) {
 func (w *Writer) Write(p WritePacket) error {
 	if w.w == nil {
 		return errors.New("xicap: the writer is closed")
+	}
+	var pin runtime.Pinner
+	defer pin.Unpin()
+	if len(p.Data) > 0 {
+		pin.Pin(&p.Data[0])
 	}
 	cp := C.xicap_write_packet{
 		timestamp:        C.uint64_t(p.Timestamp),
