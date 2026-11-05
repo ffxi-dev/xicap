@@ -1,6 +1,5 @@
 #pragma once
 
-#include "policy.h"
 #include "types.h"
 
 #include <cstdint>
@@ -21,7 +20,6 @@ struct Metadata
     std::string           captureAgent;
     std::string           clientVersion;
     Character             character;
-    ExclusionPolicy       policy{ defaultExclusionPolicy() };
     std::optional<Source> source;
 
     auto operator==(const Metadata&) const -> bool = default;

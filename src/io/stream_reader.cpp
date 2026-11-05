@@ -30,7 +30,6 @@ struct StreamReader::State
     uint64_t                      dropped{}; // bytes read and erased from the front of buffer
     Metadata                      metadata;
     uint8_t                       blocksLeft{};
-    bool                          havePolicy{ false };
     bool                          haveSource{ false };
     std::optional<frame::Decoder> decoder;
     frame::Frame                  frame;
@@ -130,11 +129,6 @@ auto StreamReader::State::parse() -> void
             {
                 if (blocksLeft == 0)
                 {
-                    if (!havePolicy)
-                    {
-                        throw Error("xicap: no exclusion policy block");
-                    }
-
                     decoder.emplace();
                     stage = Stage::Frames;
                     break;
@@ -152,9 +146,9 @@ auto StreamReader::State::parse() -> void
                 }
 
                 const auto type = metadata::readBlock(avail.first(static_cast<size_t>(size)), metadata);
-                if ((type == format::BLOCK_POLICY && std::exchange(havePolicy, true)) || (type == format::BLOCK_SOURCE && std::exchange(haveSource, true)))
+                if (type == format::BLOCK_SOURCE && std::exchange(haveSource, true))
                 {
-                    throw Error("xicap: a second exclusion policy or source block");
+                    throw Error("xicap: a second source block");
                 }
 
                 pos += static_cast<size_t>(size);

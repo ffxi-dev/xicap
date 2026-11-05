@@ -17,31 +17,6 @@
       "name": "Rhavyn",
       "world": "Asura"
     },
-    "policy": {
-      "name": "vectors",
-      "version": 1,
-      "rules": [
-        {
-          "channel": 0,
-          "direction": 0,
-          "action": 2,
-          "opcode": 23,
-          "ranges": [
-            [
-              23,
-              4294967295
-            ]
-          ]
-        },
-        {
-          "channel": 0,
-          "direction": 2,
-          "action": 1,
-          "opcode": 182,
-          "ranges": []
-        }
-      ]
-    },
     "source": null
   },
   "packets": [
@@ -76,10 +51,10 @@
     },
     {
       "timestamp": 1767225600020,
-      "flags": 257,
+      "flags": 513,
       "channel": 0,
       "opcode": 182,
-      "data": "b6140100",
+      "data": "b6140100424242424242424242424242424242424200000000000000000000000000000000000000",
       "markers": [
         {
           "kind": 0,
@@ -89,18 +64,18 @@
     },
     {
       "timestamp": 1767225600020,
+      "flags": 257,
+      "channel": 0,
+      "opcode": 182,
+      "data": "b6140100",
+      "markers": []
+    },
+    {
+      "timestamp": 1767225600020,
       "flags": 2,
       "channel": 1,
       "opcode": 11,
       "data": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
-      "markers": []
-    },
-    {
-      "timestamp": 1767225600031,
-      "flags": 32804,
-      "channel": 7,
-      "opcode": 4660,
-      "data": "0102",
       "markers": []
     }
   ]

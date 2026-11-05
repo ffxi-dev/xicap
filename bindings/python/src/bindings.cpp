@@ -75,14 +75,6 @@ PYBIND11_MODULE(xicap, m)
         .def_property_readonly("name", text(&xicap::Character::name))
         .def_property_readonly("world", text(&xicap::Character::world));
 
-    py::class_<xicap::ExclusionPolicy>(m, "Policy")
-        .def_property_readonly("name", text(&xicap::ExclusionPolicy::name))
-        .def_readonly("version", &xicap::ExclusionPolicy::version)
-        .def_property_readonly("rules", [](const xicap::ExclusionPolicy& p)
-                               {
-                                   return p.rules.size();
-                               });
-
     py::class_<xicap::Source>(m, "Source")
         .def_property_readonly("format", text(&xicap::Source::format))
         .def_property_readonly("format_version", text(&xicap::Source::formatVersion))
@@ -98,7 +90,6 @@ PYBIND11_MODULE(xicap, m)
         .def_property_readonly("capture_agent", text(&xicap::Metadata::captureAgent))
         .def_property_readonly("client_version", text(&xicap::Metadata::clientVersion))
         .def_readonly("character", &xicap::Metadata::character)
-        .def_readonly("policy", &xicap::Metadata::policy)
         .def_readonly("source", &xicap::Metadata::source);
 
     py::class_<xicap::Marker>(m, "Marker")

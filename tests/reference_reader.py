@@ -50,26 +50,6 @@ def varint(b, pos, bits):
     raise Bad("varint too long")
 
 
-def policy(p):
-    if len(p) < 38:
-        raise Refused("short policy")
-    name, version, count = struct.unpack_from("<32sIH", p)
-    pos, rules = 38, []
-    for _ in range(count):
-        if pos + 7 > len(p):
-            raise Refused("short rule")
-        channel, direction, action, opcode, ranges = struct.unpack_from("<BBBHH", p, pos)
-        pos += 7
-        if pos + 8 * ranges > len(p):
-            raise Refused("short ranges")
-        rs = [list(struct.unpack_from("<II", p, pos + 8 * i)) for i in range(ranges)]
-        pos += 8 * ranges
-        rules.append({"channel": channel, "direction": direction, "action": action, "opcode": opcode, "ranges": rs})
-    if pos != len(p):
-        raise Refused("policy does not fill its block")
-    return {"name": text(name).decode(), "version": version, "rules": rules}
-
-
 def source(p):
     if len(p) < 36:
         raise Refused("short source")
@@ -158,7 +138,7 @@ def read(b):
         "captureId": cid.hex(), "previousCaptureId": prev.hex(), "startTimestamp": start, "origin": origin, "serverKind": server_kind,
         "captureAgent": text(agent).decode(), "clientVersion": text(client).decode(),
         "character": {"contentId": content, "characterId": character, "name": text(name).decode(), "world": text(world).decode()},
-        "policy": None, "source": None,
+        "source": None,
     }
     pos = 160
     for _ in range(blocks):
@@ -168,17 +148,11 @@ def read(b):
         if size > 16 * MIB or pos + 12 + size > len(b) or not crc_ok(b[pos : pos + 12 + size]):
             raise Refused("bad block")
         payload = b[pos + 8 : pos + 8 + size]
-        if kind == 1:
-            if meta["policy"] is not None:
-                raise Refused("second policy")
-            meta["policy"] = policy(payload)
-        elif kind == 2:
+        if kind == 2:
             if meta["source"] is not None:
                 raise Refused("second source")
             meta["source"] = source(payload)
         pos += 12 + size
-    if meta["policy"] is None:
-        raise Refused("no policy")
 
     trailer = b[-24:] if len(b) >= pos + 24 else b""
     complete = trailer[:4] == b"XCPF" and crc_ok(trailer)

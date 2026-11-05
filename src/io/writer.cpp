@@ -1,15 +1,15 @@
 #include "xicap/writer.h"
 #include "bytes/crc32.h"
 #include "format/layout.h"
+#include "frame/encoder.h"
 #include "frame/frame.h"
 #include "metadata/codec.h"
-#include "policy/check.h"
+#include "xicap/redaction.h"
 
 #include <algorithm>
-#include <format>
 #include <fstream>
+#include <optional>
 #include <random>
-#include <zstd.h>
 
 namespace xicap
 {
@@ -36,14 +36,6 @@ auto randomCaptureId() -> CaptureId
 
 struct Writer::State
 {
-    struct FreeCCtx
-    {
-        auto operator()(ZSTD_CCtx* c) const noexcept -> void
-        {
-            ZSTD_freeCCtx(c);
-        }
-    };
-
     auto usable() const -> void;
     auto start() -> void;
     auto add(Packet packet) -> void;
@@ -51,13 +43,14 @@ struct Writer::State
     auto writeFrame() -> void;
     auto emit(std::span<const uint8_t> bytes) -> void;
 
-    std::ofstream                        file;
-    Metadata                             metadata;
-    FramePolicy                          policy;
-    std::unique_ptr<ZSTD_CCtx, FreeCCtx> cctx{ ZSTD_createCCtx() };
-    bool                                 started{ false };
-    bool                                 closed{ false };
-    bool                                 failed{ false }; // a write failed: nothing more may follow
+    std::ofstream                 file;
+    Metadata                      metadata;
+    FramePolicy                   policy;
+    Chat                          chat{};
+    std::optional<frame::Encoder> encoder;
+    bool                          started{ false };
+    bool                          closed{ false };
+    bool                          failed{ false }; // a write failed: nothing more may follow
 
     frame::Frame        frame;
     size_t              frameSize{}; // plaintext, at most
@@ -67,11 +60,10 @@ struct Writer::State
     uint64_t            packets{};
 };
 
-Writer::Writer(const std::filesystem::path& path, Metadata metadata, FramePolicy policy)
+Writer::Writer(const std::filesystem::path& path, Metadata metadata, FramePolicy policy, const Chat chat)
 : state_(std::make_unique<State>())
 {
-    auto& s = *state_;
-    policy::check(metadata.policy);
+    auto& s                   = *state_;
     s.metadata                = std::move(metadata);
     s.metadata.startTimestamp = 0;
     if (s.metadata.captureId == CaptureId{})
@@ -81,16 +73,9 @@ Writer::Writer(const std::filesystem::path& path, Metadata metadata, FramePolicy
 
     policy.maxFrameSize       = std::min<size_t>(policy.maxFrameSize, format::MAX_PLAIN_SIZE);
     policy.maxPacketsPerFrame = std::clamp<uint32_t>(policy.maxPacketsPerFrame, 1, format::MAX_PACKETS);
-    policy.windowLog          = std::clamp(policy.windowLog, 10, format::MAX_WINDOW_LOG);
     s.policy                  = policy;
-    if (!s.cctx)
-    {
-        throw Error("xicap: cannot create a zstd compressor");
-    }
-
-    ZSTD_CCtx_setParameter(s.cctx.get(), ZSTD_c_compressionLevel, policy.compressionLevel);
-    ZSTD_CCtx_setParameter(s.cctx.get(), ZSTD_c_windowLog, policy.windowLog);
-    ZSTD_CCtx_setParameter(s.cctx.get(), ZSTD_c_hashLog, policy.hashLog);
+    s.chat                    = chat;
+    s.encoder.emplace(policy);
     s.file.open(path, std::ios::binary | std::ios::trunc);
     if (!s.file)
     {
@@ -118,7 +103,7 @@ auto Writer::captureId() const noexcept -> const CaptureId&
 auto Writer::write(const OutPacket& packet) -> void
 {
     state_->usable();
-    const auto stored = applyPolicy(state_->metadata.policy, packet);
+    const auto stored = redact(packet, state_->chat);
     state_->add({ .timestamp = packet.timestamp, .flags = stored.flags, .channel = packet.channel, .opcode = stored.opcode, .data = stored.data, .markers = {} });
 }
 
@@ -254,30 +239,8 @@ auto Writer::State::endFrame() -> void
 auto Writer::State::writeFrame() -> void
 {
     start();
-    const auto           plain = frame::encode(frame);
-    std::vector<uint8_t> payload(ZSTD_compressBound(plain.size()));
-    auto                 in  = ZSTD_inBuffer{ plain.data(), plain.size(), 0 };
-    auto                 buf = ZSTD_outBuffer{ payload.data(), payload.size(), 0 };
-    // Flushed, so the frame decodes as soon as it is on disk.
-    while (true)
-    {
-        const auto rc = ZSTD_compressStream2(cctx.get(), &buf, &in, ZSTD_e_flush);
-        if (ZSTD_isError(rc))
-        {
-            throw Error(std::format("xicap: zstd: {}", ZSTD_getErrorName(rc)));
-        }
-
-        if (rc == 0)
-        {
-            break;
-        }
-
-        payload.resize(payload.size() * 2);
-        buf.dst  = payload.data();
-        buf.size = payload.size();
-    }
-
-    payload.resize(buf.pos);
+    const auto           plain   = frame::encode(frame);
+    const auto           payload = encoder->compress(plain);
     std::vector<uint8_t> out;
     bytes::append(out, format::FrameHeader{
                            .magic         = format::FRAME_MAGIC,

@@ -23,7 +23,6 @@ export interface Metadata {
     captureAgent: string;
     clientVersion: string;
     character: { contentId: number; characterId: number; name: string; world: string };
-    policy: { name: string; version: number; rules: number };
     source: { format: string; formatVersion: string; skippedRecords: number; metadata: Uint8Array } | null;
 }
 

@@ -3,10 +3,11 @@ package xicap
 import (
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
-	"slices"
 	"strings"
 	"testing"
 )
@@ -35,12 +36,7 @@ type vector struct {
 		ServerKind                   ServerKind
 		CaptureAgent, ClientVersion  string
 		Character                    Character
-		Policy                       struct {
-			Name    string
-			Version uint32
-			Rules   []json.RawMessage
-		}
-		Source *struct {
+		Source                       *struct {
 			Format, FormatVersion string
 			SkippedRecords        uint32
 			Metadata              hexBytes
@@ -48,7 +44,10 @@ type vector struct {
 	}
 	Packets []struct {
 		Timestamp uint64
+		Flags     uint16
 		Channel   uint8
+		Opcode    uint16
+		Data      hexBytes
 		Markers   []struct {
 			Kind MarkerKind
 			Text hexBytes
@@ -56,10 +55,37 @@ type vector struct {
 	}
 }
 
-// summary is what Read must make of the vector's capture.
-func (v vector) summary() Summary {
+// capture is what a Reader makes of a file: its metadata, trailer, and every packet.
+type capture struct {
+	Metadata     Metadata
+	Complete     bool
+	EndTimestamp uint64
+	PacketCount  uint64
+	Packets      []Packet
+}
+
+func read(path string) (capture, error) {
+	r, err := Open(path)
+	if err != nil {
+		return capture{}, err
+	}
+	defer r.Close()
+	c := capture{r.Metadata, r.Complete, r.EndTimestamp, r.PacketCount, nil}
+	for {
+		p, err := r.Next()
+		if errors.Is(err, io.EOF) {
+			return c, nil
+		}
+		if err != nil {
+			return capture{}, err
+		}
+		c.Packets = append(c.Packets, p)
+	}
+}
+
+func (v vector) capture() capture {
 	m := v.Metadata
-	s := Summary{
+	c := capture{
 		Metadata: Metadata{
 			CaptureID:         [16]byte(m.CaptureID),
 			PreviousCaptureID: [16]byte(m.PreviousCaptureID),
@@ -69,27 +95,22 @@ func (v vector) summary() Summary {
 			CaptureAgent:      m.CaptureAgent,
 			ClientVersion:     m.ClientVersion,
 			Character:         m.Character,
-			Policy:            Policy{m.Policy.Name, m.Policy.Version, len(m.Policy.Rules)},
 		},
 		Complete:     v.Complete,
 		EndTimestamp: v.EndTimestamp,
 		PacketCount:  v.PacketCount,
-		PacketsRead:  uint64(len(v.Packets)),
 	}
 	if src := m.Source; src != nil {
-		s.Source = &Source{src.Format, src.FormatVersion, src.SkippedRecords, src.Metadata}
+		c.Metadata.Source = &Source{src.Format, src.FormatVersion, src.SkippedRecords, src.Metadata}
 	}
-	for i, p := range v.Packets {
-		s.LastTimestamp = p.Timestamp
-		if !slices.Contains(s.Channels, p.Channel) {
-			s.Channels = append(s.Channels, p.Channel)
-		}
+	for _, p := range v.Packets {
+		out := Packet{Timestamp: p.Timestamp, Flags: p.Flags, Channel: p.Channel, Opcode: p.Opcode, Data: p.Data}
 		for _, mk := range p.Markers {
-			s.Markers = append(s.Markers, Marker{mk.Kind, string(mk.Text), uint64(i), p.Timestamp})
+			out.Markers = append(out.Markers, Marker{mk.Kind, string(mk.Text)})
 		}
+		c.Packets = append(c.Packets, out)
 	}
-	slices.Sort(s.Channels)
-	return s
+	return c
 }
 
 func TestVectors(t *testing.T) {
@@ -107,7 +128,7 @@ func TestVectors(t *testing.T) {
 			if err := json.Unmarshal(b, &v); err != nil {
 				t.Fatal(err)
 			}
-			got, err := Read(strings.TrimSuffix(name, ".json") + ".xicap")
+			got, err := read(strings.TrimSuffix(name, ".json") + ".xicap")
 			if v.Refused {
 				if err == nil {
 					t.Fatal("read a capture it must refuse")
@@ -117,7 +138,7 @@ func TestVectors(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if want := v.summary(); !reflect.DeepEqual(got, want) {
+			if want := v.capture(); !reflect.DeepEqual(got, want) {
 				t.Errorf("got  %+v\nwant %+v", got, want)
 			}
 		})
@@ -137,30 +158,30 @@ func TestWriteThenRead(t *testing.T) {
 	chat := append([]byte{0x17, 0x08, 0x01, 0x00}, make([]byte, 28)...)
 	chat[30] = 'x'
 	for i := range 3 {
-		if err := w.Write(Packet{Timestamp: 1000 + uint64(i), Data: chat}); err != nil {
+		if err := w.Write(OutPacket{Timestamp: 1000 + uint64(i), Data: chat}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := w.Write(Packet{Timestamp: 1003, Data: []byte{1, 2}, Channel: ChannelSearch, Opcode: 0x0B, Provenance: FlagInjected}); err != nil {
+	if err := w.Write(OutPacket{Timestamp: 1003, Data: []byte{1, 2}, Channel: ChannelSearch, Opcode: 0x0B, Provenance: FlagInjected}); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.Write(Packet{Timestamp: 1003, Channel: ChannelSearch, Opcode: 0x0B}); err != nil {
+	if err := w.Write(OutPacket{Timestamp: 1003, Channel: ChannelSearch, Opcode: 0x0B}); err != nil {
 		t.Errorf("an empty search packet: %v", err)
 	}
-	if w.Write(Packet{Timestamp: 1003}) == nil {
+	if w.Write(OutPacket{Timestamp: 1003}) == nil {
 		t.Error("an empty game packet is written")
 	}
 	if err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
 
-	s, err := Read(path)
+	c, err := read(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !s.Complete || s.PacketCount != 5 || s.PacketsRead != 5 || s.Policy.Rules != 0 || s.Source.Format != "captain" || string(s.Source.Metadata) != "manifest" ||
-		!reflect.DeepEqual(s.Channels, []uint8{0, 1}) || s.StartTimestamp != 1000 || s.EndTimestamp != 1003 || s.LastTimestamp != 1003 {
-		t.Errorf("%+v", s)
+	if !c.Complete || c.PacketCount != 5 || len(c.Packets) != 5 || c.Metadata.Source.Format != "captain" || string(c.Metadata.Source.Metadata) != "manifest" ||
+		c.Metadata.StartTimestamp != 1000 || c.EndTimestamp != 1003 || c.Packets[0].Data[30] != 'x' || c.Packets[0].Flags&FlagRedacted != 0 {
+		t.Errorf("%+v", c)
 	}
 
 	b, _ := os.ReadFile(path)
@@ -176,7 +197,7 @@ func TestWriteThenRead(t *testing.T) {
 	if err := Transcode(path, dst); err != nil {
 		t.Fatal(err)
 	}
-	if a, _ := Read(dst); !reflect.DeepEqual(a, s) {
+	if a, _ := read(dst); !reflect.DeepEqual(a, c) {
 		t.Errorf("transcode changed the capture: %+v", a)
 	}
 }

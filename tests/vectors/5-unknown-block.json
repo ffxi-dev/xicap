@@ -2,7 +2,7 @@
   "refused": false,
   "complete": true,
   "endTimestamp": 1767225605000,
-  "packetCount": 8,
+  "packetCount": 9,
   "metadata": {
     "captureId": "33333333333333333333333333333333",
     "previousCaptureId": "00000000000000000000000000000000",
@@ -16,31 +16,6 @@
       "characterId": 168496141,
       "name": "Rhavyn",
       "world": "Asura"
-    },
-    "policy": {
-      "name": "vectors",
-      "version": 1,
-      "rules": [
-        {
-          "channel": 0,
-          "direction": 0,
-          "action": 2,
-          "opcode": 23,
-          "ranges": [
-            [
-              23,
-              4294967295
-            ]
-          ]
-        },
-        {
-          "channel": 0,
-          "direction": 2,
-          "action": 1,
-          "opcode": 182,
-          "ranges": []
-        }
-      ]
     },
     "source": null
   },
@@ -76,16 +51,24 @@
     },
     {
       "timestamp": 1767225600020,
-      "flags": 257,
+      "flags": 513,
       "channel": 0,
       "opcode": 182,
-      "data": "b6140100",
+      "data": "b6140100424242424242424242424242424242424200000000000000000000000000000000000000",
       "markers": [
         {
           "kind": 0,
           "text": "63617020737461727420e688a6e38184"
         }
       ]
+    },
+    {
+      "timestamp": 1767225600020,
+      "flags": 257,
+      "channel": 0,
+      "opcode": 182,
+      "data": "b6140100",
+      "markers": []
     },
     {
       "timestamp": 1767225600020,

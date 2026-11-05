@@ -5,7 +5,7 @@ FetchContent_MakeAvailable(Catch2 json)
 
 add_executable(xicap_tests
     columns_test.cpp
-    policy_test.cpp
+    redaction_test.cpp
     reader_test.cpp
     stream_reader_test.cpp
     transcode_test.cpp

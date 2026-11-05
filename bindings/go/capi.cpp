@@ -3,13 +3,10 @@
 #include "metadata/codec.h"
 #include "xicap/xicap.h"
 
-#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <exception>
-#include <ranges>
 #include <span>
-#include <string>
 #include <vector>
 
 namespace
@@ -29,73 +26,14 @@ auto guarded(F&& f) -> char*
     }
 }
 
-template <size_t N>
-auto copyText(char (&dst)[N], const std::string& src) -> void
-{
-    const auto n = std::min(src.size(), N - 1);
-    std::memcpy(dst, src.data(), n);
-    dst[n] = '\0';
-}
-
-// A copy the C side owns and frees.
-template <std::ranges::contiguous_range R>
-auto copyOut(const R& src) -> std::ranges::range_value_t<R>*
-{
-    using T   = std::ranges::range_value_t<R>;
-    auto* out = static_cast<T*>(std::malloc(std::ranges::size(src) * sizeof(T)));
-    std::ranges::copy(src, out);
-    return out;
-}
-
-auto summarize(const char* path, xicap_summary& s) -> void
-{
-    xicap::Reader r(path);
-    const auto&   m = r.metadata();
-    std::ranges::copy(m.captureId, s.capture_id);
-    std::ranges::copy(m.previousCaptureId, s.previous_capture_id);
-    s.start_timestamp = m.startTimestamp;
-    s.origin          = static_cast<uint8_t>(m.origin);
-    s.server_kind     = static_cast<uint8_t>(m.serverKind);
-    copyText(s.capture_agent, m.captureAgent);
-    copyText(s.client_version, m.clientVersion);
-    s.content_id   = m.character.contentId;
-    s.character_id = m.character.characterId;
-    copyText(s.character_name, m.character.name);
-    copyText(s.world_name, m.character.world);
-    copyText(s.policy_name, m.policy.name);
-    s.policy_version = m.policy.version;
-    s.policy_rules   = static_cast<uint32_t>(m.policy.rules.size());
-    if (m.source)
-    {
-        s.has_source = true;
-        copyText(s.source_format, m.source->format);
-        copyText(s.source_format_version, m.source->formatVersion);
-        s.skipped_records      = m.source->skippedRecords;
-        s.source_metadata      = copyOut(m.source->metadata);
-        s.source_metadata_size = m.source->metadata.size();
-    }
-
-    std::vector<xicap_marker> markers;
-    for (const auto& p : r)
-    {
-        s.channels[p.channel] = true;
-        for (const auto& marker : p.markers)
-        {
-            markers.push_back({ static_cast<uint8_t>(marker.kind), copyOut(marker.text), marker.text.size(), s.packets_read, p.timestamp });
-        }
-
-        s.last_timestamp = p.timestamp;
-        s.packets_read++;
-    }
-
-    s.complete      = r.complete();
-    s.end_timestamp = r.endTimestamp();
-    s.packet_count  = r.packetCount();
-    s.markers       = copyOut(markers);
-    s.marker_count  = markers.size();
-}
-
 } // namespace
+
+struct xicap_reader
+{
+    xicap::Reader             reader;
+    xicap::Packet             packet;
+    std::vector<xicap_marker> markers;
+};
 
 struct xicap_writer
 {
@@ -104,7 +42,7 @@ struct xicap_writer
 
 extern "C"
 {
-    auto xicap_check_header(const uint8_t* data, size_t size) -> char*
+    auto xicap_check_header(const uint8_t* const data, const size_t size) -> char*
     {
         return guarded([&]
                        {
@@ -113,33 +51,75 @@ extern "C"
                        });
     }
 
-    auto xicap_read(const char* path, xicap_summary* out) -> char*
+    auto xicap_reader_open(const char* const path, xicap_reader** const out, xicap_info* const info) -> char*
     {
-        *out            = {};
-        auto* const err = guarded([&]
-                                  {
-                                      summarize(path, *out);
-                                  });
-        if (err != nullptr)
-        {
-            xicap_free_summary(out);
-        }
-
-        return err;
+        return guarded([&]
+                       {
+                           auto* const r = new xicap_reader{ xicap::Reader(path), {}, {} };
+                           const auto& m = r->reader.metadata();
+                           const auto* s = m.source ? &*m.source : nullptr;
+                           *info         = {
+                               .capture_id            = m.captureId.data(),
+                               .previous_capture_id   = m.previousCaptureId.data(),
+                               .start_timestamp       = m.startTimestamp,
+                               .origin                = static_cast<uint8_t>(m.origin),
+                               .server_kind           = static_cast<uint8_t>(m.serverKind),
+                               .capture_agent         = m.captureAgent.c_str(),
+                               .client_version        = m.clientVersion.c_str(),
+                               .content_id            = m.character.contentId,
+                               .character_id          = m.character.characterId,
+                               .character_name        = m.character.name.c_str(),
+                               .world_name            = m.character.world.c_str(),
+                               .has_source            = s != nullptr,
+                               .source_format         = s ? s->format.c_str() : nullptr,
+                               .source_format_version = s ? s->formatVersion.c_str() : nullptr,
+                               .skipped_records       = s ? s->skippedRecords : 0,
+                               .source_metadata       = s ? s->metadata.data() : nullptr,
+                               .source_metadata_size  = s ? s->metadata.size() : 0,
+                               .complete              = r->reader.complete(),
+                               .end_timestamp         = r->reader.endTimestamp(),
+                               .packet_count          = r->reader.packetCount(),
+                           };
+                           *out = r;
+                       });
     }
 
-    auto xicap_free_summary(xicap_summary* s) -> void
+    auto xicap_reader_next(xicap_reader* const r, xicap_packet* const out, bool* const more) -> char*
     {
-        for (const auto& m : std::span{ s->markers, s->marker_count })
-        {
-            std::free(m.text);
-        }
+        return guarded([&]
+                       {
+                           *more = r->reader.next(r->packet);
+                           if (!*more)
+                           {
+                               return;
+                           }
 
-        std::free(s->markers);
-        std::free(s->source_metadata);
+                           const auto& p = r->packet;
+                           r->markers.clear();
+                           for (const auto& m : p.markers)
+                           {
+                               r->markers.push_back({ static_cast<uint8_t>(m.kind), m.text.data(), m.text.size() });
+                           }
+
+                           *out = {
+                               .timestamp    = p.timestamp,
+                               .flags        = p.flags,
+                               .channel      = p.channel,
+                               .opcode       = p.opcode,
+                               .data         = reinterpret_cast<const uint8_t*>(p.data.data()),
+                               .size         = p.data.size(),
+                               .markers      = r->markers.data(),
+                               .marker_count = r->markers.size(),
+                           };
+                       });
     }
 
-    auto xicap_writer_open(const char* path, const xicap_writer_info* info, xicap_writer** out) -> char*
+    auto xicap_reader_close(xicap_reader* const r) -> void
+    {
+        delete r;
+    }
+
+    auto xicap_writer_open(const char* const path, const xicap_writer_info* const info, xicap_writer** const out) -> char*
     {
         return guarded([&]
                        {
@@ -150,11 +130,6 @@ extern "C"
                                .clientVersion = info->client_version,
                                .character     = { .contentId = info->content_id, .characterId = info->character_id, .name = info->character_name, .world = info->world_name },
                            };
-                           if (info->keep_chat)
-                           {
-                               m.policy = {};
-                           }
-
                            if (info->has_source)
                            {
                                m.source = xicap::Source{
@@ -166,11 +141,12 @@ extern "C"
                            }
 
                            const auto policy = info->archive ? xicap::FramePolicy::archive() : xicap::FramePolicy::live();
-                           *out              = new xicap_writer{ xicap::Writer(path, std::move(m), policy) };
+                           const auto chat   = info->keep_chat ? xicap::Chat::Keep : xicap::Chat::Redact;
+                           *out              = new xicap_writer{ xicap::Writer(path, std::move(m), policy, chat) };
                        });
     }
 
-    auto xicap_writer_write(xicap_writer* w, uint64_t timestamp, bool client_to_server, uint8_t channel, uint16_t opcode, uint16_t provenance, const uint8_t* data, size_t size) -> char*
+    auto xicap_writer_write(xicap_writer* const w, const uint64_t timestamp, const bool client_to_server, const uint8_t channel, const uint16_t opcode, const uint16_t provenance, const uint8_t* const data, const size_t size) -> char*
     {
         return guarded([&]
                        {
@@ -185,7 +161,7 @@ extern "C"
                        });
     }
 
-    auto xicap_writer_close(xicap_writer* w) -> char*
+    auto xicap_writer_close(xicap_writer* const w) -> char*
     {
         auto* const err = guarded([&]
                                   {
@@ -195,7 +171,7 @@ extern "C"
         return err;
     }
 
-    auto xicap_transcode(const char* src, const char* dst) -> char*
+    auto xicap_transcode(const char* const src, const char* const dst) -> char*
     {
         return guarded([&]
                        {

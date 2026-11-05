@@ -4,7 +4,6 @@
 
 #include <algorithm>
 #include <format>
-#include <optional>
 
 namespace xicap
 {
@@ -64,43 +63,6 @@ auto transcode(const std::filesystem::path& src, const std::filesystem::path& ds
 
     compare(src, tmp.path());
     tmp.publish();
-}
-
-auto continueFrom(const std::filesystem::path& source, uint64_t fromByte, const std::filesystem::path& out, FramePolicy policy) -> uint64_t
-{
-    Reader in(source);
-    auto   metadata            = in.metadata();
-    metadata.previousCaptureId = metadata.captureId;
-    metadata.captureId         = {};
-    const io::Staged      tmp(out);
-    std::optional<Writer> writer;
-    uint64_t              packets{ 0 };
-    Packet                p;
-    while (in.next(p))
-    {
-        if (in.bytesRead() <= fromByte)
-        {
-            continue;
-        }
-
-        if (!writer)
-        {
-            writer.emplace(tmp.path(), metadata, policy);
-        }
-
-        writer->copy(p);
-        packets++;
-    }
-
-    if (!writer)
-    {
-        return 0;
-    }
-
-    writer->close();
-    writer.reset();
-    tmp.publish();
-    return packets;
 }
 
 } // namespace xicap

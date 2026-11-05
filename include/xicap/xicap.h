@@ -1,8 +1,8 @@
 #pragma once
 
 #include "metadata.h"
-#include "policy.h"
 #include "reader.h"
+#include "redaction.h"
 #include "transcode.h"
 #include "types.h"
 #include "writer.h"

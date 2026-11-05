@@ -52,7 +52,7 @@ TEST_CASE("a file that is not a whole capture start is refused")
     const test::TempFile file;
     writeSample(file);
     auto bytes = test::bytesOf(file);
-    bytes.resize(170);
+    bytes.resize(100);
     test::save(file, bytes);
     CHECK_THROWS_AS(Reader(file), Error);
     CHECK_THROWS_AS(Reader("no such file"), Error);

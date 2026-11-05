@@ -110,24 +110,14 @@ auto mixed(Writer& w) -> void
     w.write(test::out(T0 + 9, chat));
     w.mark(MarkerKind::Note, "cap start \xE6\x88\xA6\xE3\x81\x84");
     w.write(test::out(T0 + 20, tell, ClientToServer));
+    // A stub, as captures converted from older formats hold.
+    w.copy({ .timestamp = T0 + 20, .flags = PacketFlag::Excluded | PacketFlag::ClientToServer, .channel = 0, .opcode = 0x0B6, .data = std::span{ tell }.first(4), .markers = {} });
     w.write({ .timestamp = T0 + 20, .direction = ServerToClient, .data = search, .channel = 1, .opcode = 0x0B, .provenance = PacketFlag::Injected });
     w.copy({ .timestamp = T0 + 31, .flags = 0x8020 | PacketFlag::Blocked, .channel = 7, .opcode = 0x1234, .data = other, .markers = {} });
     w.write(test::out(T0 + 31, odd));
     w.mark(MarkerKind::Logout);
     w.mark(static_cast<MarkerKind>(9), "unknown kind");
     w.write(test::out(T0 + 5000, move, ClientToServer));
-}
-
-auto mixedPolicy() -> ExclusionPolicy
-{
-    return {
-        .name    = "vectors",
-        .version = 1,
-        .rules   = {
-            { .channel = 0, .direction = ExclusionDirection::ServerToClient, .action = ExclusionAction::ZeroRange, .opcode = 0x017, .ranges = { { 0x17, TO_END } } },
-            { .channel = 0, .direction = ExclusionDirection::Both, .action = ExclusionAction::Stub, .opcode = 0x0B6, .ranges = {} },
-        },
-    };
 }
 
 // One frame whose plaintext is given, then a trailer.
@@ -160,9 +150,7 @@ auto main(int argc, char** argv) -> int
 
     auto small               = FramePolicy::live();
     small.maxPacketsPerFrame = 3;
-    auto m                   = test::metadata();
-    m.policy                 = mixedPolicy();
-    const auto packets       = capture(dir, m, small, mixed);
+    const auto packets       = capture(dir, test::metadata(), small, mixed);
     const auto frames        = layout(packets).frames;
     const auto trailer       = packets.size() - sizeof(format::Trailer);
 
@@ -172,13 +160,13 @@ auto main(int argc, char** argv) -> int
                                         }));
     writeVector(dir, "5-packets", packets);
 
-    auto converted         = test::metadata();
-    converted.origin       = Origin::Converted;
-    converted.serverKind   = ServerKind::Private;
-    converted.captureAgent = "mogsafe";
-    converted.policy       = {};
-    converted.source       = Source{ .format = "captain", .formatVersion = "1.4.2", .skippedRecords = 2, .metadata = { 'v', '=', '1', '\n' } };
-    writeVector(dir, "5-converted", capture(dir, converted, FramePolicy::archive(), mixed));
+    auto source          = test::metadata();
+    source.origin        = Origin::Converted;
+    source.serverKind    = ServerKind::Private;
+    source.captureAgent  = "mogsafe";
+    source.source        = Source{ .format = "captain", .formatVersion = "1.4.2", .skippedRecords = 2, .metadata = { 'v', '=', '1', '\n' } };
+    const auto converted = capture(dir, source, FramePolicy::archive(), mixed);
+    writeVector(dir, "5-converted", converted);
 
     writeVector(dir, "5-cut-off", Bytes(packets.begin(), packets.begin() + static_cast<std::ptrdiff_t>(trailer - 10)));
 
@@ -222,18 +210,18 @@ auto main(int argc, char** argv) -> int
     }
 
     {
-        auto b = packets;
+        auto b = converted;
         b[sizeof(format::Header) + 9] ^= 1;
         writeVector(dir, "5-bad-block-crc", b);
     }
 
     {
-        auto       b      = packets;
-        const auto policy = layout(b).blocks[0];
-        b.erase(b.begin() + static_cast<std::ptrdiff_t>(policy.first), b.begin() + static_cast<std::ptrdiff_t>(policy.first + policy.second));
-        b[11]--;
+        auto       b     = converted;
+        const auto block = layout(b).blocks[0];
+        b.insert(b.begin() + static_cast<std::ptrdiff_t>(block.first + block.second), converted.begin() + static_cast<std::ptrdiff_t>(block.first), converted.begin() + static_cast<std::ptrdiff_t>(block.first + block.second));
+        b[11]++;
         fixCrc(b, 0, sizeof(format::Header));
-        writeVector(dir, "5-no-policy", b);
+        writeVector(dir, "5-second-source", b);
     }
 
     {

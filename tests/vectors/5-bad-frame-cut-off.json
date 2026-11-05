@@ -17,31 +17,6 @@
       "name": "Rhavyn",
       "world": "Asura"
     },
-    "policy": {
-      "name": "vectors",
-      "version": 1,
-      "rules": [
-        {
-          "channel": 0,
-          "direction": 0,
-          "action": 2,
-          "opcode": 23,
-          "ranges": [
-            [
-              23,
-              4294967295
-            ]
-          ]
-        },
-        {
-          "channel": 0,
-          "direction": 2,
-          "action": 1,
-          "opcode": 182,
-          "ranges": []
-        }
-      ]
-    },
     "source": null
   },
   "packets": [

@@ -10,7 +10,7 @@ VECTORS = sorted((Path(__file__).parents[3] / "tests" / "vectors").glob("*.json"
 
 def describe(r, packets):
     """The reading as the vectors' JSON holds it."""
-    m, c, p, s = r.metadata, r.metadata.character, r.metadata.policy, r.metadata.source
+    m, c, s = r.metadata, r.metadata.character, r.metadata.source
     return {
         "refused": False,
         "complete": r.complete,
@@ -25,7 +25,6 @@ def describe(r, packets):
             "captureAgent": m.capture_agent,
             "clientVersion": m.client_version,
             "character": {"contentId": c.content_id, "characterId": c.character_id, "name": c.name, "world": c.world},
-            "policy": {"name": p.name, "version": p.version, "rules": p.rules},
             "source": s and {
                 "format": s.format,
                 "formatVersion": s.format_version,
@@ -59,7 +58,6 @@ def test_vector(path):
         with pytest.raises(xicap.Error):
             list(xicap.Reader(capture))
         return
-    want["metadata"]["policy"]["rules"] = len(want["metadata"]["policy"]["rules"])
     r = xicap.Reader(capture)
     packets = list(r)
     assert describe(r, packets) == want

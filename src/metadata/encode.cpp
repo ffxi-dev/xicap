@@ -15,28 +15,6 @@ auto appendBlock(std::vector<uint8_t>& out, uint32_t type, const std::vector<uin
     bytes::appendCrc(out, start);
 }
 
-auto encodePolicy(const ExclusionPolicy& policy) -> std::vector<uint8_t>
-{
-    std::vector<uint8_t> out;
-    bytes::append(out, format::PolicyHeader{ .name = bytes::toField<32>(policy.name), .version = policy.version, .ruleCount = static_cast<uint16_t>(policy.rules.size()) });
-    for (const auto& rule : policy.rules)
-    {
-        bytes::append(out, format::RuleHeader{
-                               .channel    = rule.channel,
-                               .direction  = static_cast<uint8_t>(rule.direction),
-                               .action     = static_cast<uint8_t>(rule.action),
-                               .opcode     = rule.opcode,
-                               .rangeCount = static_cast<uint16_t>(rule.ranges.size()),
-                           });
-        for (const auto& range : rule.ranges)
-        {
-            bytes::append(out, range);
-        }
-    }
-
-    return out;
-}
-
 auto encodeSource(const Source& source) -> std::vector<uint8_t>
 {
     std::vector<uint8_t> out;
@@ -54,7 +32,7 @@ auto encode(const Metadata& m) -> std::vector<uint8_t>
         .version           = format::VERSION,
         .origin            = m.origin,
         .serverKind        = m.serverKind,
-        .blockCount        = static_cast<uint8_t>(1 + static_cast<int>(m.source.has_value())),
+        .blockCount        = static_cast<uint8_t>(m.source.has_value()),
         .captureId         = m.captureId,
         .previousCaptureId = m.previousCaptureId,
         .startTimestamp    = m.startTimestamp,
@@ -70,7 +48,6 @@ auto encode(const Metadata& m) -> std::vector<uint8_t>
     bytes::append(out, header);
     out.resize(out.size() - sizeof(header.crc));
     bytes::appendCrc(out);
-    appendBlock(out, format::BLOCK_POLICY, encodePolicy(m.policy));
     if (m.source)
     {
         appendBlock(out, format::BLOCK_SOURCE, encodeSource(*m.source));
