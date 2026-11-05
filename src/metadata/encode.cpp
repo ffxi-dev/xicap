@@ -2,16 +2,18 @@
 #include "bytes/text.h"
 #include "metadata/codec.h"
 
+#include <algorithm>
+
 namespace xicap::metadata
 {
 namespace
 {
 
-auto appendBlock(std::vector<uint8_t>& out, const uint32_t type, const std::vector<uint8_t>& payload) -> void
+auto appendBlock(std::vector<uint8_t>& out, const Block& block) -> void
 {
     const auto start = out.size();
-    bytes::append(out, format::BlockHeader{ .type = type, .length = static_cast<uint32_t>(payload.size()) });
-    out.insert(out.end(), payload.begin(), payload.end());
+    bytes::append(out, format::BlockHeader{ .type = block.type, .length = static_cast<uint32_t>(block.payload.size()) });
+    out.insert(out.end(), block.payload.begin(), block.payload.end());
     bytes::appendCrc(out, start);
 }
 
@@ -23,16 +25,54 @@ auto encodeSource(const Source& source) -> std::vector<uint8_t>
     return out;
 }
 
+auto written(const Metadata& m) -> std::vector<Block>
+{
+    if (m.sourceIndex > m.blocks.size() || std::ranges::any_of(m.blocks, [](const Block& b)
+                                                               {
+                                                                   return b.type == format::BLOCK_SOURCE;
+                                                               }))
+    {
+        throw Error("xicap: blocks holds a source block, or sourceIndex is past its end");
+    }
+
+    auto out = m.blocks;
+    if (m.source)
+    {
+        out.insert(out.begin() + static_cast<std::ptrdiff_t>(m.sourceIndex), { .type = format::BLOCK_SOURCE, .payload = encodeSource(*m.source) });
+    }
+
+    if (out.size() > UINT8_MAX)
+    {
+        throw Error("xicap: more than 255 blocks");
+    }
+
+    if (std::ranges::any_of(out, [](const Block& b)
+                            {
+                                return b.payload.size() > format::MAX_BLOCK_SIZE;
+                            }))
+    {
+        throw Error("xicap: block over 16 MiB");
+    }
+
+    return out;
+}
+
 } // namespace
+
+auto check(const Metadata& metadata) -> void
+{
+    static_cast<void>(written(metadata));
+}
 
 auto encode(const Metadata& m) -> std::vector<uint8_t>
 {
+    const auto blocks = written(m);
     const auto header = format::Header{
         .magic             = format::MAGIC,
         .version           = format::VERSION,
         .origin            = m.origin,
         .serverKind        = m.serverKind,
-        .blockCount        = static_cast<uint8_t>(m.source.has_value()),
+        .blockCount        = static_cast<uint8_t>(blocks.size()),
         .captureId         = m.captureId,
         .previousCaptureId = m.previousCaptureId,
         .startTimestamp    = m.startTimestamp,
@@ -48,9 +88,9 @@ auto encode(const Metadata& m) -> std::vector<uint8_t>
     bytes::append(out, header);
     out.resize(out.size() - sizeof(header.crc));
     bytes::appendCrc(out);
-    if (m.source)
+    for (const auto& b : blocks)
     {
-        appendBlock(out, format::BLOCK_SOURCE, encodeSource(*m.source));
+        appendBlock(out, b);
     }
 
     return out;

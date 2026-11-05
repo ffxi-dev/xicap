@@ -31,10 +31,14 @@ auto randomCaptureId() -> CaptureId
     return id;
 }
 
-auto clamped(FramePolicy policy) -> FramePolicy
+auto checked(const FramePolicy policy) -> FramePolicy
 {
-    policy.maxFrameSize       = std::min<size_t>(policy.maxFrameSize, format::MAX_PLAIN_SIZE);
-    policy.maxPacketsPerFrame = std::clamp<uint32_t>(policy.maxPacketsPerFrame, 1, format::MAX_PACKETS);
+    if (policy.maxFrameSize == 0 || policy.maxFrameSize > format::MAX_PLAIN_SIZE || policy.maxPacketsPerFrame == 0 ||
+        policy.maxPacketsPerFrame > format::MAX_PACKETS || policy.windowLog <= 0 || policy.windowLog > format::MAX_WINDOW_LOG)
+    {
+        throw Error("xicap: a frame policy outside the format's limits");
+    }
+
     return policy;
 }
 
@@ -49,7 +53,7 @@ struct Writer::State
     {
     }
 
-    auto usable() const -> void;
+    auto checkWritable() const -> void;
     auto start() -> void;
     auto add(Packet packet) -> void;
     auto endFrame() -> void;
@@ -63,7 +67,7 @@ struct Writer::State
     frame::Encoder encoder;
     bool           started{ false };
     bool           closed{ false };
-    bool           failed{ false }; // a write failed: nothing more may follow
+    bool           failed{ false };
 
     frame::Frame        frame;
     size_t              frameSize{}; // plaintext, at most
@@ -74,7 +78,7 @@ struct Writer::State
 };
 
 Writer::Writer(const std::filesystem::path& path, Metadata metadata, const FramePolicy policy, const Chat chat)
-: state_(std::make_unique<State>(clamped(policy), chat))
+: state_(std::make_unique<State>(checked(policy), chat))
 {
     auto& s                   = *state_;
     s.metadata                = std::move(metadata);
@@ -83,6 +87,8 @@ Writer::Writer(const std::filesystem::path& path, Metadata metadata, const Frame
     {
         s.metadata.captureId = randomCaptureId();
     }
+
+    metadata::check(s.metadata);
 
     s.file.open(path, std::ios::binary | std::ios::trunc);
     if (!s.file)
@@ -110,14 +116,14 @@ auto Writer::captureId() const noexcept -> const CaptureId&
 
 auto Writer::write(const OutPacket& packet) -> void
 {
-    state_->usable();
+    state_->checkWritable();
     const auto stored = redact(packet, state_->chat);
     state_->add({ .timestamp = packet.timestamp, .flags = stored.flags, .channel = packet.channel, .opcode = stored.opcode, .data = stored.data, .markers = {} });
 }
 
 auto Writer::copy(const Packet& packet) -> void
 {
-    state_->usable();
+    state_->checkWritable();
     if (frame::isGame(packet.channel) && (packet.data.size() < format::GAME_HEADER_SIZE || format::gameId(packet.data) != packet.opcode))
     {
         throw Error("xicap: a game packet is at least 4 bytes and its header holds its opcode");
@@ -134,7 +140,7 @@ auto Writer::copy(const Packet& packet) -> void
 auto Writer::mark(const MarkerKind kind, const std::string_view text) -> void
 {
     auto& s = *state_;
-    s.usable();
+    s.checkWritable();
     if (text.size() > UINT16_MAX)
     {
         throw Error("xicap: marker text over 65,535 bytes");
@@ -146,7 +152,7 @@ auto Writer::mark(const MarkerKind kind, const std::string_view text) -> void
 
 auto Writer::flush() -> void
 {
-    state_->usable();
+    state_->checkWritable();
     state_->endFrame();
 }
 
@@ -169,7 +175,7 @@ auto Writer::close() -> void
     s.file.close();
 }
 
-auto Writer::State::usable() const -> void
+auto Writer::State::checkWritable() const -> void
 {
     if (closed)
     {

@@ -17,7 +17,6 @@ Reader::Reader(const std::filesystem::path& path)
         throw Error("xicap: cannot open " + path.string());
     }
 
-    // A valid trailer at the end makes the file complete; a bad frame then refuses it, rather than ending it.
     const auto size = std::filesystem::file_size(path);
     if (size >= sizeof(format::Header) + sizeof(format::Trailer))
     {
@@ -59,6 +58,7 @@ auto Reader::next(Packet& packet) -> bool
     {
         if (stream_.complete())
         {
+            pushChunk(); // the stream refuses bytes after the trailer
             return false;
         }
 

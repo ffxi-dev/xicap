@@ -79,3 +79,11 @@ TEST_CASE("a bad plaintext is refused")
     plain[1] = 0x8A;
     CHECK_THROWS_AS(frame::decode(plain, 3, 0, 0, frame), Error); // a varint running on
 }
+
+TEST_CASE("group sizes that wrap a 32-bit offset are refused")
+{
+    // Two search packets, opcodes 0 and 1, of 3 bytes and 1 byte; group sizes 2^32 - 1 and 3 wrap to the plaintext's end.
+    const auto   plain = std::vector<uint8_t>{ 0x00, 0x00, 0x00, 0x00, 0x01, 0x01, 0x00, 0x01, 0x04, 0x02, 0xff, 0xff, 0xff, 0xff, 0x0f, 0x03, 0x00, 0x00 };
+    frame::Frame frame;
+    CHECK_THROWS_AS(frame::decode(plain, 2, 0, 0, frame), Error);
+}

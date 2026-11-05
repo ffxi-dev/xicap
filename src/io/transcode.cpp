@@ -15,7 +15,6 @@ auto same(const Packet& a, const Packet& b) -> bool
            std::ranges::equal(a.data, b.data) && std::ranges::equal(a.markers, b.markers);
 }
 
-// Reads both files side by side; throws Error at the first difference.
 auto compare(const std::filesystem::path& src, const std::filesystem::path& dst) -> void
 {
     Reader a(src);
@@ -47,11 +46,19 @@ auto compare(const std::filesystem::path& src, const std::filesystem::path& dst)
 
 auto transcode(const std::filesystem::path& src, const std::filesystem::path& dst, const FramePolicy policy) -> void
 {
+    std::error_code ec;
+    if (std::filesystem::equivalent(src, dst, ec))
+    {
+        throw Error("xicap: transcode needs two different files");
+    }
+
+    auto opened = false;
     try
     {
         {
             Reader in(src);
             Writer out(dst, in.metadata(), policy);
+            opened = true;
             Packet p;
             while (in.next(p))
             {
@@ -65,8 +72,11 @@ auto transcode(const std::filesystem::path& src, const std::filesystem::path& ds
     }
     catch (...)
     {
-        std::error_code ec;
-        std::filesystem::remove(dst, ec);
+        if (opened)
+        {
+            std::filesystem::remove(dst, ec);
+        }
+
         throw;
     }
 }

@@ -57,3 +57,18 @@ TEST_CASE("a file that is not a whole capture start is refused")
     CHECK_THROWS_AS(Reader(file), Error);
     CHECK_THROWS_AS(Reader("no such file"), Error);
 }
+
+TEST_CASE("a reader refuses bytes after a trailer that ends a read chunk")
+{
+    // 160 bytes of header, a 65,340-byte block with its 12 bytes of framing, and a 24-byte trailer: 64 KiB.
+    const test::TempFile file;
+    auto                 m = test::metadata();
+    m.blocks               = { { .type = 0x8001, .payload = std::vector<uint8_t>(65'340) } };
+    Writer(file, m).close();
+    auto bytes = test::bytesOf(file);
+    REQUIRE(bytes.size() == size_t{ 64 } * 1024);
+    CHECK(test::readAll(file).empty());
+    bytes.push_back(0);
+    test::save(file, bytes);
+    CHECK_THROWS_AS(test::readAll(file), Error);
+}

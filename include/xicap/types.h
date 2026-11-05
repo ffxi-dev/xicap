@@ -30,7 +30,6 @@ struct Character
     auto operator==(const Character&) const -> bool = default;
 };
 
-// What a converted capture records about its source.
 struct Source
 {
     std::string          format;
@@ -41,6 +40,14 @@ struct Source
     auto operator==(const Source&) const -> bool = default;
 };
 
+struct Block
+{
+    uint32_t             type{};
+    std::vector<uint8_t> payload;
+
+    auto operator==(const Block&) const -> bool = default;
+};
+
 struct Marker
 {
     MarkerKind  kind{};
@@ -49,7 +56,7 @@ struct Marker
     auto operator==(const Marker&) const -> bool = default;
 };
 
-// A packet as a reader yields it. data and markers point into the reader and last until its next call.
+// data and markers point into the reader and last until its next call.
 struct Packet
 {
     uint64_t                   timestamp{};
@@ -65,7 +72,6 @@ struct Packet
     }
 };
 
-// A packet as a writer is given it.
 struct OutPacket
 {
     uint64_t                   timestamp{};

@@ -4,7 +4,6 @@
 #include "metadata/codec.h"
 
 #include <algorithm>
-#include <utility>
 
 namespace xicap
 {
@@ -29,9 +28,7 @@ struct StreamReader::State
     uint64_t             dropped{}; // bytes read and erased from the front of buffer
     Metadata             metadata;
     uint8_t              blocksLeft{};
-    bool                 haveSource{ false };
     frame::Decoder       decoder;
-    bool                 ready{ false };
     frame::Frame         frame;
     size_t               nextPacket{};
     uint64_t             packets{};
@@ -47,7 +44,7 @@ StreamReader::~StreamReader() = default;
 
 auto StreamReader::ready() const noexcept -> bool
 {
-    return state_->ready;
+    return state_->stage != State::Stage::Header && state_->stage != State::Stage::Blocks;
 }
 
 auto StreamReader::complete() const noexcept -> bool
@@ -129,7 +126,6 @@ auto StreamReader::State::parse() -> void
             {
                 if (blocksLeft == 0)
                 {
-                    ready = true;
                     stage = Stage::Frames;
                     break;
                 }
@@ -145,12 +141,7 @@ auto StreamReader::State::parse() -> void
                     return;
                 }
 
-                const auto type = metadata::readBlock(avail.first(static_cast<size_t>(size)), metadata);
-                if (type == format::BLOCK_SOURCE && std::exchange(haveSource, true))
-                {
-                    throw Error("xicap: a second source block");
-                }
-
+                metadata::readBlock(avail.first(static_cast<size_t>(size)), metadata);
                 pos += static_cast<size_t>(size);
                 blocksLeft--;
                 break;
