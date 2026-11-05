@@ -1,5 +1,5 @@
 // Package xicap reads and writes xicap captures through the C++ library, with cgo. It needs a C++23 compiler and
-// libzstd.
+// libzstd 1.4 or later.
 package xicap
 
 /*
@@ -17,13 +17,14 @@ import (
 )
 
 // HeaderSize is the length of a capture's header.
-const HeaderSize = 160
+const HeaderSize = C.XICAP_HEADER_SIZE
 
 type (
 	Origin     uint8
 	ServerKind uint8
 	MarkerKind uint8
 	Channel    uint8
+	PacketFlag uint16
 )
 
 // See FORMAT.md.
@@ -36,20 +37,20 @@ const (
 	ServerKindRetail  ServerKind = 1
 	ServerKindPrivate ServerKind = 2
 
-	MarkerNote   MarkerKind = 0
-	MarkerLogin  MarkerKind = 1
-	MarkerLogout MarkerKind = 2
+	MarkerKindNote   MarkerKind = 0
+	MarkerKindLogin  MarkerKind = 1
+	MarkerKindLogout MarkerKind = 2
 
 	ChannelGame   Channel = 0
 	ChannelSearch Channel = 1
 
-	FlagClientToServer  uint16 = 0x0001
-	FlagInjected        uint16 = 0x0002
-	FlagBlocked         uint16 = 0x0004
-	FlagModified        uint16 = 0x0008
-	FlagFirstInDatagram uint16 = 0x0010
-	FlagExcluded        uint16 = 0x0100
-	FlagRedacted        uint16 = 0x0200
+	PacketFlagClientToServer  PacketFlag = 0x0001
+	PacketFlagInjected        PacketFlag = 0x0002
+	PacketFlagBlocked         PacketFlag = 0x0004
+	PacketFlagModified        PacketFlag = 0x0008
+	PacketFlagFirstInDatagram PacketFlag = 0x0010
+	PacketFlagExcluded        PacketFlag = 0x0100
+	PacketFlagRedacted        PacketFlag = 0x0200
 )
 
 type Character struct {
@@ -85,7 +86,7 @@ type Marker struct {
 
 type Packet struct {
 	Timestamp uint64 // Unix ms
-	Flags     uint16
+	Flags     PacketFlag
 	Channel   Channel
 	Opcode    uint16
 	Data      []byte
@@ -130,9 +131,6 @@ func check(err *C.char) error {
 
 // CheckHeader checks that b starts with a whole header this library reads.
 func CheckHeader(b []byte) error {
-	if len(b) < HeaderSize {
-		return errors.New("xicap: short header")
-	}
 	return check(C.xicap_check_header((*C.uint8_t)(unsafe.SliceData(b)), C.size_t(len(b))))
 }
 
@@ -163,6 +161,9 @@ func Open(path string) (*Reader, error) {
 
 // Next returns the next packet, or io.EOF after the last.
 func (r *Reader) Next() (Packet, error) {
+	if r.r == nil {
+		return Packet{}, errors.New("xicap: the reader is closed")
+	}
 	var p C.xicap_packet
 	var more C.bool
 	if err := check(C.xicap_reader_next(r.r, &p, &more)); err != nil {
@@ -173,7 +174,7 @@ func (r *Reader) Next() (Packet, error) {
 	}
 	out := Packet{
 		Timestamp: uint64(p.timestamp),
-		Flags:     uint16(p.flags),
+		Flags:     PacketFlag(p.flags),
 		Channel:   Channel(p.channel),
 		Opcode:    uint16(p.opcode),
 		Data:      C.GoBytes(unsafe.Pointer(p.data), C.int(p.size)),
@@ -185,9 +186,10 @@ func (r *Reader) Next() (Packet, error) {
 }
 
 // Close frees the reader.
-func (r *Reader) Close() {
+func (r *Reader) Close() error {
 	C.xicap_reader_close(r.r)
 	r.r = nil
+	return nil
 }
 
 type WriterOptions struct {
@@ -195,19 +197,23 @@ type WriterOptions struct {
 	Archive  bool // smaller files, written more slowly
 }
 
-type OutPacket struct {
+type WritePacket struct {
 	Timestamp      uint64 // Unix ms
 	ClientToServer bool
-	Data           []byte
+	Provenance     PacketFlag // PacketFlagInjected, PacketFlagBlocked, PacketFlagModified, PacketFlagFirstInDatagram
 	Channel        Channel
 	Opcode         uint16 // off the game channel; a game packet's header holds its own
-	Provenance     uint16 // FlagInjected, FlagBlocked, FlagModified, FlagFirstInDatagram
+	Data           []byte
 }
 
 // Writer writes a capture. It is not safe for concurrent use.
-type Writer struct{ w *C.xicap_writer }
+type Writer struct {
+	w         *C.xicap_writer
+	CaptureID [16]byte
+}
 
-// Create starts a capture at path. A zero CaptureID gets a random one.
+// Create starts a capture at path. A zero CaptureID gets a random one, which Writer.CaptureID holds. StartTimestamp is
+// ignored: the writer takes it from the first packet.
 func Create(path string, m Metadata, opt WriterOptions) (*Writer, error) {
 	var owned []unsafe.Pointer
 	defer func() {
@@ -221,7 +227,6 @@ func Create(path string, m Metadata, opt WriterOptions) (*Writer, error) {
 		return c
 	}
 	cm := C.xicap_metadata{
-		start_timestamp: C.uint64_t(m.StartTimestamp),
 		origin:          C.uint8_t(m.Origin),
 		server_kind:     C.uint8_t(m.ServerKind),
 		capture_agent:   str(m.CaptureAgent),
@@ -246,20 +251,38 @@ func Create(path string, m Metadata, opt WriterOptions) (*Writer, error) {
 		}
 	}
 	var w Writer
-	if err := check(C.xicap_writer_open(str(path), &cm, C.bool(opt.KeepChat), C.bool(opt.Archive), &w.w)); err != nil {
+	var id [16]C.uint8_t
+	if err := check(C.xicap_writer_open(str(path), &cm, C.bool(opt.KeepChat), C.bool(opt.Archive), &w.w, &id[0])); err != nil {
 		return nil, err
+	}
+	for i := range id {
+		w.CaptureID[i] = byte(id[i])
 	}
 	return &w, nil
 }
 
 // Write adds one packet, with its chat text zeroed unless the writer keeps chat.
-func (w *Writer) Write(p OutPacket) error {
-	return check(C.xicap_writer_write(w.w, C.uint64_t(p.Timestamp), C.bool(p.ClientToServer), C.uint8_t(p.Channel), C.uint16_t(p.Opcode),
-		C.uint16_t(p.Provenance), (*C.uint8_t)(unsafe.SliceData(p.Data)), C.size_t(len(p.Data))))
+func (w *Writer) Write(p WritePacket) error {
+	if w.w == nil {
+		return errors.New("xicap: the writer is closed")
+	}
+	cp := C.xicap_write_packet{
+		timestamp:        C.uint64_t(p.Timestamp),
+		client_to_server: C.bool(p.ClientToServer),
+		provenance:       C.uint16_t(p.Provenance),
+		channel:          C.uint8_t(p.Channel),
+		opcode:           C.uint16_t(p.Opcode),
+		data:             (*C.uint8_t)(unsafe.SliceData(p.Data)),
+		size:             C.size_t(len(p.Data)),
+	}
+	return check(C.xicap_writer_write(w.w, &cp))
 }
 
-// Close writes the last frame and the trailer. The Writer cannot be used afterwards.
+// Close writes the last frame and the trailer, and reports a write that failed earlier. Closing twice does nothing.
 func (w *Writer) Close() error {
+	if w.w == nil {
+		return nil
+	}
 	err := check(C.xicap_writer_close(w.w))
 	w.w = nil
 	return err

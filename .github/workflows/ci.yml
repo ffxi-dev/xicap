@@ -24,6 +24,27 @@ jobs:
       - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DXICAP_BUILD_TESTS=ON ${{ matrix.args }}
       - run: cmake --build build --config Release --parallel
       - run: ctest --test-dir build -C Release --output-on-failure --no-tests=error
+      - if: runner.os == 'Linux'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - if: runner.os == 'Linux'
+        run: |
+          build/tests/make_vectors "$RUNNER_TEMP/vectors"
+          pip install zstandard==0.25.0
+          python tests/reference_reader.py "$RUNNER_TEMP/vectors"
+
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: seanmiddleditch/gha-setup-ninja@v5
+      - run: cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DXICAP_BUILD_FUZZERS=ON
+      - run: cmake --build build
+      - run: |
+          cp -r tests/vectors "$RUNNER_TEMP/corpus"
+          build/tests/fuzz/fuzz_reader -max_total_time=60 "$RUNNER_TEMP/corpus"
+          build/tests/fuzz/fuzz_columns -max_total_time=60
 
   tidy:
     runs-on: ubuntu-latest

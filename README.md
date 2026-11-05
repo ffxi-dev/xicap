@@ -78,14 +78,14 @@ for {
 }
 
 w, err := xicap.Create("session.xicap", xicap.Metadata{CaptureAgent: "MyRecorder 1.0", Character: c}, xicap.WriterOptions{})
-w.Write(xicap.OutPacket{Timestamp: ms, Data: bytes})
+w.Write(xicap.WritePacket{Timestamp: ms, Data: bytes})
 w.Close()
 
 err = xicap.Transcode("upload.xicap", "archived.xicap")
 ```
 
 The package builds the C++ library with cgo, so it needs a C++23 compiler and
-libzstd (`apt install libzstd-dev`).
+libzstd 1.4 or later (`apt install libzstd-dev`).
 
 ## Python
 
@@ -127,8 +127,8 @@ s.close();
   `build/tests/make_vectors tests/vectors`.
 - Run the fuzzers in `tests/fuzz/` after changing a decoder. They need Clang:
   `cmake -S . -B build-fuzz -G Ninja -DCMAKE_CXX_COMPILER=clang++ -DXICAP_BUILD_FUZZERS=ON`,
-  `cmake --build build-fuzz`, then `build-fuzz/tests/fuzz/fuzz_reader`. CI does
-  not build them.
+  `cmake --build build-fuzz`, then `build-fuzz/tests/fuzz/fuzz_reader`. CI runs
+  each for a minute.
 - A release sets its version in `CMakeLists.txt`, which the Python package
   reads too, then tags `v<version>`. A major release also changes the `/vN`
   suffix of the module path in `go.mod` and in the Go import above.

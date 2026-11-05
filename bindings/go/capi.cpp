@@ -1,14 +1,14 @@
 #include "capi.h"
 
-#include "metadata/codec.h"
 #include "xicap/xicap.h"
 
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <exception>
-#include <span>
 #include <vector>
+
+static_assert(XICAP_HEADER_SIZE == xicap::HEADER_SIZE);
 
 namespace
 {
@@ -57,12 +57,11 @@ auto toC(const xicap::Metadata& m) -> xicap_metadata
 auto fromC(const xicap_metadata& c) -> xicap::Metadata
 {
     auto m = xicap::Metadata{
-        .startTimestamp = c.start_timestamp,
-        .origin         = static_cast<xicap::Origin>(c.origin),
-        .serverKind     = static_cast<xicap::ServerKind>(c.server_kind),
-        .captureAgent   = c.capture_agent,
-        .clientVersion  = c.client_version,
-        .character      = { .contentId = c.content_id, .characterId = c.character_id, .name = c.character_name, .world = c.world_name },
+        .origin        = static_cast<xicap::Origin>(c.origin),
+        .serverKind    = static_cast<xicap::ServerKind>(c.server_kind),
+        .captureAgent  = c.capture_agent,
+        .clientVersion = c.client_version,
+        .character     = { .contentId = c.content_id, .characterId = c.character_id, .name = c.character_name, .world = c.world_name },
     };
     std::ranges::copy(c.capture_id, m.captureId.begin());
     std::ranges::copy(c.previous_capture_id, m.previousCaptureId.begin());
@@ -99,8 +98,7 @@ extern "C"
     {
         return guarded([&]
                        {
-                           xicap::Metadata m;
-                           xicap::metadata::readHeader({ data, size }, m);
+                           xicap::checkHeader({ data, size });
                        });
     }
 
@@ -139,9 +137,9 @@ extern "C"
                            *out = {
                                .timestamp    = p.timestamp,
                                .flags        = p.flags,
-                               .channel      = p.channel,
+                               .channel      = static_cast<uint8_t>(p.channel),
                                .opcode       = p.opcode,
-                               .data         = reinterpret_cast<const uint8_t*>(p.data.data()),
+                               .data         = p.data.data(),
                                .size         = p.data.size(),
                                .markers      = r->markers.data(),
                                .marker_count = r->markers.size(),
@@ -154,27 +152,29 @@ extern "C"
         delete r;
     }
 
-    auto xicap_writer_open(const char* const path, const xicap_metadata* const metadata, const bool keep_chat, const bool archive, xicap_writer** const out) -> char*
+    auto xicap_writer_open(const char* const path, const xicap_metadata* const metadata, const bool keep_chat, const bool archive, xicap_writer** const out, uint8_t capture_id[16]) -> char*
     {
         return guarded([&]
                        {
-                           const auto policy = archive ? xicap::FramePolicy::archive() : xicap::FramePolicy::live();
-                           const auto chat   = keep_chat ? xicap::Chat::Keep : xicap::Chat::Redact;
-                           *out              = new xicap_writer{ xicap::Writer(path, fromC(*metadata), policy, chat) };
+                           const auto  policy = archive ? xicap::FramePolicy::archive() : xicap::FramePolicy::live();
+                           const auto  chat   = keep_chat ? xicap::Chat::Keep : xicap::Chat::Redact;
+                           auto* const w      = new xicap_writer{ xicap::Writer(path, fromC(*metadata), policy, chat) };
+                           std::ranges::copy(w->writer.captureId(), capture_id);
+                           *out = w;
                        });
     }
 
-    auto xicap_writer_write(xicap_writer* const w, const uint64_t timestamp, const bool client_to_server, const uint8_t channel, const uint16_t opcode, const uint16_t provenance, const uint8_t* const data, const size_t size) -> char*
+    auto xicap_writer_write(xicap_writer* const w, const xicap_write_packet* const p) -> char*
     {
         return guarded([&]
                        {
                            w->writer.write({
-                               .timestamp  = timestamp,
-                               .direction  = client_to_server ? xicap::PacketDirection::ClientToServer : xicap::PacketDirection::ServerToClient,
-                               .data       = std::as_bytes(std::span{ data, size }),
-                               .channel    = channel,
-                               .opcode     = opcode,
-                               .provenance = provenance,
+                               .timestamp  = p->timestamp,
+                               .direction  = p->client_to_server ? xicap::PacketDirection::ClientToServer : xicap::PacketDirection::ServerToClient,
+                               .provenance = p->provenance,
+                               .channel    = static_cast<xicap::Channel>(p->channel),
+                               .opcode     = p->opcode,
+                               .data       = { p->data, p->size },
                            });
                        });
     }

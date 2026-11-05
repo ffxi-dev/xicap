@@ -183,10 +183,15 @@ which gives its length when `length` is 0, then restore its sync from section 6.
 | 2 | blocked by an addon |
 | 3 | modified by an addon |
 | 4 | first packet of its datagram |
-| 8 | excluded: a stub, see [Redaction](#redaction) |
+| 8 | excluded: a stub, see below |
 | 9 | redacted: chat text zeroed, see [Redaction](#redaction) |
 
 Writers write the other bits as zero; readers yield them as stored.
+
+A packet with the excluded flag is a stub: it holds only its 4-byte game
+header, and keeps its timestamp, channel, direction, provenance flags, and
+opcode. Writers do not set this flag; captures converted from formats 3 and 4
+may hold stubs.
 
 Packet bytes are the packet as the client's hook delivered it, decrypted and
 decompressed, before any addon changed it. For an injected packet, they are
@@ -248,10 +253,6 @@ length and every byte outside the ranges. Offsets count the 4-byte header.
 Opcodes and field names follow atom0s's XiPackets. When configured to keep
 chat, writers preserve those bytes. Changing the table needs a new format
 version.
-
-A packet with the excluded flag is a stub: it holds only its 4-byte game
-header, and keeps its timestamp, channel, direction, provenance flags, and
-opcode. Converted captures may preserve four-byte stubs from older formats.
 
 ## Trailer
 

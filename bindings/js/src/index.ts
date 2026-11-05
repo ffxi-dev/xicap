@@ -36,15 +36,49 @@ export interface Packet {
     markers: { kind: number; text: string }[]; // those just before this packet
 }
 
+interface NativeReader {
+    metadata(): Metadata;
+    complete(): boolean;
+    endTimestamp(): number;
+    packetCount(): number;
+    next(): Packet | undefined;
+    delete(): void;
+}
+
+interface NativeStreamReader {
+    push(chunk: Uint8Array): Packet[];
+    metadata(): Metadata;
+    ready(): boolean;
+    complete(): boolean;
+    stopped(): boolean;
+    delete(): void;
+}
+
+interface Module {
+    FS: { writeFile(path: string, data: Uint8Array): void; unlink(path: string): void };
+    Reader: new (path: string) => NativeReader;
+    StreamReader: new () => NativeStreamReader;
+}
+
 let options: object = {};
-let module: Promise<any> | undefined;
+let module: Promise<Module> | undefined;
 
 /** Sets the options Emscripten's loader gets, such as locateFile for a bundler's wasm URL. Call before the first open. */
 export function configureXicap(loaderOptions: object): void {
+    if (module) throw new Error("xicap: configureXicap must come before the first Reader.open or StreamReader.create");
     options = loaderOptions;
 }
 
-const load = () => (module ??= createXicap(options));
+const load = (): Promise<Module> =>
+    (module ??= (createXicap(options) as Promise<Module>).catch((e: unknown) => {
+        module = undefined;
+        throw e;
+    }));
+
+function open<T>(native: T | null): T {
+    if (!native) throw new Error("xicap: the reader is closed");
+    return native;
+}
 
 /** Reads a whole capture. A complete one is read whole or refused; a cut-off one reads up to its first bad frame. */
 export class Reader {
@@ -62,19 +96,19 @@ export class Reader {
 
     readonly metadata: Metadata;
 
-    private constructor(private native: any) {
-        this.metadata = native.metadata();
+    private constructor(private native: NativeReader | null) {
+        this.metadata = open(native).metadata();
     }
 
     /** True when the file ends with a valid trailer. */
-    get complete(): boolean { return this.native.complete(); }
+    get complete(): boolean { return open(this.native).complete(); }
     /** The trailer's end time, or 0 in a cut-off file. */
-    get endTimestamp(): number { return this.native.endTimestamp(); }
+    get endTimestamp(): number { return open(this.native).endTimestamp(); }
     /** The trailer's packet count, or 0 in a cut-off file. */
-    get packetCount(): number { return this.native.packetCount(); }
+    get packetCount(): number { return open(this.native).packetCount(); }
 
     *[Symbol.iterator](): IterableIterator<Packet> {
-        for (let p = this.native.next(); p; p = this.native.next()) yield p;
+        for (let p = open(this.native).next(); p; p = open(this.native).next()) yield p;
     }
 
     close(): void {
@@ -89,17 +123,17 @@ export class StreamReader {
         return new StreamReader(new (await load()).StreamReader());
     }
 
-    private constructor(private native: any) {}
+    private constructor(private native: NativeStreamReader | null) {}
 
     /** The packets whose frames these bytes completed. Throws for a capture that must be refused. */
-    push(chunk: Uint8Array): Packet[] { return this.native.push(chunk); }
+    push(chunk: Uint8Array): Packet[] { return open(this.native).push(chunk); }
     /** True once the header and blocks are read, so that metadata holds them. */
-    get ready(): boolean { return this.native.ready(); }
-    get metadata(): Metadata { return this.native.metadata(); }
+    get ready(): boolean { return open(this.native).ready(); }
+    get metadata(): Metadata { return open(this.native).metadata(); }
     /** True once the trailer is read. */
-    get complete(): boolean { return this.native.complete(); }
+    get complete(): boolean { return open(this.native).complete(); }
     /** True once the reader meets bytes that are neither a valid frame nor a trailer; it reads nothing more. */
-    get stopped(): boolean { return this.native.stopped(); }
+    get stopped(): boolean { return open(this.native).stopped(); }
 
     close(): void {
         this.native?.delete();

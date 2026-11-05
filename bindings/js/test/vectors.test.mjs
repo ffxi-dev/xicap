@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile, readdir } from "node:fs/promises";
 import { test } from "node:test";
 
-import { Reader, StreamReader } from "../dist/index.js";
+import { Channel, MarkerKind, Origin, PacketFlag, Reader, ServerKind, StreamReader, configureXicap } from "../dist/index.js";
 
 const dir = new URL("../../../tests/vectors/", import.meta.url);
 const names = (await readdir(dir)).filter((n) => n.endsWith(".json")).map((n) => n.slice(0, -5));
@@ -30,6 +30,21 @@ function describe(r, packets) {
 }
 
 test("there are vectors", () => assert.ok(names.length >= 15));
+
+// The vectors' numbers are FORMAT.md's; this catches a constant that drifts from them.
+test("the constants match the vectors", async () => {
+    const r = await Reader.open(await readFile(new URL("5-packets.xicap", dir)));
+    const [first, second, third] = r;
+    assert.equal(r.metadata.origin, Origin.Live);
+    assert.equal(r.metadata.serverKind, ServerKind.Retail);
+    assert.equal(first.channel, Channel.Game);
+    assert.equal(first.markers[0].kind, MarkerKind.Login);
+    assert.equal(second.flags, PacketFlag.ClientToServer | PacketFlag.Modified | PacketFlag.FirstInDatagram);
+    assert.equal(third.flags, PacketFlag.Redacted);
+    r.close();
+    assert.throws(() => r.complete, /closed/);
+    assert.throws(() => configureXicap({}), /before the first/);
+});
 
 for (const name of names) {
     test(name, async () => {

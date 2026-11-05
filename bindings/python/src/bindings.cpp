@@ -53,12 +53,18 @@ PYBIND11_MODULE(xicap, m)
     py::register_exception<xicap::Error>(m, "Error");
 
     // Python enums over plain ints, so a value compares with what the API returns and an unknown one stays an int.
-    const auto python    = py::module_::import("enum");
-    m.attr("Origin")     = python.attr("IntEnum")("Origin", py::dict(py::arg("Unknown") = 0, py::arg("Live") = 1, py::arg("Converted") = 2));
-    m.attr("ServerKind") = python.attr("IntEnum")("ServerKind", py::dict(py::arg("Unknown") = 0, py::arg("Retail") = 1, py::arg("Private") = 2));
-    m.attr("MarkerKind") = python.attr("IntEnum")("MarkerKind", py::dict(py::arg("Note") = 0, py::arg("Login") = 1, py::arg("Logout") = 2));
-    m.attr("Channel")    = python.attr("IntEnum")("Channel", py::dict(py::arg("Game") = 0, py::arg("Search") = 1));
-    m.attr("PacketFlag") = python.attr("IntFlag")("PacketFlag", py::dict(py::arg("ClientToServer") = xicap::PacketFlag::ClientToServer, py::arg("Injected") = xicap::PacketFlag::Injected, py::arg("Blocked") = xicap::PacketFlag::Blocked, py::arg("Modified") = xicap::PacketFlag::Modified, py::arg("FirstInDatagram") = xicap::PacketFlag::FirstInDatagram, py::arg("Excluded") = xicap::PacketFlag::Excluded, py::arg("Redacted") = xicap::PacketFlag::Redacted));
+    const auto python = py::module_::import("enum");
+    using xicap::Channel, xicap::MarkerKind, xicap::Origin, xicap::ServerKind;
+    namespace PacketFlag = xicap::PacketFlag;
+    const auto value     = [](const auto e)
+    {
+        return static_cast<int>(e);
+    };
+    m.attr("Origin")     = python.attr("IntEnum")("Origin", py::dict(py::arg("Unknown") = value(Origin::Unknown), py::arg("Live") = value(Origin::Live), py::arg("Converted") = value(Origin::Converted)));
+    m.attr("ServerKind") = python.attr("IntEnum")("ServerKind", py::dict(py::arg("Unknown") = value(ServerKind::Unknown), py::arg("Retail") = value(ServerKind::Retail), py::arg("Private") = value(ServerKind::Private)));
+    m.attr("MarkerKind") = python.attr("IntEnum")("MarkerKind", py::dict(py::arg("Note") = value(MarkerKind::Note), py::arg("Login") = value(MarkerKind::Login), py::arg("Logout") = value(MarkerKind::Logout)));
+    m.attr("Channel")    = python.attr("IntEnum")("Channel", py::dict(py::arg("Game") = value(Channel::Game), py::arg("Search") = value(Channel::Search)));
+    m.attr("PacketFlag") = python.attr("IntFlag")("PacketFlag", py::dict(py::arg("ClientToServer") = PacketFlag::ClientToServer, py::arg("Injected") = PacketFlag::Injected, py::arg("Blocked") = PacketFlag::Blocked, py::arg("Modified") = PacketFlag::Modified, py::arg("FirstInDatagram") = PacketFlag::FirstInDatagram, py::arg("Excluded") = PacketFlag::Excluded, py::arg("Redacted") = PacketFlag::Redacted));
 
     py::class_<xicap::Character>(m, "Character")
         .def_readonly("content_id", &xicap::Character::contentId)
@@ -125,7 +131,7 @@ PYBIND11_MODULE(xicap, m)
                  return Packet{
                      .timestamp = p.timestamp,
                      .flags     = p.flags,
-                     .channel   = p.channel,
+                     .channel   = static_cast<uint8_t>(p.channel),
                      .opcode    = p.opcode,
                      .data      = { reinterpret_cast<const char*>(p.data.data()), p.data.size() },
                      .markers   = { p.markers.begin(), p.markers.end() },

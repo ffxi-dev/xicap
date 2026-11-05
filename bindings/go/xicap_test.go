@@ -44,7 +44,7 @@ type vector struct {
 	}
 	Packets []struct {
 		Timestamp uint64
-		Flags     uint16
+		Flags     PacketFlag
 		Channel   Channel
 		Opcode    uint16
 		Data      hexBytes
@@ -144,6 +144,26 @@ func TestVectors(t *testing.T) {
 	}
 }
 
+// The vectors' numbers are FORMAT.md's; these catch a constant that drifts from them.
+func TestConstantsMatchTheVectors(t *testing.T) {
+	c, err := read("../../tests/vectors/5-packets.xicap")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Metadata.Origin != OriginLive || c.Metadata.ServerKind != ServerKindRetail || c.Packets[0].Markers[0].Kind != MarkerKindLogin ||
+		c.Packets[1].Flags != PacketFlagClientToServer|PacketFlagModified|PacketFlagFirstInDatagram || c.Packets[2].Flags&PacketFlagRedacted == 0 {
+		t.Errorf("%+v", c)
+	}
+	r, err := Open("../../tests/vectors/5-packets.xicap")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Close()
+	if _, err := r.Next(); err == nil {
+		t.Error("a closed reader reads")
+	}
+}
+
 func TestWriteThenRead(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "c.xicap")
 	w, err := Create(path, Metadata{
@@ -157,21 +177,27 @@ func TestWriteThenRead(t *testing.T) {
 	chat := append([]byte{0x17, 0x08, 0x01, 0x00}, make([]byte, 28)...)
 	chat[30] = 'x'
 	for i := range 3 {
-		if err := w.Write(OutPacket{Timestamp: 1000 + uint64(i), Data: chat}); err != nil {
+		if err := w.Write(WritePacket{Timestamp: 1000 + uint64(i), Data: chat}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := w.Write(OutPacket{Timestamp: 1003, Data: []byte{1, 2}, Channel: ChannelSearch, Opcode: 0x0B, Provenance: FlagInjected}); err != nil {
+	if err := w.Write(WritePacket{Timestamp: 1003, Data: []byte{1, 2}, Channel: ChannelSearch, Opcode: 0x0B, Provenance: PacketFlagInjected}); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.Write(OutPacket{Timestamp: 1003, Channel: ChannelSearch, Opcode: 0x0B}); err != nil {
+	if err := w.Write(WritePacket{Timestamp: 1003, Channel: ChannelSearch, Opcode: 0x0B}); err != nil {
 		t.Errorf("an empty search packet: %v", err)
 	}
-	if w.Write(OutPacket{Timestamp: 1003}) == nil {
+	if w.Write(WritePacket{Timestamp: 1003}) == nil {
 		t.Error("an empty game packet is written")
 	}
 	if err := w.Close(); err != nil {
 		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Errorf("a second Close: %v", err)
+	}
+	if w.Write(WritePacket{Timestamp: 1004, Data: chat}) == nil {
+		t.Error("a closed writer writes")
 	}
 
 	c, err := read(path)
@@ -179,8 +205,11 @@ func TestWriteThenRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !c.Complete || c.PacketCount != 5 || len(c.Packets) != 5 || c.Metadata.Source.Format != "captain" || string(c.Metadata.Source.Metadata) != "manifest" ||
-		c.Metadata.PreviousCaptureID != [16]byte{9} || c.Metadata.CaptureID == [16]byte{} || c.Metadata.StartTimestamp != 1000 || c.EndTimestamp != 1003 || c.Packets[0].Data[30] != 'x' || c.Packets[0].Flags&FlagRedacted != 0 {
+		c.Metadata.PreviousCaptureID != [16]byte{9} || c.Metadata.CaptureID == [16]byte{} || c.Metadata.StartTimestamp != 1000 || c.EndTimestamp != 1003 || c.Packets[0].Data[30] != 'x' || c.Packets[0].Flags&PacketFlagRedacted != 0 {
 		t.Errorf("%+v", c)
+	}
+	if c.Metadata.CaptureID != w.CaptureID {
+		t.Errorf("Writer.CaptureID %x, the file holds %x", w.CaptureID, c.Metadata.CaptureID)
 	}
 
 	b, _ := os.ReadFile(path)

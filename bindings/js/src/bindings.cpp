@@ -5,7 +5,6 @@
 
 #include <exception>
 #include <memory>
-#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -32,7 +31,7 @@ auto guard(F&& f) -> decltype(f())
 template <typename Bytes>
 auto bytes(const Bytes& b) -> em::val
 {
-    return em::val(em::typed_memory_view(b.size(), reinterpret_cast<const uint8_t*>(b.data()))).call<em::val>("slice");
+    return em::val(em::typed_memory_view(b.size(), b.data())).call<em::val>("slice");
 }
 
 // Replace malformed UTF-8 with U+FFFD.
@@ -86,7 +85,7 @@ auto toJs(const xicap::Packet& p) -> em::val
     auto o = em::val::object();
     o.set("timestamp", static_cast<double>(p.timestamp));
     o.set("flags", p.flags);
-    o.set("channel", p.channel);
+    o.set("channel", static_cast<int>(p.channel));
     o.set("opcode", p.opcode);
     o.set("data", bytes(p.data));
     o.set("markers", markers);
@@ -149,8 +148,7 @@ public:
     {
         return guard([&]
                      {
-                         const auto data = em::convertJSArrayToNumberVector<uint8_t>(chunk);
-                         reader_.push(std::as_bytes(std::span{ data }));
+                         reader_.push(em::convertJSArrayToNumberVector<uint8_t>(chunk));
                          auto          out = em::val::array();
                          xicap::Packet p;
                          while (reader_.next(p))

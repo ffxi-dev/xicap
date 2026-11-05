@@ -6,6 +6,8 @@
 
 // What cgo calls. A function that can fail returns NULL, or an error message for the caller to free. Pointers a reader
 // hands out point into it: metadata until it closes, a packet until the next call.
+#define XICAP_HEADER_SIZE 160
+
 #ifdef __cplusplus
 extern "C"
 {
@@ -59,6 +61,17 @@ extern "C"
         size_t              marker_count;
     } xicap_packet;
 
+    typedef struct
+    {
+        uint64_t       timestamp;
+        bool           client_to_server;
+        uint16_t       provenance;
+        uint8_t        channel;
+        uint16_t       opcode;
+        const uint8_t* data;
+        size_t         size;
+    } xicap_write_packet;
+
     typedef struct xicap_reader xicap_reader;
     typedef struct xicap_writer xicap_writer;
 
@@ -69,8 +82,9 @@ extern "C"
     char* xicap_reader_next(xicap_reader* r, xicap_packet* out, bool* more);
     void  xicap_reader_close(xicap_reader* r);
 
-    char* xicap_writer_open(const char* path, const xicap_metadata* metadata, bool keep_chat, bool archive, xicap_writer** out);
-    char* xicap_writer_write(xicap_writer* w, uint64_t timestamp, bool client_to_server, uint8_t channel, uint16_t opcode, uint16_t provenance, const uint8_t* data, size_t size);
+    // Sets capture_id to the capture's id, which the writer picks when metadata's is all zero.
+    char* xicap_writer_open(const char* path, const xicap_metadata* metadata, bool keep_chat, bool archive, xicap_writer** out, uint8_t capture_id[16]);
+    char* xicap_writer_write(xicap_writer* w, const xicap_write_packet* packet);
     // Frees the writer, even when closing fails.
     char* xicap_writer_close(xicap_writer* w);
 
