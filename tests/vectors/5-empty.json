@@ -1,0 +1,23 @@
+{
+  "refused": false,
+  "complete": true,
+  "endTimestamp": 0,
+  "packetCount": 0,
+  "metadata": {
+    "captureId": "33333333333333333333333333333333",
+    "previousCaptureId": "00000000000000000000000000000000",
+    "startTimestamp": 0,
+    "origin": 1,
+    "serverKind": 1,
+    "captureAgent": "xicap tests",
+    "clientVersion": "30251101_2",
+    "character": {
+      "contentId": 16909060,
+      "characterId": 168496141,
+      "name": "Rhavyn",
+      "world": "Asura"
+    },
+    "source": null
+  },
+  "packets": []
+}

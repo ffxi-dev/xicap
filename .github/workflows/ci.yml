@@ -1,0 +1,107 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cpp:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+          - { os: windows-latest, args: -A x64 }
+          - { os: windows-latest, args: -A Win32 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DXICAP_BUILD_TESTS=ON ${{ matrix.args }}
+      - run: cmake --build build --config Release --parallel
+      - run: ctest --test-dir build -C Release --output-on-failure --no-tests=error
+      - if: runner.os == 'Linux'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - if: runner.os == 'Linux'
+        run: |
+          mkdir "$RUNNER_TEMP/vectors"
+          build/tests/make_vectors "$RUNNER_TEMP/vectors"
+          pip install zstandard==0.25.0
+          python tests/reference_reader.py "$RUNNER_TEMP/vectors"
+
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: seanmiddleditch/gha-setup-ninja@v5
+      - run: cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DXICAP_BUILD_FUZZERS=ON
+      - run: cmake --build build
+      - run: |
+          cp -r tests/vectors "$RUNNER_TEMP/corpus"
+          build/tests/fuzz/fuzz_reader -max_total_time=60 "$RUNNER_TEMP/corpus"
+          build/tests/fuzz/fuzz_columns -max_total_time=60
+
+  tidy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install clang-tidy==22.1.8
+      - run: cmake -S . -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DXICAP_BUILD_TESTS=ON
+      - run: git ls-files 'src/*.cpp' 'tests/*.cpp' ':!tests/fuzz' | xargs -P 4 -n 4 clang-tidy -p build --quiet
+
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - run: sudo apt-get install -y -q libzstd-dev
+      - run: go vet ./...
+      - run: go test ./...
+
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: seanmiddleditch/gha-setup-ninja@v5
+      - run: pip install "./bindings/python[test]"
+      - run: python -m pytest bindings/python/tests
+
+  js:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: seanmiddleditch/gha-setup-ninja@v5
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: "5.0.7"
+      - working-directory: bindings/js
+        run: npm ci && npm run build && npm test
+
+  reference-reader:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install zstandard==0.25.0
+      - run: python tests/reference_reader.py tests/vectors
+      - run: python tests/reference_reader.py --example FORMAT.md

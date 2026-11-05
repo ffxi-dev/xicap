@@ -1,0 +1,48 @@
+{
+  "refused": false,
+  "complete": true,
+  "endTimestamp": 1767225600020,
+  "packetCount": 3,
+  "metadata": {
+    "captureId": "33333333333333333333333333333333",
+    "previousCaptureId": "00000000000000000000000000000000",
+    "startTimestamp": 1767225600000,
+    "origin": 1,
+    "serverKind": 1,
+    "captureAgent": "xicap tests",
+    "clientVersion": "30251101_2",
+    "character": {
+      "contentId": 16909060,
+      "characterId": 168496141,
+      "name": "Rhavyn",
+      "world": "Asura"
+    },
+    "source": null
+  },
+  "packets": [
+    {
+      "timestamp": 1767225600000,
+      "flags": 0,
+      "channel": 0,
+      "opcode": 223,
+      "data": "df080100000000000000000000000000",
+      "markers": []
+    },
+    {
+      "timestamp": 1767225600010,
+      "flags": 0,
+      "channel": 0,
+      "opcode": 223,
+      "data": "df080200010101010101010101010101",
+      "markers": []
+    },
+    {
+      "timestamp": 1767225600020,
+      "flags": 0,
+      "channel": 0,
+      "opcode": 223,
+      "data": "df080300020202020202020202020202",
+      "markers": []
+    }
+  ]
+}

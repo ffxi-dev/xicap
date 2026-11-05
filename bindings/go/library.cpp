@@ -1,0 +1,13 @@
+// cgo builds only the files in this folder, so this one compiles the library.
+#include "../../src/frame/columns_decode.cpp"
+#include "../../src/frame/columns_encode.cpp"
+#include "../../src/frame/decoder.cpp"
+#include "../../src/frame/encoder.cpp"
+#include "../../src/frame/frame.cpp"
+#include "../../src/io/reader.cpp"
+#include "../../src/io/stream_reader.cpp"
+#include "../../src/io/transcode.cpp"
+#include "../../src/io/writer.cpp"
+#include "../../src/metadata/decode.cpp"
+#include "../../src/metadata/encode.cpp"
+#include "../../src/redaction/redaction.cpp"
