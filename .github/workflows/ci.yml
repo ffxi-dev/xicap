@@ -89,7 +89,7 @@ jobs:
         with:
           node-version: "26"
       - uses: seanmiddleditch/gha-setup-ninja@v5
-      - uses: mymindstorm/setup-emsdk@v14
+      - uses: mymindstorm/setup-emsdk@v16
         with:
           version: "6.0.13"
       - working-directory: bindings/js
