@@ -29,7 +29,23 @@ function describe(r, packets) {
     };
 }
 
-test("there are vectors", () => assert.ok(names.length >= 15));
+// pushColumns' columns as push's packets.
+function rows(c) {
+    const out = [];
+    for (let i = 0, from = 0; i < c.timestamps.length; from += c.sizes[i++]) {
+        out.push({
+            timestamp: c.timestamps[i],
+            flags: c.flags[i],
+            channel: c.channels[i],
+            opcode: c.opcodes[i],
+            data: c.data.slice(from, from + c.sizes[i]),
+            markers: c.markers.filter((m) => m.packet === i).map(({ kind, text }) => ({ kind, text })),
+        });
+    }
+    return out;
+}
+
+test("there are vectors",() => assert.ok(names.length >= 15));
 
 // The vectors' numbers are FORMAT.md's; this catches a constant that drifts from them.
 test("the constants match the vectors", async () => {
@@ -67,5 +83,12 @@ for (const name of names) {
         assert.deepEqual(streamed, packets);
         assert.equal(s.complete, want.complete);
         s.close();
+
+        // As columns, the same packets.
+        const c = await StreamReader.create();
+        const columned = [];
+        for (let at = 0; at < bytes.length; at += 7) columned.push(...rows(c.pushColumns(bytes.subarray(at, at + 7))));
+        assert.deepEqual(columned, packets);
+        c.close();
     });
 }

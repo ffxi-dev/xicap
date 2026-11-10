@@ -36,6 +36,17 @@ export interface Packet {
     markers: { kind: number; text: string }[]; // those just before this packet
 }
 
+/** Packets as columns, packet i at index i of each; its data is the sizes[i] bytes of data after those before it. */
+export interface Columns {
+    timestamps: Float64Array;
+    flags: Uint16Array;
+    channels: Uint8Array;
+    opcodes: Uint16Array;
+    sizes: Uint32Array;
+    data: Uint8Array;
+    markers: { packet: number; kind: number; text: string }[]; // each just before the packet at that index
+}
+
 interface NativeReader {
     metadata(): Metadata;
     complete(): boolean;
@@ -47,6 +58,7 @@ interface NativeReader {
 
 interface NativeStreamReader {
     push(chunk: Uint8Array): Packet[];
+    pushColumns(chunk: Uint8Array): Columns;
     metadata(): Metadata;
     ready(): boolean;
     complete(): boolean;
@@ -127,6 +139,8 @@ export class StreamReader {
 
     /** The packets whose frames these bytes completed. Throws for a capture that must be refused. */
     push(chunk: Uint8Array): Packet[] { return open(this.native).push(chunk); }
+    /** push's packets as columns, many times faster for many packets. */
+    pushColumns(chunk: Uint8Array): Columns { return open(this.native).pushColumns(chunk); }
     /** True once the header and blocks are read, so that metadata holds them. */
     get ready(): boolean { return open(this.native).ready(); }
     get metadata(): Metadata { return open(this.native).metadata(); }

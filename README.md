@@ -119,6 +119,12 @@ for await (const chunk of download) for (const p of s.push(chunk)) { /* ... */ }
 s.close();
 ```
 
+`s.pushColumns(chunk)` reads the same packets as columns: `timestamps`,
+`flags`, `channels`, `opcodes` and `sizes`, one `data` buffer holding each
+packet's bytes in turn, and `markers` with the index of the packet each comes
+before. A JS object per packet costs about a microsecond; for a capture of
+millions of packets, columns read ten times faster.
+
 ## Contributing
 
 - A change to the format changes FORMAT.md, the vectors, and
