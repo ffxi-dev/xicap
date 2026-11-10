@@ -160,6 +160,52 @@ public:
                      });
     }
 
+    // push's packets as columns: a JS object per packet costs about a microsecond, which for millions of packets is
+    // most of the read.
+    auto pushColumns(const em::val& chunk) -> em::val
+    {
+        return guard([&]
+                     {
+                         reader_.push(em::convertJSArrayToNumberVector<uint8_t>(chunk));
+                         std::vector<double>   timestamps;
+                         std::vector<uint16_t> flags;
+                         std::vector<uint8_t>  channels;
+                         std::vector<uint16_t> opcodes;
+                         std::vector<uint32_t> sizes;
+                         std::vector<uint8_t>  data;
+                         auto                  markers = em::val::array();
+                         xicap::Packet         p;
+                         while (reader_.next(p))
+                         {
+                             for (const auto& m : p.markers)
+                             {
+                                 auto marker = em::val::object();
+                                 marker.set("packet", static_cast<double>(timestamps.size()));
+                                 marker.set("kind", static_cast<int>(m.kind));
+                                 marker.set("text", text(m.text));
+                                 markers.call<void>("push", marker);
+                             }
+
+                             timestamps.push_back(static_cast<double>(p.timestamp));
+                             flags.push_back(p.flags);
+                             channels.push_back(static_cast<uint8_t>(p.channel));
+                             opcodes.push_back(p.opcode);
+                             sizes.push_back(static_cast<uint32_t>(p.data.size()));
+                             data.insert(data.end(), p.data.begin(), p.data.end());
+                         }
+
+                         auto o = em::val::object();
+                         o.set("timestamps", bytes(timestamps));
+                         o.set("flags", bytes(flags));
+                         o.set("channels", bytes(channels));
+                         o.set("opcodes", bytes(opcodes));
+                         o.set("sizes", bytes(sizes));
+                         o.set("data", bytes(data));
+                         o.set("markers", markers);
+                         return o;
+                     });
+    }
+
     auto metadata() const -> em::val
     {
         return toJs(reader_.metadata());
@@ -198,6 +244,7 @@ EMSCRIPTEN_BINDINGS(xicap)
     em::class_<StreamReader>("StreamReader")
         .constructor<>()
         .function("push", &StreamReader::push)
+        .function("pushColumns", &StreamReader::pushColumns)
         .function("metadata", &StreamReader::metadata)
         .function("ready", &StreamReader::ready)
         .function("complete", &StreamReader::complete)

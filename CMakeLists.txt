@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(xicap VERSION 7.2.0 LANGUAGES CXX)
+project(xicap VERSION 7.3.0 LANGUAGES CXX)
 
 option(XICAP_FETCH_ZSTD "Build zstd from source even when the system has it" OFF)
 option(XICAP_BUILD_TESTS "Build the tests" OFF)
