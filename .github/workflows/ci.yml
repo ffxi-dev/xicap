@@ -91,7 +91,7 @@ jobs:
       - uses: seanmiddleditch/gha-setup-ninja@v6
       - uses: mymindstorm/setup-emsdk@v16
         with:
-          version: "6.0.13"
+          version: "7.0.0"
       - working-directory: bindings/js
         run: npm ci && npm run build && npm test
 
