@@ -103,12 +103,19 @@ for p in r:
 
 ## JavaScript
 
-The library compiled to WebAssembly, for browsers and Node 17 or later. Build
-it in `bindings/js/` with Emscripten and Ninja on the path:
-`npm ci && npm run build`.
+The library compiled to WebAssembly, for browsers and Node 17 or later. Each
+release carries it built, as `xicap-wasm-<version>.tgz`, which npm installs by
+its URL:
+
+```sh
+npm install https://github.com/ffxi-dev/xicap/releases/download/v7.4.0/xicap-wasm-7.4.0.tgz
+```
+
+To build it yourself, run `npm ci && npm run build` in `bindings/js/` with
+Emscripten and Ninja on the path.
 
 ```js
-import { Reader, StreamReader } from "./bindings/js/dist/index.js";
+import { Reader, StreamReader } from "@xicap/wasm"; // or ./bindings/js/dist/index.js, built here
 
 const r = await Reader.open(bytes);   // r.metadata, r.complete, r.packetCount, r.endTimestamp
 for (const p of r) { /* p.timestamp, p.channel, p.opcode, p.flags, p.data, p.markers */ }
@@ -136,7 +143,8 @@ millions of packets, columns read ten times faster.
   `cmake --build build-fuzz`, then `build-fuzz/tests/fuzz/fuzz_reader`. CI runs
   each for a minute.
 - A release sets its version in `CMakeLists.txt`, which the Python package
-  reads too, then tags `v<version>`. A major release also changes the `/vN`
+  reads too, then tags `v<version>`. The tag's workflow builds the JavaScript
+  package and attaches it to the release. A major release also changes the `/vN`
   suffix of the module path in `go.mod` and in the Go import above.
 
 ## License
