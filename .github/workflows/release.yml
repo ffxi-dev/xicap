@@ -19,7 +19,7 @@ jobs:
       - uses: seanmiddleditch/gha-setup-ninja@v6
       - uses: mymindstorm/setup-emsdk@v16
         with:
-          version: "6.0.13"
+          version: "7.0.0"
       # The package takes its version from the tag; a tag that doesn't match CMakeLists.txt is a mistake, so it stops here.
       - run: |
           v="${GITHUB_REF_NAME#v}"
