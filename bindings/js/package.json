@@ -1,6 +1,5 @@
 {
-    "name": "@xicap/wasm",
-    "private": true,
+    "name": "@ffxi-dev/xicap",
     "description": "Reads xicap captures of Final Fantasy XI packets, in browsers and Node.",
     "main": "dist/index.js",
     "types": "dist/index.d.ts",
@@ -15,5 +14,10 @@
     "devDependencies": {
         "typescript": "7.0.2"
     },
-    "license": "MIT"
+    "license": "MIT",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/ffxi-dev/xicap.git",
+        "directory": "bindings/js"
+    }
 }

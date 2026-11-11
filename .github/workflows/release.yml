@@ -6,6 +6,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write # npm trusted publishing
 
 jobs:
   js:
@@ -30,6 +31,8 @@ jobs:
           npm version --no-git-tag-version "$VERSION"
           cp ../../LICENSE .
           npm pack
-      - run: gh release create "$GITHUB_REF_NAME" "bindings/js/xicap-wasm-$VERSION.tgz" --generate-notes
+      - working-directory: bindings/js
+        run: npm publish "ffxi-dev-xicap-$VERSION.tgz" --access public
+      - run: gh release create "$GITHUB_REF_NAME" "bindings/js/ffxi-dev-xicap-$VERSION.tgz" --generate-notes
         env:
           GH_TOKEN: ${{ github.token }}
