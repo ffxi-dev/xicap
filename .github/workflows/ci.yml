@@ -54,7 +54,7 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.15"
-      - run: pip install clang-tidy==22.1.8
+      - run: pip install clang-tidy==23.1.4
       - run: cmake -S . -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DXICAP_BUILD_TESTS=ON
       - run: git ls-files 'src/*.cpp' 'tests/*.cpp' ':!tests/fuzz' | xargs -P 4 -n 4 clang-tidy -p build --quiet
 
