@@ -298,8 +298,30 @@ func (w *Writer) Close() error {
 // difference it returns an error. src and dst must be different files; an existing dst is overwritten, and removed if
 // the rewrite then fails.
 func Transcode(src, dst string) error {
+	return transcode(src, dst, true)
+}
+
+// TranscodeRedacted is Transcode for a capture whose chat must not be kept: each game packet's chat text is zeroed and
+// flagged, as a writer that does not keep chat writes it, and dst is compared with src redacted the same way.
+func TranscodeRedacted(src, dst string) error {
+	return transcode(src, dst, false)
+}
+
+func transcode(src, dst string, keepChat bool) error {
 	s, d := C.CString(src), C.CString(dst)
 	defer C.free(unsafe.Pointer(s))
 	defer C.free(unsafe.Pointer(d))
-	return check(C.xicap_transcode(s, d))
+	return check(C.xicap_transcode(s, d, C.bool(keepChat)))
+}
+
+// Redact zeroes the chat text of a game packet in place, by FORMAT.md's Redaction table, and reports whether the
+// packet's opcode and direction carry chat.
+func Redact(data []byte, clientToServer bool) bool {
+	if len(data) == 0 {
+		return false
+	}
+	var pin runtime.Pinner
+	defer pin.Unpin()
+	pin.Pin(&data[0])
+	return bool(C.xicap_redact((*C.uint8_t)(unsafe.SliceData(data)), C.size_t(len(data)), C.bool(clientToServer)))
 }

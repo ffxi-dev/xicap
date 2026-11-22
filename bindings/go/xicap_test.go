@@ -228,4 +228,31 @@ func TestWriteThenRead(t *testing.T) {
 	if a, _ := read(dst); !reflect.DeepEqual(a, c) {
 		t.Errorf("transcode changed the capture: %+v", a)
 	}
+
+	redacted := filepath.Join(t.TempDir(), "redacted.xicap")
+	if err := TranscodeRedacted(path, redacted); err != nil {
+		t.Fatal(err)
+	}
+	a, err := read(redacted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Metadata.CaptureID != c.Metadata.CaptureID || len(a.Packets) != 5 || a.Packets[0].Data[30] != 0 || a.Packets[0].Flags&PacketFlagRedacted == 0 ||
+		!reflect.DeepEqual(a.Packets[3], c.Packets[3]) {
+		t.Errorf("TranscodeRedacted: %+v", a)
+	}
+}
+
+func TestRedact(t *testing.T) {
+	chat := append([]byte{0x17, 0x08, 0x01, 0x00}, make([]byte, 28)...)
+	chat[30] = 'x'
+	if Redact(chat, true) || chat[30] != 'x' {
+		t.Error("an incoming chat opcode sent by the client is redacted")
+	}
+	if !Redact(chat, false) || chat[30] != 0 {
+		t.Errorf("chat kept its text: %v", chat)
+	}
+	if Redact([]byte{0x0A, 0x02, 0x01, 0x00}, false) || Redact(nil, false) {
+		t.Error("a packet without chat counts as chat")
+	}
 }
