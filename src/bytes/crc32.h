@@ -19,7 +19,7 @@ inline constexpr auto CRC32_TABLE = []
         auto c = i;
         for (int k{ 0 }; k < 8; ++k)
         {
-            c = (c >> 1) ^ ((c & 1U) * 0xEDB88320U);
+            c = (c >> 1U) ^ ((c & 1U) * 0xEDB88320U);
         }
 
         table[i] = c;
@@ -33,7 +33,7 @@ inline constexpr auto CRC32_TABLE = []
     auto state = uint32_t{ 0xFFFFFFFF };
     for (const auto b : data)
     {
-        state = CRC32_TABLE[(state ^ b) & 0xFFU] ^ (state >> 8);
+        state = CRC32_TABLE[(state ^ b) & 0xFFU] ^ (state >> 8U);
     }
 
     return state ^ 0xFFFFFFFFU;

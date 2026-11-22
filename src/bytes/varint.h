@@ -13,8 +13,8 @@ inline auto putVarint(std::vector<uint8_t>& out, uint64_t value) -> void
 {
     while (value >= 0x80)
     {
-        out.push_back(static_cast<uint8_t>(value | 0x80));
-        value >>= 7;
+        out.push_back(static_cast<uint8_t>(value | 0x80U));
+        value >>= 7U;
     }
 
     out.push_back(static_cast<uint8_t>(value));
@@ -41,12 +41,14 @@ inline auto putVarint(std::vector<uint8_t>& out, uint64_t value) -> void
 
 [[nodiscard]] constexpr auto zigzag16(const uint16_t delta) noexcept -> uint16_t
 {
-    return static_cast<uint16_t>((delta << 1) ^ static_cast<uint16_t>(static_cast<int16_t>(delta) >> 15));
+    const uint32_t d = delta;
+    return static_cast<uint16_t>((d << 1U) ^ (0U - (d >> 15U)));
 }
 
 [[nodiscard]] constexpr auto unzigzag16(const uint16_t z) noexcept -> uint16_t
 {
-    return static_cast<uint16_t>((z >> 1) ^ static_cast<uint16_t>(-(z & 1)));
+    const uint32_t v = z;
+    return static_cast<uint16_t>((v >> 1U) ^ (0U - (v & 1U)));
 }
 
 } // namespace xicap::bytes
