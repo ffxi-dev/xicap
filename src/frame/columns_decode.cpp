@@ -159,7 +159,7 @@ auto decodeColumns(const std::span<const uint8_t> plain, const uint32_t packetCo
             auto& last              = lastSync[p.flags & PacketFlag::ClientToServer];
             last                    = static_cast<uint16_t>(last + bytes::unzigzag16(static_cast<uint16_t>(sync[syncIndex++])));
             out.bytes[p.offset + 2] = static_cast<uint8_t>(last);
-            out.bytes[p.offset + 3] = static_cast<uint8_t>(last >> 8);
+            out.bytes[p.offset + 3] = static_cast<uint8_t>(last >> 8U);
         }
     }
 

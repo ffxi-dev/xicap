@@ -119,7 +119,7 @@ auto Writer::write(const WritePacket& packet) -> void
     s.checkWritable();
     const auto game   = packet.channel == Channel::Game;
     const auto opcode = game && packet.data.size() >= format::GAME_HEADER_SIZE ? format::gameId(packet.data) : packet.opcode;
-    const auto flags  = static_cast<uint16_t>((packet.provenance & PacketFlag::Provenance) | static_cast<uint16_t>(packet.direction));
+    const auto flags  = static_cast<uint16_t>(static_cast<uint16_t>(packet.provenance & PacketFlag::Provenance) | static_cast<uint16_t>(packet.direction));
     s.add({ .timestamp = packet.timestamp, .flags = flags, .channel = packet.channel, .opcode = opcode, .data = packet.data, .markers = {} });
     if (game && s.chat == Chat::Redact)
     {

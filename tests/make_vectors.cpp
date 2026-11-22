@@ -112,7 +112,7 @@ auto mixed(Writer& w) -> void
     // A stub, as captures converted from older formats hold.
     w.copy({ .timestamp = T0 + 20, .flags = PacketFlag::Excluded | PacketFlag::ClientToServer, .channel = Channel::Game, .opcode = 0x0B6, .data = std::span{ tell }.first(4), .markers = {} });
     w.write({ .timestamp = T0 + 20, .direction = ServerToClient, .provenance = PacketFlag::Injected, .channel = Channel::Search, .opcode = 0x0B, .data = search });
-    w.copy({ .timestamp = T0 + 31, .flags = 0x8020 | PacketFlag::Blocked, .channel = static_cast<Channel>(7), .opcode = 0x1234, .data = other, .markers = {} });
+    w.copy({ .timestamp = T0 + 31, .flags = 0x8020U | PacketFlag::Blocked, .channel = static_cast<Channel>(7), .opcode = 0x1234, .data = other, .markers = {} });
     w.write(test::packet(T0 + 31, odd));
     w.mark(MarkerKind::Logout);
     w.mark(static_cast<MarkerKind>(9), "unknown kind");
@@ -137,7 +137,7 @@ auto withPlaintext(const Bytes& plain, const uint32_t packets) -> Bytes
 
 } // namespace
 
-auto main(int argc, char** argv) -> int
+auto main(int argc, const char* const* argv) -> int
 {
     if (argc != 2)
     {
@@ -170,7 +170,7 @@ auto main(int argc, char** argv) -> int
     writeVector(dir, "5-cut-off", Bytes(packets.begin(), packets.begin() + static_cast<std::ptrdiff_t>(trailer - 10)));
 
     auto damaged = packets;
-    damaged[frames[1].first + sizeof(format::FrameHeader) + 2] ^= 0x40;
+    damaged[frames[1].first + sizeof(format::FrameHeader) + 2] ^= 0x40U;
     writeVector(dir, "5-bad-frame", damaged);
     writeVector(dir, "5-bad-frame-cut-off", Bytes(damaged.begin(), damaged.begin() + static_cast<std::ptrdiff_t>(trailer)));
 
@@ -204,13 +204,13 @@ auto main(int argc, char** argv) -> int
 
     {
         auto b = packets;
-        b[offsetof(format::Header, captureAgent)] ^= 1;
+        b[offsetof(format::Header, captureAgent)] ^= 1U;
         writeVector(dir, "5-bad-header-crc", b);
     }
 
     {
         auto b = converted;
-        b[sizeof(format::Header) + 9] ^= 1;
+        b[sizeof(format::Header) + 9] ^= 1U;
         writeVector(dir, "5-bad-block-crc", b);
     }
 

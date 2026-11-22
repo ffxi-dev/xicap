@@ -12,7 +12,7 @@ namespace
 // Packets that share a channel, direction, and opcode are stored together.
 auto groupKey(const FramePacket& p) noexcept -> uint32_t
 {
-    return (uint32_t{ static_cast<uint8_t>(p.channel) } << 17) | (static_cast<uint32_t>(p.flags & PacketFlag::ClientToServer) << 16) | p.opcode;
+    return (uint32_t{ static_cast<uint8_t>(p.channel) } << 17U) | (static_cast<uint32_t>(p.flags & PacketFlag::ClientToServer) << 16U) | p.opcode;
 }
 
 } // namespace

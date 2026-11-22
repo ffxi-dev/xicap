@@ -66,7 +66,7 @@ TEST_CASE("a refused complete file says which check failed")
     const test::TempFile file;
     writeSample(file);
     auto bytes = test::bytesOf(file);
-    bytes[sizeof(format::Header) + sizeof(format::FrameHeader)] ^= 0xFF; // the first frame's payload
+    bytes[sizeof(format::Header) + sizeof(format::FrameHeader)] ^= 0xFFU; // the first frame's payload
     test::save(file, bytes);
     CHECK_THROWS_WITH(test::readAll(file), Catch::Matchers::ContainsSubstring("CRC mismatch"));
 }

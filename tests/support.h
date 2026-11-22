@@ -17,11 +17,11 @@ namespace test
 inline auto gamePacket(const uint16_t id, const size_t length, const uint16_t sync, const uint8_t fill = 0) -> std::vector<uint8_t>
 {
     std::vector<uint8_t> p(length, fill);
-    const auto           word = static_cast<uint16_t>((id & 0x1FF) | ((length / 4) << 9));
+    const auto           word = static_cast<uint16_t>((id & 0x1FFU) | ((length / 4) << 9U));
     p[0]                      = static_cast<uint8_t>(word);
-    p[1]                      = static_cast<uint8_t>(word >> 8);
+    p[1]                      = static_cast<uint8_t>(word >> 8U);
     p[2]                      = static_cast<uint8_t>(sync);
-    p[3]                      = static_cast<uint8_t>(sync >> 8);
+    p[3]                      = static_cast<uint8_t>(sync >> 8U);
     return p;
 }
 
