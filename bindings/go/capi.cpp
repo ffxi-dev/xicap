@@ -189,11 +189,16 @@ extern "C"
         return err;
     }
 
-    auto xicap_transcode(const char* const src, const char* const dst) -> char*
+    auto xicap_transcode(const char* const src, const char* const dst, const bool keep_chat) -> char*
     {
         return guarded([&]
                        {
-                           xicap::transcode(src, dst);
+                           xicap::transcode(src, dst, xicap::FramePolicy::archive(), keep_chat ? xicap::Chat::Keep : xicap::Chat::Redact);
                        });
+    }
+
+    auto xicap_redact(uint8_t* const data, const size_t size, const bool client_to_server) -> bool
+    {
+        return xicap::redact({ data, size }, client_to_server ? xicap::PacketDirection::ClientToServer : xicap::PacketDirection::ServerToClient);
     }
 }

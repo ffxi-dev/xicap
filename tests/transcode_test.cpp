@@ -3,6 +3,9 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
+#include <span>
+
 using namespace xicap;
 
 namespace
@@ -78,4 +81,28 @@ TEST_CASE("transcode refuses one file as both source and destination, and keeps 
     const test::TempFile missing;
     CHECK_THROWS_AS(transcode(missing, src), Error);
     CHECK(test::bytesOf(src) == before);
+}
+
+TEST_CASE("transcode with Chat::Redact zeroes and flags chat, and keeps every other packet")
+{
+    const test::TempFile src;
+    const test::TempFile dst;
+    {
+        Writer w(src, test::metadata(), FramePolicy::live(), Chat::Keep);
+        w.write(test::packet(0, test::gamePacket(0x017, 40, 0, 'x')));
+        w.write(test::packet(1, test::gamePacket(0x00A, 40, 1, 'x')));
+        w.close();
+    }
+    transcode(src, dst, FramePolicy::archive(), Chat::Redact);
+    const auto before = test::readAll(src);
+    const auto after  = test::readAll(dst);
+    REQUIRE(after.size() == 2);
+    CHECK((after[0].flags & PacketFlag::Redacted) != 0);
+    CHECK(after[0].data.size() == before[0].data.size());
+    CHECK(std::ranges::all_of(std::span(after[0].data).subspan(0x17), [](const uint8_t b)
+                              {
+                                  return b == 0;
+                              }));
+    CHECK(after[1] == before[1]);
+    CHECK(Reader(dst).metadata() == Reader(src).metadata());
 }

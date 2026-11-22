@@ -38,6 +38,7 @@ xicap::Packet p;
 while (s.next(p)) { }
 
 xicap::transcode("upload.xicap", "archived.xicap");   // smaller, checked packet by packet
+xicap::transcode("upload.xicap", "archived.xicap", xicap::FramePolicy::archive(), xicap::Chat::Redact);   // and chat zeroed
 ```
 
 Build with CMake 3.21 or later and a C++23 compiler. The library uses the
@@ -82,6 +83,8 @@ w.Write(xicap.WritePacket{Timestamp: ms, Data: bytes})
 w.Close()
 
 err = xicap.Transcode("upload.xicap", "archived.xicap")
+err = xicap.TranscodeRedacted("upload.xicap", "archived.xicap")   // chat zeroed, as a writer that does not keep chat writes it
+xicap.Redact(p.Data, clientToServer)                              // zeroes one packet's chat; reports whether it carries chat
 ```
 
 The package builds the C++ library with cgo, so it needs a C++23 compiler and

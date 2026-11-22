@@ -88,7 +88,9 @@ extern "C"
     // Frees the writer, even when closing fails.
     char* xicap_writer_close(xicap_writer* w);
 
-    char* xicap_transcode(const char* src, const char* dst);
+    char* xicap_transcode(const char* src, const char* dst, bool keep_chat);
+    // Zeroes a game packet's chat text in place and returns whether its opcode and direction carry chat.
+    bool xicap_redact(uint8_t* data, size_t size, bool client_to_server);
 
 #ifdef __cplusplus
 }
