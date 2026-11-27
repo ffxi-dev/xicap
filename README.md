@@ -145,8 +145,9 @@ millions of packets, columns read ten times faster.
   `cmake --build build-fuzz`, then `build-fuzz/tests/fuzz/fuzz_reader`. CI runs
   each for a minute.
 - A release sets its version in `CMakeLists.txt`, which the Python package
-  reads too, then tags `v<version>`. The tag's workflow builds the JavaScript
-  package, publishes it to npm and attaches it to the release. A major release
+  reads too, then tags `v<version>`. The tag's workflow runs the whole CI on the
+  tagged commit, then builds the JavaScript package, publishes it to npm and
+  attaches it to the release. A major release
   also changes the `/vN` suffix of the module path in `go.mod` and in the Go
   import above.
 
