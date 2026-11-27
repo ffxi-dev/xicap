@@ -9,7 +9,14 @@ permissions:
   id-token: write # npm trusted publishing
 
 jobs:
+  # The whole CI on the tagged commit, so a tag publishes only what every binding passed on.
+  ci:
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
   js:
+    needs: ci
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
