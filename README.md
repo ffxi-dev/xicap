@@ -147,7 +147,8 @@ millions of packets, columns read ten times faster.
 - A release sets its version in `CMakeLists.txt`, which the Python package
   reads too, then tags `v<version>`. The tag's workflow runs the whole CI on the
   tagged commit, then builds the JavaScript package, publishes it to npm and
-  attaches it to the release. A major release
+  attaches it to the release with `manifest.json` (`scripts/manifest.sh`): the
+  format, every package's name, and the commit and run that tested it. A major release
   also changes the `/vN` suffix of the module path in `go.mod` and in the Go
   import above.
 

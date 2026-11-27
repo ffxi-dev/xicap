@@ -40,6 +40,9 @@ jobs:
           npm pack
       - working-directory: bindings/js
         run: npm publish "ffxi-dev-xicap-$VERSION.tgz" --access public
-      - run: gh release create "$GITHUB_REF_NAME" "bindings/js/ffxi-dev-xicap-$VERSION.tgz" --generate-notes
+      # What the release is, for people and for other bricks' checks: the format it writes, every package's name, and
+      # the commit the ci job above tested (vault cross-repo-contracts, task 4.1). scripts/manifest.sh writes it.
+      - run: scripts/manifest.sh "$VERSION" > manifest.json
+      - run: gh release create "$GITHUB_REF_NAME" "bindings/js/ffxi-dev-xicap-$VERSION.tgz" manifest.json --notes "$(jq -r .summary manifest.json)" --generate-notes
         env:
           GH_TOKEN: ${{ github.token }}
